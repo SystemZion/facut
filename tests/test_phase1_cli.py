@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import json
+
+from typer.testing import CliRunner
+
+from facut.cli.main import app
+
+runner = CliRunner()
+
+
+def test_help_lists_doctor_and_global_options() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "doctor" in result.stdout
+    assert "--project" in result.stdout
+    assert "--json" in result.stdout
+
+
+def test_version() -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip().startswith("facut ")
+
+
+def test_doctor_json_is_single_response() -> None:
+    result = runner.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+    assert payload["command"] == "doctor"
+    assert "ffmpeg" in payload["data"]
+    assert "hardware" in payload["data"]["encoders"]
+
+
+def test_global_json_before_command() -> None:
+    result = runner.invoke(app, ["--json", "doctor"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["command"] == "doctor"

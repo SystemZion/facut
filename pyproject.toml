@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "facut"
+version = "0.1.0"
+description = "Fast AI Cut — a deterministic, agent-friendly command-line video editor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "facut contributors" }]
+keywords = ["video", "editing", "ffmpeg", "cli", "ai-agent"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "platformdirs>=4.2,<5",
+  "pydantic>=2.7,<3",
+  "rich>=13.7,<15",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0,<7"]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-cov>=5,<7",
+]
+build = [
+  "pyinstaller>=6.10,<7",
+]
+
+[project.scripts]
+facut = "facut.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/facut"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["facut"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

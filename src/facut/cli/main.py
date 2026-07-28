@@ -1,0 +1,207 @@
+"""Top-level Typer application."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from facut import __version__
+from facut.cli.doctor import collect_diagnostics, run_sample_render
+from facut.config import AppConfig, load_config
+from facut.exceptions import ExitCode, FacutError
+from facut.logging_config import configure_logging
+from facut.responses import Response, error_response, success_response
+
+app = typer.Typer(
+    name="facut",
+    help="Fast AI Cut — deterministic command-line video editing for agents and humans.",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode="markdown",
+    pretty_exceptions_enable=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+
+
+@dataclass(slots=True)
+class CliState:
+    json_output: bool
+    quiet: bool
+    verbose: bool
+    project: Path | None
+    config: AppConfig
+    logger: logging.Logger
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"facut {__version__}")
+        raise typer.Exit(ExitCode.SUCCESS)
+
+
+@app.callback()
+def root(
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit only a machine-readable JSON response."),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-essential human output."),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable detailed diagnostics and logs."),
+    ] = False,
+    project: Annotated[
+        Path | None,
+        typer.Option("--project", "-p", help="Project file or project directory."),
+    ] = None,
+    version: Annotated[
+        bool | None,
+        typer.Option("--version", callback=_version_callback, is_eager=True, help="Show version and exit."),
+    ] = None,
+) -> None:
+    """Set process-wide output and project options."""
+
+    del version
+    try:
+        config = load_config()
+    except FacutError as exc:
+        response = error_response("startup", exc)
+        if json_output:
+            typer.echo(response.as_json())
+        else:
+            typer.echo(f"Error: {exc.message}", err=True)
+            if exc.suggestion:
+                typer.echo(f"Suggestion: {exc.suggestion}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+    logger = configure_logging(verbose=verbose, quiet=quiet)
+    ctx.obj = CliState(json_output, quiet, verbose, project, config, logger)
+
+
+def emit(
+    state: CliState,
+    response: Response[object],
+    *,
+    human: str | None = None,
+) -> None:
+    """Respect global output mode for all command implementations."""
+
+    if state.json_output:
+        typer.echo(response.as_json())
+    elif not state.quiet and human:
+        Console().print(human)
+
+
+def fail(state: CliState, command: str, error: FacutError) -> None:
+    """Emit a domain failure and terminate with its stable exit code."""
+
+    state.logger.error("%s: %s", command, error.message)
+    response = error_response(command, error)
+    if state.json_output:
+        typer.echo(response.as_json())
+    else:
+        typer.echo(f"Error: {error.message}", err=True)
+        if error.suggestion:
+            typer.echo(f"Suggestion: {error.suggestion}", err=True)
+    raise typer.Exit(error.exit_code)
+
+
+@app.command("doctor")
+def doctor(
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool | None,
+        typer.Option("--json", help="Emit only a machine-readable JSON response."),
+    ] = None,
+    sample_render: Annotated[
+        bool,
+        typer.Option("--sample-render", help="Run a one-second generated render smoke test."),
+    ] = False,
+) -> None:
+    """Check FFmpeg, codecs, hardware backends, directories, fonts, and platform."""
+
+    state: CliState = ctx.ensure_object(CliState)
+    if json_output is not None:
+        state.json_output = json_output
+    data, warnings = collect_diagnostics(state.config)
+    if sample_render:
+        data["sample_render"] = run_sample_render(state.config)
+        if data["sample_render"]["status"] == "failed":
+            warnings.append("The FFmpeg sample render failed.")
+            data["healthy"] = False
+    response = success_response("doctor", data, warnings=warnings)
+    if state.json_output:
+        typer.echo(response.as_json())
+        return
+    if state.quiet:
+        return
+
+    table = Table(title=f"facut doctor {__version__}", show_header=True)
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_row("Platform", f'{data["platform"]["system"]} {data["platform"]["release"]}')
+    table.add_row("Python", data["python"]["version"])
+    table.add_row("FFmpeg", data["ffmpeg"]["version"] or "[red]not found[/red]")
+    table.add_row("FFprobe", data["ffprobe"]["version"] or "[red]not found[/red]")
+    hardware = [name for name, available in data["encoders"]["hardware"].items() if available]
+    table.add_row("Hardware encoders", ", ".join(hardware) if hardware else "none detected")
+    table.add_row("Cache writable", "yes" if data["directories"]["cache_writable"] else "[red]no[/red]")
+    table.add_row("Temporary writable", "yes" if data["directories"]["temporary_writable"] else "[red]no[/red]")
+    table.add_row("Fonts discoverable", "yes" if data["fonts"]["available"] else "[yellow]no[/yellow]")
+    table.add_row("Sample render", data["sample_render"]["status"])
+    table.add_row("Overall", "[green]healthy[/green]" if data["healthy"] else "[yellow]attention needed[/yellow]")
+    console = Console()
+    console.print(table)
+    for warning in warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
+
+
+def main() -> None:
+    """Installed console-script entry point."""
+
+    app()
+
+
+from facut.cli.project_commands import (  # noqa: E402
+    history_app,
+    import_command,
+    init_command,
+    inspect_command,
+    project_app,
+    redo_command,
+    run_command,
+    undo_command,
+)
+from facut.cli.timeline_commands import (  # noqa: E402
+    clip_app,
+    timeline_app,
+    transition_app,
+)
+from facut.cli.render_commands import preview_app, render_command  # noqa: E402
+
+app.command("init")(init_command)
+app.command("import")(import_command)
+app.command("inspect")(inspect_command)
+app.command("undo")(undo_command)
+app.command("redo")(redo_command)
+app.command("run")(run_command)
+app.add_typer(project_app, name="project")
+app.add_typer(history_app, name="history")
+app.add_typer(timeline_app, name="timeline")
+app.add_typer(clip_app, name="clip")
+app.add_typer(transition_app, name="transition")
+app.add_typer(preview_app, name="preview")
+app.command("render")(render_command)
+
+
+if __name__ == "__main__":
+    main()

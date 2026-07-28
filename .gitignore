@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Build artifacts
+/build/
+/dist/
+/*.spec
+*.log
+
+# Bundled third-party binaries are distributed through GitHub Releases.
+/vendor/ffmpeg/*.exe
+/vendor/ffmpeg/*.zip
+
+# facut runtime project artifacts when developing in this repository
+/facut.json
+/proxies/
+/cache/
+/previews/
+/renders/
+/history/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
