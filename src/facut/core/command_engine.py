@@ -120,6 +120,8 @@ class CommandEngine:
         aliases = {"track": "track_id"}
         if action == "timeline.add":
             aliases.update({"in": "source_in", "out": "source_out"})
+        elif action == "audio.add":
+            aliases.update({"track": "track_id", "in": "source_in", "out": "source_out"})
         elif action == "timeline.track.add":
             aliases.update({"type": "track_type"})
         elif action == "transition.add":
@@ -137,6 +139,9 @@ class CommandEngine:
         handlers = {
             "timeline.track.add": timeline.add_track,
             "timeline.add": timeline.add_clip,
+            "audio.add": timeline.add_audio_clip,
+            "audio.volume": timeline.set_audio_volume,
+            "audio.fade": timeline.set_audio_fades,
             "clip.move": timeline.move_clip,
             "clip.duplicate": timeline.duplicate_clip,
             "clip.split": timeline.split_clip,

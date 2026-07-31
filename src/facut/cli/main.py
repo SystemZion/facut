@@ -187,6 +187,8 @@ from facut.cli.timeline_commands import (  # noqa: E402
     transition_app,
 )
 from facut.cli.render_commands import preview_app, render_command  # noqa: E402
+from facut.cli.audio_commands import audio_app  # noqa: E402
+from facut.cli.subtitle_commands import subtitle_app, text_app  # noqa: E402
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -200,6 +202,9 @@ app.add_typer(timeline_app, name="timeline")
 app.add_typer(clip_app, name="clip")
 app.add_typer(transition_app, name="transition")
 app.add_typer(preview_app, name="preview")
+app.add_typer(audio_app, name="audio")
+app.add_typer(subtitle_app, name="subtitle")
+app.add_typer(text_app, name="text")
 app.command("render")(render_command)
 
 

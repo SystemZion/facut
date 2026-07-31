@@ -14,6 +14,9 @@ from facut.core.models import (
     MediaTechnicalInfo,
     ProjectDocument,
     ProjectSettings,
+    SubtitleCue,
+    TextOverlay,
+    TextStyle,
 )
 from facut.core.timeline_engine import TimelineEngine
 from facut.render.cache import cache_key
@@ -163,6 +166,26 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
             check=True,
         )
     document = _document(tmp_path)
+    TimelineEngine(document).add_track("subtitle", "S1")
+    document.subtitle_cues.append(
+        SubtitleCue(
+            track_id="S1",
+            start=1.1,
+            end=1.4,
+            text="CAPTION",
+            style=TextStyle(font_size=32, color="#FFFFFF", stroke_width=2),
+        )
+    )
+    document.text_overlays.append(
+        TextOverlay(
+            text="FACUT",
+            at=0.2,
+            duration=0.8,
+            x="center",
+            y="center",
+            style=TextStyle(font_size=52, color="#FFFFFF", stroke_width=2),
+        )
+    )
     backend = FFmpegBackend(ffmpeg)
     final = backend.render(
         document,
@@ -199,6 +222,60 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
         )
         duration = float(json.loads(probe.stdout)["format"]["duration"])
         assert duration == pytest.approx(expected, abs=0.12)
+    title_frame = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "0.5",
+            "-i",
+            str(final.output),
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    bright_pixels = sum(
+        1
+        for index in range(0, len(title_frame), 3)
+        if all(channel > 180 for channel in title_frame[index : index + 3])
+    )
+    assert bright_pixels > 20, "text overlay was not burned into the output"
+    subtitle_frame = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "1.25",
+            "-i",
+            str(final.output),
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    subtitle_bright_pixels = sum(
+        1
+        for index in range(0, len(subtitle_frame), 3)
+        if all(channel > 180 for channel in subtitle_frame[index : index + 3])
+    )
+    assert subtitle_bright_pixels > 20, "subtitle cue was not burned into the output"
     midpoint = subprocess.run(
         [
             ffmpeg,

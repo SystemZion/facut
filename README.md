@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.1.0` 是首个可用版本：工程、素材探测、单视频轨时间线、帧级时间表示、原子批处理、基础转场、快速预览、H.264/AAC 渲染和撤销/重做均可实际执行。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前开发版本 `0.2.0` 已形成完整的基础制作链路：工程、素材探测、单视频轨时间线、帧级时间表示、原子批处理、基础转场、快速预览、H.264/AAC 渲染、撤销/重做、独立背景音乐、原声混合、字幕和文字烧录均可实际执行。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
 
 ## 安装
 
@@ -41,7 +41,8 @@ facut doctor
 
 ```text
 facut init/import/inspect
-facut timeline/clip/transition
+facut timeline/clip/transition/audio
+facut subtitle/text
 facut preview/render
 facut project/history
 facut undo/redo/run/doctor
@@ -154,11 +155,38 @@ facut --project demo run ai-edit-plan.json --json
 facut --project demo render --preset youtube-1080p --output result.mp4
 ```
 
+字幕与文字：
+
+```bash
+facut --project demo timeline track add --type subtitle --name S1
+facut --project demo subtitle import captions.srt --track S1
+facut --project demo subtitle shift S1 --offset +500ms
+facut --project demo subtitle export S1 --format vtt --output captions.vtt
+facut --project demo text add --text "临港两日" --at 1s --duration 3s --y 20%
+facut --project demo subtitle compile-ass --output render-text.ass
+facut --project demo render --output subtitled.mp4
+```
+
+渲染和预览会自动将工程中的字幕与文字编译为临时 ASS 并烧录。`compile-ass` 仍可生成独立、可检查的 ASS 侧车文件。
+
+背景音乐与原声混合：
+
+```bash
+facut --project demo import music.mp3
+facut --project demo timeline track add --type audio --name A1
+facut --project demo audio add <MUSIC_ID> --track A1 --at 0 --loop --volume-db -12 --fade-in 1s --fade-out 2s
+facut --project demo render --output mixed.mp4
+```
+
+独立音频轨会与视频素材自带的相机原声混合；`--loop` 默认循环到视频时间线末尾，也可配合 `--duration` 指定长度。
+
 ### 当前明确限制
 
 - 渲染器当前支持一个启用的视频/图片轨；多视频轨叠加不会伪造成功，而会明确返回 `NOT_IMPLEMENTED`。
 - 首版最终编码为 H.264/AAC；H.265、AV1、ProRes 等已保留后端扩展边界，但尚未开放。
-- 背景音乐专用音轨、字幕烧录、文字、关键帧 CLI、高级分析和自动剪辑属于后续版本。
+- 音频首版支持独立轨混音、增益、淡入淡出和循环；自动闪避、降噪与响度标准化尚未开放。
+- 字幕/文字支持工程编辑、SRT/VTT 往返、ASS 编译，并会自动烧录到预览和最终视频。
+- 关键帧 CLI、高级分析和自动剪辑属于后续版本。
 - `fade-in`/`fade-out` 已注册，首版成对片段间的稳定转场重点为 `dissolve`、`fade-black`、`fade-white`、`slide`、`wipe`、`zoom`、`blur`。
 
 ## 开发与测试
@@ -180,6 +208,7 @@ src/facut/
 ├── render/           滤镜图、缓存、硬件和 FFmpeg 后端
 ├── transitions/      插件式转场
 ├── effects/          插件式视频/音频效果
+├── subtitles/        SRT/VTT 解析、编辑与 ASS 编译
 ├── config.py         跨平台配置
 ├── exceptions.py     领域错误和稳定退出码
 ├── logging_config.py 轮转日志

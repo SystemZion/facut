@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from typer.testing import CliRunner
+from typer.main import get_command
 
 from facut.cli.main import app
 
@@ -10,11 +11,21 @@ runner = CliRunner()
 
 
 def test_help_lists_doctor_and_global_options() -> None:
-    result = runner.invoke(app, ["--help"])
+    result = runner.invoke(
+        app,
+        ["--help"],
+        env={"COLUMNS": "140"},
+        terminal_width=140,
+    )
     assert result.exit_code == 0
     assert "doctor" in result.stdout
-    assert "--project" in result.stdout
-    assert "--json" in result.stdout
+    registered_options = {
+        option
+        for parameter in get_command(app).params
+        for option in getattr(parameter, "opts", ())
+    }
+    assert "--project" in registered_options
+    assert "--json" in registered_options
 
 
 def test_version() -> None:

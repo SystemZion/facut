@@ -26,6 +26,21 @@ def _fmt(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
 
 
+def _filter_path(path: str | Path) -> str:
+    """Escape an absolute path for an FFmpeg filter option on every platform."""
+
+    normalized = Path(path).resolve().as_posix()
+    return (
+        normalized.replace("\\", r"\\")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+        .replace("[", r"\[")
+        .replace("]", r"\]")
+        .replace(",", r"\,")
+        .replace(";", r"\;")
+    )
+
+
 def _atempo(rate: float) -> str:
     filters: list[str] = []
     remaining = rate
@@ -86,6 +101,7 @@ class GraphBuilder:
         range_from: float | None = None,
         range_to: float | None = None,
         preview: bool = False,
+        subtitle_file: str | Path | None = None,
     ) -> FilterGraph:
         TimelineEngine(self.project).validate()
         width = width or self.project.project.width
@@ -266,6 +282,101 @@ class GraphBuilder:
                 )
                 current_duration += max(0.0, gap) + clip.duration
             current_v, current_a = out_v, out_a
+
+        # Independent audio tracks are layered after the video track's native
+        # sound has been assembled.  This keeps camera/dialogue audio intact
+        # while allowing music and effects to overlap freely.
+        mix_labels = [current_a]
+        audio_clips = [
+            clip
+            for audio_track in self.project.tracks
+            if audio_track.enabled
+            and not audio_track.muted
+            and audio_track.type == TrackType.AUDIO
+            for clip in sorted(
+                (item for item in audio_track.clips if item.enabled and not item.muted),
+                key=lambda item: (item.timeline_start, item.id),
+            )
+        ]
+        for audio_index, clip in enumerate(audio_clips):
+            asset = self.project.find_media(clip.media_id)
+            if asset is None:
+                raise ValueError(
+                    f"Audio clip {clip.id} references missing media {clip.media_id}."
+                )
+            if not asset.technical.audio_codec:
+                raise ValueError(f"Media {asset.original_name} has no audio stream.")
+            source = self._source(asset.path)
+            if not source.is_file():
+                raise FileNotFoundError(f"Media file is offline: {asset.original_name}")
+            input_index = len(paths)
+            paths.append(source)
+            inputs.extend(["-i", str(source)])
+            speed = abs(clip.speed)
+            audio_chain = [
+                f"[{input_index}:a:0]atrim=start={_fmt(clip.source_in)}:"
+                f"end={_fmt(clip.source_out)}",
+                "asetpts=PTS-STARTPTS",
+            ]
+            if clip.speed < 0:
+                audio_chain.append("areverse")
+            if abs(speed - 1) > 1e-9:
+                audio_chain.append(_atempo(speed))
+            audio_chain.extend(
+                [
+                    f"aresample={self.project.project.sample_rate}",
+                    "aformat=sample_fmts=fltp:channel_layouts=stereo",
+                ]
+            )
+            natural_duration = (clip.source_out - clip.source_in) / speed
+            if clip.loop:
+                loop_samples = max(
+                    1, round(natural_duration * self.project.project.sample_rate)
+                )
+                audio_chain.append(f"aloop=loop=-1:size={loop_samples}")
+            audio_chain.extend(
+                [
+                    f"atrim=duration={_fmt(clip.duration)}",
+                    "asetpts=PTS-STARTPTS",
+                ]
+            )
+            if clip.volume_db:
+                audio_chain.append(f"volume={_fmt(clip.volume_db)}dB")
+            if clip.audio_fade_in:
+                audio_chain.append(
+                    f"afade=t=in:st=0:d={_fmt(clip.audio_fade_in)}"
+                )
+            if clip.audio_fade_out:
+                fade_start = max(0.0, clip.duration - clip.audio_fade_out)
+                audio_chain.append(
+                    f"afade=t=out:st={_fmt(fade_start)}:"
+                    f"d={_fmt(clip.audio_fade_out)}"
+                )
+            if clip.timeline_start:
+                delay_ms = max(0, round(clip.timeline_start * 1000))
+                audio_chain.append(f"adelay={delay_ms}:all=1")
+            audio_chain.extend(
+                [
+                    f"apad=whole_dur={_fmt(current_duration)}",
+                    f"atrim=duration={_fmt(current_duration)}",
+                ]
+            )
+            label = f"bgm{audio_index}"
+            filters.append(",".join(audio_chain) + f"[{label}]")
+            mix_labels.append(label)
+        if len(mix_labels) > 1:
+            filters.append(
+                "".join(f"[{label}]" for label in mix_labels)
+                + f"amix=inputs={len(mix_labels)}:duration=first:"
+                "dropout_transition=0:normalize=0[amixed]"
+            )
+            current_a = "amixed"
+
+        if subtitle_file is not None:
+            filters.append(
+                f"[{current_v}]subtitles=filename='{_filter_path(subtitle_file)}'[vtext]"
+            )
+            current_v = "vtext"
 
         output_duration = current_duration
         if range_from is not None or range_to is not None:
