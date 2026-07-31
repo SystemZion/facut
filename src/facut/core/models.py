@@ -135,6 +135,10 @@ class Clip(StrictModel):
     enabled: bool = True
     muted: bool = False
     volume_db: float = 0.0
+    timeline_duration: float | None = Field(default=None, gt=0.0)
+    loop: bool = False
+    audio_fade_in: float = Field(default=0.0, ge=0.0)
+    audio_fade_out: float = Field(default=0.0, ge=0.0)
     transform: Transform = Field(default_factory=Transform)
     effects: list[Effect] = Field(default_factory=list)
     keyframes: list[Keyframe] = Field(default_factory=list)
@@ -146,11 +150,19 @@ class Clip(StrictModel):
             raise ValueError("source_out must be greater than source_in")
         if self.speed == 0:
             raise ValueError("speed cannot be zero")
+        natural_duration = (self.source_out - self.source_in) / abs(self.speed)
+        if self.timeline_duration is not None and not self.loop:
+            raise ValueError("timeline_duration requires loop to be enabled")
+        duration = self.timeline_duration or natural_duration
+        if self.audio_fade_in > duration or self.audio_fade_out > duration:
+            raise ValueError("audio fade duration cannot exceed clip duration")
         return self
 
     @property
     def duration(self) -> float:
-        return (self.source_out - self.source_in) / abs(self.speed)
+        return self.timeline_duration or (
+            (self.source_out - self.source_in) / abs(self.speed)
+        )
 
     @property
     def end(self) -> float:
@@ -212,6 +224,90 @@ class Marker(StrictModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TextStyle(StrictModel):
+    """Portable styling shared by subtitle cues and free text overlays."""
+
+    font_family: str | None = None
+    font_size: float = Field(default=64.0, gt=0.0)
+    font_weight: str = "normal"
+    color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
+    stroke_color: str = Field(
+        default="#000000", pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    )
+    stroke_width: float = Field(default=2.0, ge=0.0)
+    shadow: float = Field(default=1.0, ge=0.0)
+    background: str | None = Field(
+        default=None, pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    )
+    alignment: Literal["left", "center", "right"] = "center"
+    line_spacing: float = 1.0
+    letter_spacing: float = 0.0
+
+
+class SubtitleCue(StrictModel):
+    """One timed subtitle cue attached to a subtitle track."""
+
+    id: str = Field(default_factory=lambda: new_id("subtitle"))
+    track_id: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    text: str = Field(min_length=1)
+    style: TextStyle | None = None
+    source_identifier: str | None = None
+    settings: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "SubtitleCue":
+        if self.end <= self.start:
+            raise ValueError("subtitle cue end must be greater than start")
+        return self
+
+
+class TextOverlay(StrictModel):
+    """Timed free text rendered independently of spoken-word subtitles."""
+
+    id: str = Field(default_factory=lambda: new_id("text"))
+    track_id: str | None = None
+    text: str = Field(min_length=1)
+    at: float = Field(ge=0.0)
+    duration: float = Field(gt=0.0)
+    x: float | str = "center"
+    y: float | str = "80%"
+    style: TextStyle = Field(default_factory=TextStyle)
+    entrance: str | None = None
+    exit: str | None = None
+    enabled: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_position(cls, value: float | str) -> float | str:
+        if isinstance(value, float):
+            return value
+        normalized = value.strip().lower()
+        if normalized in {"left", "center", "right", "top", "bottom"}:
+            return normalized
+        if normalized.endswith("%"):
+            try:
+                percent = float(normalized[:-1])
+            except ValueError as exc:
+                raise ValueError("position percentage must be numeric") from exc
+            if not 0.0 <= percent <= 100.0:
+                raise ValueError("position percentage must be between 0% and 100%")
+            return normalized
+        try:
+            return float(normalized)
+        except ValueError as exc:
+            raise ValueError(
+                "position must be a number, percentage, or named alignment"
+            ) from exc
+
+    @property
+    def end(self) -> float:
+        return self.at + self.duration
+
+
 class HistoryEntry(StrictModel):
     revision: int = Field(ge=1)
     action: str
@@ -240,6 +336,8 @@ class ProjectDocument(StrictModel):
     media: list[MediaAsset] = Field(default_factory=list)
     tracks: list[Track] = Field(default_factory=list)
     transitions: list[Transition] = Field(default_factory=list)
+    subtitle_cues: list[SubtitleCue] = Field(default_factory=list)
+    text_overlays: list[TextOverlay] = Field(default_factory=list)
     markers: list[Marker] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
     history: list[HistoryEntry] = Field(default_factory=list)
@@ -272,15 +370,34 @@ class ProjectDocument(StrictModel):
                 raise ValueError(
                     f"transition {transition.id} references unknown track {transition.track_id}"
                 )
+        cue_ids: set[str] = set()
+        for cue in self.subtitle_cues:
+            if cue.id in cue_ids:
+                raise ValueError(f"duplicate subtitle cue id {cue.id}")
+            cue_ids.add(cue.id)
+            track = self.find_track(cue.track_id)
+            if track is None:
+                raise ValueError(f"subtitle cue {cue.id} references unknown track {cue.track_id}")
+            if track.type != TrackType.SUBTITLE:
+                raise ValueError(f"subtitle cue {cue.id} requires a subtitle track")
+        overlay_ids: set[str] = set()
+        for overlay in self.text_overlays:
+            if overlay.id in overlay_ids:
+                raise ValueError(f"duplicate text overlay id {overlay.id}")
+            overlay_ids.add(overlay.id)
+            if overlay.track_id is not None and overlay.track_id not in known_tracks:
+                raise ValueError(
+                    f"text overlay {overlay.id} references unknown track {overlay.track_id}"
+                )
         return self
 
     def recompute_duration(self) -> float:
         """Update and return the maximum enabled clip end."""
 
-        duration = max(
-            (clip.end for track in self.tracks for clip in track.clips if clip.enabled),
-            default=0.0,
-        )
+        ends = [clip.end for track in self.tracks for clip in track.clips if clip.enabled]
+        ends.extend(cue.end for cue in self.subtitle_cues)
+        ends.extend(overlay.end for overlay in self.text_overlays if overlay.enabled)
+        duration = max(ends, default=0.0)
         self.project.duration = duration
         return duration
 

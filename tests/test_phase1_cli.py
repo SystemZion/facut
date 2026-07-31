@@ -10,7 +10,12 @@ runner = CliRunner()
 
 
 def test_help_lists_doctor_and_global_options() -> None:
-    result = runner.invoke(app, ["--help"])
+    result = runner.invoke(
+        app,
+        ["--help"],
+        env={"COLUMNS": "140"},
+        terminal_width=140,
+    )
     assert result.exit_code == 0
     assert "doctor" in result.stdout
     assert "--project" in result.stdout

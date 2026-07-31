@@ -13,6 +13,7 @@ from typing import Any, Callable
 from facut.core.models import ProjectDocument
 from facut.render.graph_builder import FilterGraph, GraphBuilder
 from facut.render.hardware import EncoderChoice, choose_h264_encoder
+from facut.subtitles.compiler import SubtitleCompiler
 
 
 class RenderError(RuntimeError):
@@ -118,53 +119,64 @@ class FFmpegBackend:
             raise FileExistsError(
                 f'Output "{destination}" already exists; use overwrite to replace it.'
             )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        graph = GraphBuilder(project, project_dir).build(
-            width=width,
-            height=height,
-            fps=fps,
-            range_from=range_from,
-            range_to=range_to,
-            preview=preview,
-        )
         if codec not in {"h264", "libx264"}:
             raise NotImplementedError(
                 f"NOT_IMPLEMENTED: the v1 backend currently renders H.264, not {codec}."
             )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        subtitle_file = self._compile_subtitles(project)
+        try:
+            graph = GraphBuilder(project, project_dir).build(
+                width=width,
+                height=height,
+                fps=fps,
+                range_from=range_from,
+                range_to=range_to,
+                preview=preview,
+                subtitle_file=subtitle_file,
+            )
+        except Exception:
+            if subtitle_file is not None:
+                subtitle_file.unlink(missing_ok=True)
+            raise
         choice = choose_h264_encoder(self.ffmpeg, hardware)
         warnings = list(choice.warnings)
         try:
-            self._run(
-                graph,
-                destination,
-                choice,
-                audio_codec=audio_codec,
-                audio_bitrate=audio_bitrate,
-                bitrate=bitrate,
-                preview=preview,
-                overwrite=overwrite,
-                progress=progress,
-            )
-        except RenderError:
-            if choice.hardware == "none":
-                raise
-            warnings.append(
-                f"{choice.encoder} was detected but failed to initialize; "
-                "rendered with libx264 instead."
-            )
-            software = EncoderChoice("libx264", "none")
-            self._run(
-                graph,
-                destination,
-                software,
-                audio_codec=audio_codec,
-                audio_bitrate=audio_bitrate,
-                bitrate=bitrate,
-                preview=preview,
-                overwrite=True,
-                progress=progress,
-            )
-            choice = software
+            try:
+                self._run(
+                    graph,
+                    destination,
+                    choice,
+                    audio_codec=audio_codec,
+                    audio_bitrate=audio_bitrate,
+                    bitrate=bitrate,
+                    preview=preview,
+                    overwrite=overwrite,
+                    progress=progress,
+                )
+            except RenderError:
+                if choice.hardware == "none":
+                    raise
+                warnings.append(
+                    f"{choice.encoder} was detected but failed to initialize; "
+                    "rendered with libx264 instead."
+                )
+                software = EncoderChoice("libx264", "none")
+                self._run(
+                    graph,
+                    destination,
+                    software,
+                    audio_codec=audio_codec,
+                    audio_bitrate=audio_bitrate,
+                    bitrate=bitrate,
+                    preview=preview,
+                    overwrite=True,
+                    progress=progress,
+                )
+                choice = software
+        finally:
+            if subtitle_file is not None:
+                subtitle_file.unlink(missing_ok=True)
         return RenderResult(
             output=destination.resolve(),
             duration=graph.duration,
@@ -172,6 +184,22 @@ class FFmpegBackend:
             hardware=choice.hardware,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _compile_subtitles(project: ProjectDocument) -> Path | None:
+        """Create a temporary ASS document only when visible text is present."""
+
+        if not project.subtitle_cues and not any(
+            overlay.enabled for overlay in project.text_overlays
+        ):
+            return None
+        plan = SubtitleCompiler().compile(project)
+        with tempfile.NamedTemporaryFile(
+            prefix="facut-subtitles-", suffix=".ass", delete=False
+        ) as temporary:
+            path = Path(temporary.name)
+        plan.write(path, overwrite=True)
+        return path
 
     def preview_range(
         self,

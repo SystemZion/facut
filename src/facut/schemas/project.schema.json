@@ -34,7 +34,6 @@
         },
         "speed": {
           "default": 1.0,
-          "ne": 0.0,
           "title": "Speed",
           "type": "number"
         },
@@ -51,6 +50,36 @@
         "volume_db": {
           "default": 0.0,
           "title": "Volume Db",
+          "type": "number"
+        },
+        "timeline_duration": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeline Duration"
+        },
+        "loop": {
+          "default": false,
+          "title": "Loop",
+          "type": "boolean"
+        },
+        "audio_fade_in": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Audio Fade In",
+          "type": "number"
+        },
+        "audio_fade_out": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Audio Fade Out",
           "type": "number"
         },
         "transform": {
@@ -598,6 +627,271 @@
       "title": "ProjectSettings",
       "type": "object"
     },
+    "SubtitleCue": {
+      "additionalProperties": false,
+      "description": "One timed subtitle cue attached to a subtitle track.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0.0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0.0,
+          "title": "End",
+          "type": "number"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Identifier"
+        },
+        "settings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "track_id",
+        "start",
+        "end",
+        "text"
+      ],
+      "title": "SubtitleCue",
+      "type": "object"
+    },
+    "TextOverlay": {
+      "additionalProperties": false,
+      "description": "Timed free text rendered independently of spoken-word subtitles.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "at": {
+          "minimum": 0.0,
+          "title": "At",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0.0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "center",
+          "title": "X"
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "80%",
+          "title": "Y"
+        },
+        "style": {
+          "$ref": "#/$defs/TextStyle"
+        },
+        "entrance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entrance"
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "text",
+        "at",
+        "duration"
+      ],
+      "title": "TextOverlay",
+      "type": "object"
+    },
+    "TextStyle": {
+      "additionalProperties": false,
+      "description": "Portable styling shared by subtitle cues and free text overlays.",
+      "properties": {
+        "font_family": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Font Family"
+        },
+        "font_size": {
+          "default": 64.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Font Size",
+          "type": "number"
+        },
+        "font_weight": {
+          "default": "normal",
+          "title": "Font Weight",
+          "type": "string"
+        },
+        "color": {
+          "default": "#FFFFFF",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "title": "Color",
+          "type": "string"
+        },
+        "stroke_color": {
+          "default": "#000000",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "title": "Stroke Color",
+          "type": "string"
+        },
+        "stroke_width": {
+          "default": 2.0,
+          "minimum": 0.0,
+          "title": "Stroke Width",
+          "type": "number"
+        },
+        "shadow": {
+          "default": 1.0,
+          "minimum": 0.0,
+          "title": "Shadow",
+          "type": "number"
+        },
+        "background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Background"
+        },
+        "alignment": {
+          "default": "center",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "title": "Alignment",
+          "type": "string"
+        },
+        "line_spacing": {
+          "default": 1.0,
+          "title": "Line Spacing",
+          "type": "number"
+        },
+        "letter_spacing": {
+          "default": 0.0,
+          "title": "Letter Spacing",
+          "type": "number"
+        }
+      },
+      "title": "TextStyle",
+      "type": "object"
+    },
     "Track": {
       "additionalProperties": false,
       "properties": {
@@ -891,6 +1185,20 @@
         "$ref": "#/$defs/Transition"
       },
       "title": "Transitions",
+      "type": "array"
+    },
+    "subtitle_cues": {
+      "items": {
+        "$ref": "#/$defs/SubtitleCue"
+      },
+      "title": "Subtitle Cues",
+      "type": "array"
+    },
+    "text_overlays": {
+      "items": {
+        "$ref": "#/$defs/TextOverlay"
+      },
+      "title": "Text Overlays",
       "type": "array"
     },
     "markers": {

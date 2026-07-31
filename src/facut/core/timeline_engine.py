@@ -8,7 +8,15 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any
 
-from facut.core.models import Clip, ProjectDocument, Track, TrackType, Transition, new_id
+from facut.core.models import (
+    Clip,
+    MediaKind,
+    ProjectDocument,
+    Track,
+    TrackType,
+    Transition,
+    new_id,
+)
 from facut.transitions import registry as transition_registry
 
 
@@ -202,6 +210,110 @@ class TimelineEngine:
         track.clips.append(clip)
         track.clips.sort(key=lambda item: (item.timeline_start, item.id))
         self.project.recompute_duration()
+        return clip
+
+    def add_audio_clip(
+        self,
+        media_id: str,
+        track_id: str,
+        at: str | float = 0,
+        source_in: str | float = 0,
+        source_out: str | float | None = None,
+        *,
+        volume_db: float = 0.0,
+        fade_in: str | float = 0,
+        fade_out: str | float = 0,
+        loop: bool = False,
+        duration: str | float | None = None,
+        clip_id: str | None = None,
+    ) -> Clip:
+        """Place an audio source on an audio track.
+
+        When ``loop`` is enabled and no duration is supplied, the source is
+        repeated until the end of the current video timeline.
+        """
+
+        track = self._track(track_id)
+        if track.type != TrackType.AUDIO:
+            raise TimelineError(f'Track "{track_id}" is not an audio track.')
+        asset = self.project.find_media(media_id)
+        if asset is None:
+            raise TimelineItemNotFound(f'Media "{media_id}" was not found.')
+        if asset.kind not in {MediaKind.AUDIO, MediaKind.VIDEO}:
+            raise TimelineError(f'Media "{media_id}" does not contain usable audio.')
+        if not asset.technical.audio_codec:
+            raise TimelineError(f'Media "{media_id}" does not contain an audio stream.')
+        if not -96.0 <= float(volume_db) <= 24.0:
+            raise TimelineError("Audio volume must be between -96 dB and +24 dB.")
+
+        clip = self.add_clip(
+            media_id,
+            track_id,
+            at=at,
+            source_in=source_in,
+            source_out=source_out,
+            clip_id=clip_id,
+        )
+        fade_in_seconds = seconds(fade_in, self.fps)
+        fade_out_seconds = seconds(fade_out, self.fps)
+        if fade_in_seconds < 0 or fade_out_seconds < 0:
+            raise TimelineError("Audio fade durations cannot be negative.")
+        clip.volume_db = float(volume_db)
+        clip.loop = loop
+        if duration is not None:
+            if not loop:
+                raise TimelineError("An explicit loop duration requires loop=true.")
+            clip.timeline_duration = seconds(duration, self.fps)
+        elif loop:
+            video_end = max(
+                (
+                    item.end
+                    for candidate in self.project.tracks
+                    if candidate.type in {TrackType.VIDEO, TrackType.IMAGE}
+                    for item in candidate.clips
+                    if item.enabled
+                ),
+                default=clip.timeline_start + clip.duration,
+            )
+            clip.timeline_duration = max(
+                1 / self.fps, video_end - clip.timeline_start
+            )
+        clip.audio_fade_in = fade_in_seconds
+        clip.audio_fade_out = fade_out_seconds
+        Clip.model_validate(clip.model_dump())
+        self.project.recompute_duration()
+        return clip
+
+    def set_audio_volume(self, clip_id: str, db: float) -> Clip:
+        """Set clip gain in decibels for an audio-track clip."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type != TrackType.AUDIO:
+            raise TimelineError(f'Clip "{clip_id}" is not on an audio track.')
+        if not -96.0 <= float(db) <= 24.0:
+            raise TimelineError("Audio volume must be between -96 dB and +24 dB.")
+        clip.volume_db = float(db)
+        return clip
+
+    def set_audio_fades(
+        self,
+        clip_id: str,
+        *,
+        fade_in: str | float | None = None,
+        fade_out: str | float | None = None,
+    ) -> Clip:
+        """Set non-destructive fade-in and fade-out durations."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type != TrackType.AUDIO:
+            raise TimelineError(f'Clip "{clip_id}" is not on an audio track.')
+        if fade_in is None and fade_out is None:
+            raise TimelineError("Specify fade_in, fade_out, or both.")
+        if fade_in is not None:
+            clip.audio_fade_in = seconds(fade_in, self.fps)
+        if fade_out is not None:
+            clip.audio_fade_out = seconds(fade_out, self.fps)
+        Clip.model_validate(clip.model_dump())
         return clip
 
     def move_clip(
@@ -419,6 +531,9 @@ class TimelineEngine:
             else [track for track in self.project.tracks if track.enabled]
         )
         for track in tracks:
+            if track.type == TrackType.AUDIO:
+                # Independent sound layers are mixed, so overlaps are valid.
+                continue
             clips = sorted(
                 (clip for clip in track.clips if clip.enabled),
                 key=lambda item: item.timeline_start,
