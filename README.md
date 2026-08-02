@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.4.0` 在代理—精剪—声音—QC 链路上增加专业旅拍底座：混合设备摄取、相机/GPS/时区/HDR 元数据、内容哈希分析缓存、带证据和置信度的保守分类、单主序列多平台交付，以及从“临港两日”成片提炼的电影感中英双层标题模板。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前版本 `0.5.0` 增加面向 Agent 的能力发现/逐动作 JSON Schema、计划优先的 OTIO/FCPXML 交换、可导入视觉观察的语义检索、旅拍故事候选、B-roll 覆盖诊断、离线 GPX 路线视频和主体轨迹自动重构图。所有智能结果保留置信度、证据和提供方；不确定内容不会被包装成事实。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
 
 ## 安装
 
@@ -45,6 +45,7 @@ facut timeline/clip/transition/effect/audio
 facut proxy/analyze/qc/marker
 facut subtitle/text
 facut preview/render/deliver/delivery-presets/sequence
+facut semantic/story/broll/map/reframe/exchange/schema
 facut project/history
 facut undo/redo/run/serve/doctor
 ```
@@ -148,7 +149,66 @@ Get-Content -Raw ai-edit-plan.json | facut --project demo run - --json
 facut --project demo serve
 ```
 
-它通过 stdin/stdout 交换逐行 JSON-RPC，支持 `ping`、`project.snapshot`、`timeline.show`、原子 `run` 和 `shutdown`，同一进程复用已载入工程。
+它通过 stdin/stdout 交换逐行 JSON-RPC，同一进程复用已载入工程。握手会声明 `facut-agent/1.0`，AI 首先调用 `agent.capabilities` 获取稳定动作名，再用 `agent.schema` 读取单项参数约束：
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"agent.capabilities"}
+{"jsonrpc":"2.0","id":2,"method":"agent.schema","params":{"action":"semantic.search"}}
+{"jsonrpc":"2.0","id":3,"method":"semantic.search","params":{"query":"一家人在海边看日落","limit":5}}
+```
+
+CLI 中相同信息可通过 `facut --json schema commands`、`facut --json schema action semantic.search` 获取。写工程的智能命令采用计划优先约定；`exchange.import`、`story.build` 和 `reframe.plan` 不带 `--apply` 时绝不修改工程。
+
+## 视觉语义、故事与 B-roll
+
+FACUT 接受任何视觉模型或 AI Agent 生成的结构化观察，不把大模型绑定进核心 EXE。观察必须引用已导入的稳定 `media_id`，并给出准确入出点、置信度和证据：
+
+```json
+{
+  "provider": "local-vision-agent-v1",
+  "observations": [{
+    "media_id": "media_01ABC",
+    "start": 12.4,
+    "end": 18.8,
+    "caption": "一家人在海边看日落",
+    "tags": ["family", "sunset-window", "reaction"],
+    "confidence": 0.93,
+    "evidence": [{"type": "sampled_frames", "frames": [372, 465, 558]}]
+  }]
+}
+```
+
+```powershell
+facut --project demo semantic index --observations vision-observations.json --json
+facut --project demo semantic search "孩子第一次看到雪山的反应" --json
+facut --project demo story build --style travel-documentary --target-duration 720 --json
+facut --project demo story build --style travel-documentary --target-duration 720 --sequence youtube-main --apply --json
+facut --project demo broll diagnose --maximum-aroll 8 --json
+```
+
+没有视觉观察文件时，索引仍可使用文件名和已保存元数据，但会明确返回限制。故事只选取有证据的区间；找不到某个叙事阶段时登记为 `missing_stages`，不会编造地点、人物或事件。
+
+## GPX 路线与主体重构图
+
+```powershell
+facut map inspect route.gpx --json
+facut map animate route.gpx --output route.mp4 --duration 8 --width 3840 --height 2160 --encoder h264_nvenc --json
+facut --project demo reframe plan <CLIP_ID> subject-track.json --width 1080 --height 1920 --json
+facut --project demo reframe plan <CLIP_ID> subject-track.json --width 1080 --height 1920 --apply --json
+```
+
+GPX 动画完全离线生成，不抓取或捆绑在线地图瓦片，输出真实可播放的视频。主体轨迹使用局部片段时间与归一化中心点 `cx/cy`；FACUT 对低置信度点过滤、平滑、限制裁切边界，并编译为确定性的 x/y 关键帧。主体检测和跟踪推理由外部视觉提供方完成，核心 EXE 负责验证和可重复执行。
+
+## OTIO / FCPXML 交换
+
+```powershell
+facut --project demo exchange export --format otio --output edit.otio --json
+facut --project demo exchange import edit.otio --json
+facut --project demo exchange import edit.otio --apply --json
+facut --project demo exchange export --format fcpxml --output edit.fcpxml --json
+```
+
+OTIO 是高保真主交换格式：FACUT 片段、变速、转场、文字、字幕和标记放在明确的 FACUT 元数据中并可往返。FCPXML 1.9 使用保守的 `asset-clip` 子集并返回损失报告；复杂 compound clip、generator 和 roles 不会被伪装成无损支持。
 
 ## 专业旅拍摄取与素材理解
 
@@ -264,7 +324,7 @@ facut delivery-presets --json
 facut --project demo deliver --preset youtube-4k-sdr --also bilibili-4k,shorts-9x16,community-1x1 --output-dir renders/delivery --hardware auto
 ```
 
-YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧率使用 68Mbps，输出 AAC 384kbps、BT.709、4:2:0 和 MP4 Fast Start。B站预设明确标记为 FACUT 创作者工作流默认值，不伪称平台官方上限。竖版输出当前使用确定性画面适配并发出警告；主体跟踪式自动重构图尚未实现。
+YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧率使用 68Mbps，输出 AAC 384kbps、BT.709、4:2:0 和 MP4 Fast Start。B站预设明确标记为 FACUT 创作者工作流默认值，不伪称平台官方上限。竖版输出可使用确定性画面适配；先应用 `reframe plan --apply` 后，会用主体轨迹关键帧保持主体构图。
 
 ### 当前明确限制
 
@@ -273,8 +333,9 @@ YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧
 - 调整层当前接受单 FFmpeg 节点效果；像素化这种多节点效果暂不接受。
 - 画面关键帧当前为线性 x/y/scale/rotation；光流补帧和高级稳定模型尚未实现。
 - ASR 需要用户提供本地模型；歌曲识别需要本地指纹数据库插件。
-- 旅拍语义分类目前以元数据/路径规则为确定性底座；视觉语义搜索、人物识别、故事生成和 B-roll 覆盖诊断仍需后续本地视觉索引插件。
-- GPX/KML 路线动画、主体跟踪自动重构图、OpenTimelineIO/FCPXML 交换尚未实现。
+- FACUT 核心可验证和检索视觉观察，但当前不捆绑通用视觉模型；主体检测、人物识别和跟踪推理需要外部本地模型或 Agent 提供观察文件。
+- GPX 已实现；KML、带在线地图瓦片或自动地名解析的地图样式尚未实现。
+- OTIO 原生 JSON 支持高保真 FACUT 元数据往返；FCPXML 当前是明确标注损失的 1.9 保守子集。
 - 增量缓存会对复杂工程安全降级为整片渲染；跨转场区间复用是后续优化。
 
 ## 开发与测试
@@ -294,6 +355,10 @@ src/facut/
 ├── core/             工程、时间线、命令及历史
 ├── media/            探测、代理、缩略图和波形
 ├── analysis/         质量、场景、节拍和可选本地 ASR
+├── intelligence/     语义索引、故事计划和 B-roll 诊断
+├── travel/           GPX 路线视频和主体重构图
+├── exchange/         OTIO/FCPXML 导入导出
+├── agent/            能力发现和逐动作 JSON Schema
 ├── qc/               解码、黑帧、静音、响度及审片板
 ├── render/           滤镜图、片段缓存、硬件和 FFmpeg 后端
 ├── transitions/      插件式转场

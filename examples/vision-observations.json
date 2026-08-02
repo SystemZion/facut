@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "provider": "replace-with-your-local-vision-provider",
+  "observations": [
+    {
+      "media_id": "media_REPLACE_ME",
+      "start": 12.4,
+      "end": 18.8,
+      "caption": "一家人在海边看日落",
+      "tags": ["family", "sunset-window", "reaction"],
+      "confidence": 0.93,
+      "quality_score": 87,
+      "evidence": [
+        {"type": "sampled_frames", "frames": [372, 465, 558]}
+      ]
+    }
+  ]
+}

@@ -55,6 +55,8 @@ $PyInstallerArgs = @(
     "--collect-all", "rich",
     "--collect-all", "pydantic",
     "--collect-data", "openpyxl",
+    "--collect-data", "opentimelineio",
+    "--collect-submodules", "opentimelineio.adapters",
     "--exclude-module", "faster_whisper",
     "--exclude-module", "ctranslate2",
     "--exclude-module", "av",
