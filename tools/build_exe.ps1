@@ -54,6 +54,20 @@ $PyInstallerArgs = @(
     "--collect-all", "typer",
     "--collect-all", "rich",
     "--collect-all", "pydantic",
+    "--collect-data", "openpyxl",
+    "--exclude-module", "faster_whisper",
+    "--exclude-module", "ctranslate2",
+    "--exclude-module", "av",
+    "--exclude-module", "torch",
+    "--exclude-module", "transformers",
+    "--exclude-module", "tensorflow",
+    "--exclude-module", "pandas",
+    "--exclude-module", "numpy",
+    "--exclude-module", "scipy",
+    "--exclude-module", "sklearn",
+    "--exclude-module", "matplotlib",
+    "--exclude-module", "gradio",
+    "--exclude-module", "pyarrow",
     "--collect-data", "facut"
 )
 

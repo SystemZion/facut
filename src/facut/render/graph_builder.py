@@ -26,6 +26,34 @@ def _fmt(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
 
 
+def _keyframe_expr(
+    clip: Clip, property_name: str, default: float, *, time_var: str = "t"
+) -> str:
+    """Compile linear numeric keyframes to an FFmpeg expression."""
+
+    points = sorted(
+        (item for item in clip.keyframes if item.property == property_name),
+        key=lambda item: item.time,
+    )
+    if not points:
+        return _fmt(default)
+    expression = _fmt(float(points[-1].value))
+    for left, right in reversed(list(zip(points, points[1:]))):
+        start = _fmt(left.time)
+        end = _fmt(right.time)
+        left_value = _fmt(float(left.value))
+        delta = _fmt(float(right.value) - float(left.value))
+        segment = (
+            f"{left_value}+({delta})*({time_var}-{start})/({end}-{start})"
+        )
+        expression = f"if(lt({time_var}\\,{end})\\,{segment}\\,{expression})"
+    first = points[0]
+    return (
+        f"if(lt({time_var}\\,{_fmt(first.time)})\\,"
+        f"{_fmt(float(first.value))}\\,{expression})"
+    )
+
+
 def _filter_path(path: str | Path) -> str:
     """Escape an absolute path for an FFmpeg filter option on every platform."""
 
@@ -52,6 +80,75 @@ def _atempo(rate: float) -> str:
         remaining /= 0.5
     filters.append(f"atempo={_fmt(remaining)}")
     return ",".join(filters)
+
+
+def _linear_from_db(value: float) -> float:
+    return 10 ** (value / 20)
+
+
+def _audio_processing_filters(clip: Clip, duration: float, sample_rate: int) -> list[str]:
+    """Compile the shared non-destructive audio model to FFmpeg filters."""
+
+    processing = clip.audio
+    result = [f"aresample={sample_rate}"]
+    if processing.channel_mode == "mono":
+        result.extend(
+            [
+                "aformat=sample_fmts=fltp:channel_layouts=mono",
+                "pan=stereo|c0=c0|c1=c0",
+            ]
+        )
+    else:
+        result.append("aformat=sample_fmts=fltp:channel_layouts=stereo")
+        if processing.pan is not None:
+            left_gain = 1.0 - max(0.0, processing.pan)
+            right_gain = 1.0 + min(0.0, processing.pan)
+            result.append(
+                f"pan=stereo|c0={_fmt(left_gain)}*c0|"
+                f"c1={_fmt(right_gain)}*c1"
+            )
+    if processing.highpass_hz is not None:
+        result.append(f"highpass=f={_fmt(processing.highpass_hz)}")
+    if processing.denoise_strength is not None:
+        noise_reduction = 3.0 + processing.denoise_strength * 27.0
+        result.append(f"afftdn=nr={_fmt(noise_reduction)}:nf=-50")
+    if processing.compressor is not None:
+        compressor = processing.compressor
+        result.append(
+            "acompressor="
+            f"threshold={_fmt(_linear_from_db(compressor.threshold_db))}:"
+            f"ratio={_fmt(compressor.ratio)}:"
+            f"attack={_fmt(compressor.attack_ms)}:"
+            f"release={_fmt(compressor.release_ms)}:"
+            f"makeup={_fmt(_linear_from_db(compressor.makeup_db))}"
+        )
+    gain_db = clip.volume_db + processing.gain_db
+    if gain_db:
+        result.append(f"volume={_fmt(gain_db)}dB")
+    if processing.loudness is not None:
+        loudness = processing.loudness
+        result.append(
+            f"loudnorm=I={_fmt(loudness.target_lufs)}:"
+            f"TP={_fmt(loudness.true_peak_db)}:"
+            f"LRA={_fmt(loudness.loudness_range)}"
+        )
+    if processing.limiter is not None:
+        limiter = processing.limiter
+        result.append(
+            f"alimiter=limit={_fmt(_linear_from_db(limiter.ceiling_db))}:"
+            f"attack={_fmt(limiter.attack_ms)}:"
+            f"release={_fmt(limiter.release_ms)}:level=false"
+        )
+    fade_in = processing.fade_in or clip.audio_fade_in
+    fade_out = processing.fade_out or clip.audio_fade_out
+    if fade_in:
+        result.append(f"afade=t=in:st=0:d={_fmt(fade_in)}")
+    if fade_out:
+        result.append(
+            f"afade=t=out:st={_fmt(max(0.0, duration - fade_out))}:"
+            f"d={_fmt(fade_out)}"
+        )
+    return result
 
 
 def _transition_filter(name: str, default: str, parameters: dict[str, Any]) -> str:
@@ -117,12 +214,9 @@ class GraphBuilder:
         ]
         if not video_tracks:
             raise ValueError("The timeline has no enabled video clips.")
-        if len(video_tracks) > 1:
-            raise NotImplementedError(
-                "NOT_IMPLEMENTED: v1 rendering currently supports one enabled "
-                "video/image track; disable other video tracks before rendering."
-            )
+        video_tracks.sort(key=lambda item: item.order)
         track = video_tracks[0]
+        overlay_tracks = video_tracks[1:]
         clips = sorted(
             (clip for clip in track.clips if clip.enabled),
             key=lambda clip: clip.timeline_start,
@@ -137,25 +231,42 @@ class GraphBuilder:
             if asset is None:
                 raise ValueError(f"Clip {clip.id} references missing media {clip.media_id}.")
             source = self._source(asset.path)
+            if preview and asset.proxy_path:
+                proxy = self._source(asset.proxy_path)
+                if proxy.is_file():
+                    source = proxy
             if not source.is_file():
                 raise FileNotFoundError(f"Media file is offline: {asset.original_name}")
             paths.append(source)
+            transform = clip.transform
             if asset.kind == MediaKind.IMAGE:
                 inputs.extend(
-                    ["-loop", "1", "-t", _fmt(clip.source_out - clip.source_in), "-i", str(source)]
+                    ["-loop", "1", "-t", _fmt(clip.duration), "-i", str(source)]
                 )
             else:
+                if not transform.autorotate:
+                    inputs.append("-noautorotate")
                 inputs.extend(["-i", str(source)])
             speed = abs(clip.speed)
-            video_chain = [
-                f"[{index}:v:0]trim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
-                "setpts=PTS-STARTPTS",
-            ]
+            if clip.freeze_frame is not None:
+                video_chain = [
+                    f"[{index}:v:0]trim=start={_fmt(clip.freeze_frame)}:"
+                    f"end={_fmt(clip.freeze_frame + 1 / fps)}",
+                    "setpts=PTS-STARTPTS",
+                    f"tpad=stop_mode=clone:stop_duration={_fmt(clip.duration)}",
+                    f"trim=duration={_fmt(clip.duration)}",
+                ]
+            else:
+                video_chain = [
+                    f"[{index}:v:0]trim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
+                    "setpts=PTS-STARTPTS",
+                ]
             if clip.speed < 0:
                 video_chain.append("reverse")
             if abs(speed - 1) > 1e-9:
                 video_chain.append(f"setpts=PTS/{_fmt(speed)}")
-            transform = clip.transform
+            if transform.stabilize:
+                video_chain.append("deshake")
             if transform.crop_left or transform.crop_right or transform.crop_top or transform.crop_bottom:
                 crop_w = f"iw-{_fmt(transform.crop_left + transform.crop_right)}"
                 crop_h = f"ih-{_fmt(transform.crop_top + transform.crop_bottom)}"
@@ -166,26 +277,68 @@ class GraphBuilder:
                 video_chain.append("hflip")
             if transform.flip_y:
                 video_chain.append("vflip")
-            if transform.rotation:
-                video_chain.append(f"rotate={_fmt(transform.rotation)}*PI/180:ow=rotw(iw):oh=roth(ih)")
+            rotation = _keyframe_expr(clip, "rotation", transform.rotation)
+            if rotation != "0":
+                video_chain.append(
+                    f"rotate=({rotation})*PI/180:ow=rotw(iw):oh=roth(ih)"
+                )
             if not preview:
                 for effect in clip.effects:
                     if effect.enabled:
                         video_chain.append(
                             effect_registry.get(effect.type).compile(effect.parameters)
                         )
+            if transform.fit == "stretch":
+                video_chain.append(f"scale={width}:{height}")
+            elif transform.fit == "cover":
+                video_chain.append(
+                    f"scale={width}:{height}:force_original_aspect_ratio=increase"
+                )
+            elif transform.fit == "contain":
+                video_chain.append(
+                    f"scale={width}:{height}:force_original_aspect_ratio=decrease"
+                )
+            scale_x = _keyframe_expr(clip, "scale_x", transform.scale_x)
+            scale_y = _keyframe_expr(clip, "scale_y", transform.scale_y)
+            if scale_x != "1" or scale_y != "1":
+                video_chain.append(
+                    f"scale='iw*({scale_x})':'ih*({scale_y})':eval=frame"
+                )
+            x = _keyframe_expr(clip, "x", transform.x)
+            y = _keyframe_expr(clip, "y", transform.y)
             video_chain.extend(
                 [
-                    f"scale={width}:{height}:force_original_aspect_ratio=decrease",
-                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={self.project.project.background}",
+                    f"pad=max(iw\\,{width}):max(ih\\,{height}):"
+                    f"(ow-iw)/2+({x}):(oh-ih)/2+({y}):"
+                    f"color={self.project.project.background}:eval=frame",
+                    f"crop={width}:{height}:(iw-{width})/2-({x}):(ih-{height})/2-({y})",
                     f"fps={_fmt(fps)}",
                     "setsar=1",
-                    "format=yuv420p",
                 ]
             )
-            filters.append(",".join(video_chain) + f"[v{index}]")
+            if transform.opacity < 1:
+                video_chain.extend(
+                    ["format=rgba", f"colorchannelmixer=aa={_fmt(transform.opacity)}"]
+                )
+                filters.append(",".join(video_chain) + f"[vcontent{index}]")
+                filters.append(
+                    f"color=c={self.project.project.background}:s={width}x{height}:"
+                    f"r={_fmt(fps)}:d={_fmt(clip.duration)}[vbase{index}]"
+                )
+                filters.append(
+                    f"[vbase{index}][vcontent{index}]overlay=format=auto,"
+                    f"format=yuv420p[v{index}]"
+                )
+            else:
+                video_chain.append("format=yuv420p")
+                filters.append(",".join(video_chain) + f"[v{index}]")
             video_labels.append(f"v{index}")
-            if asset.technical.audio_codec and not clip.muted:
+            if (
+                asset.technical.audio_codec
+                and clip.freeze_frame is None
+                and not clip.muted
+                and not clip.audio.muted
+            ):
                 audio_chain = [
                     f"[{index}:a:0]atrim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
                     "asetpts=PTS-STARTPTS",
@@ -194,13 +347,10 @@ class GraphBuilder:
                     audio_chain.append("areverse")
                 if abs(speed - 1) > 1e-9:
                     audio_chain.append(_atempo(speed))
-                if clip.volume_db:
-                    audio_chain.append(f"volume={_fmt(clip.volume_db)}dB")
                 audio_chain.extend(
-                    [
-                        f"aresample={self.project.project.sample_rate}",
-                        "aformat=sample_fmts=fltp:channel_layouts=stereo",
-                    ]
+                    _audio_processing_filters(
+                        clip, clip.duration, self.project.project.sample_rate
+                    )
                 )
                 filters.append(",".join(audio_chain) + f"[a{index}]")
             else:
@@ -283,6 +433,217 @@ class GraphBuilder:
                 current_duration += max(0.0, gap) + clip.duration
             current_v, current_a = out_v, out_a
 
+        # Higher video/image tracks are composited as true picture-in-picture
+        # layers. Their audio remains explicit: detach/add it to an audio track
+        # when it should be heard.
+        overlay_clip_ids = {
+            clip.id
+            for overlay_track in overlay_tracks
+            for clip in overlay_track.clips
+            if clip.enabled
+        }
+        if any(
+            transition.from_clip_id in overlay_clip_ids
+            or transition.to_clip_id in overlay_clip_ids
+            for transition in self.project.transitions
+        ):
+            raise NotImplementedError(
+                "NOT_IMPLEMENTED: transitions on overlay video tracks are not yet supported."
+            )
+        overlay_number = 0
+        for overlay_track in overlay_tracks:
+            for clip in sorted(
+                (item for item in overlay_track.clips if item.enabled),
+                key=lambda item: item.timeline_start,
+            ):
+                if clip.end > current_duration + 1e-6:
+                    raise ValueError(
+                        "An overlay clip cannot extend beyond the base video track."
+                    )
+                asset = self.project.find_media(clip.media_id)
+                if asset is None:
+                    raise ValueError(
+                        f"Overlay clip {clip.id} references missing media {clip.media_id}."
+                    )
+                source = self._source(asset.path)
+                if preview and asset.proxy_path:
+                    proxy = self._source(asset.proxy_path)
+                    if proxy.is_file():
+                        source = proxy
+                if not source.is_file():
+                    raise FileNotFoundError(
+                        f"Media file is offline: {asset.original_name}"
+                    )
+                input_index = len(paths)
+                paths.append(source)
+                transform = clip.transform
+                blend_mode = str(clip.metadata.get("blend_mode", "normal"))
+                mask_path = clip.metadata.get("mask_path")
+                if blend_mode != "normal" and mask_path:
+                    raise NotImplementedError(
+                        "NOT_IMPLEMENTED: custom masks with non-normal blend modes "
+                        "cannot be combined yet."
+                    )
+                if asset.kind == MediaKind.IMAGE:
+                    inputs.extend(
+                        ["-loop", "1", "-t", _fmt(clip.duration), "-i", str(source)]
+                    )
+                else:
+                    if not transform.autorotate:
+                        inputs.append("-noautorotate")
+                    inputs.extend(["-i", str(source)])
+                if clip.freeze_frame is not None:
+                    chain = [
+                        f"[{input_index}:v:0]trim=start={_fmt(clip.freeze_frame)}:"
+                        f"end={_fmt(clip.freeze_frame + 1 / fps)}",
+                        "setpts=PTS-STARTPTS",
+                        f"tpad=stop_mode=clone:stop_duration={_fmt(clip.duration)}",
+                        f"trim=duration={_fmt(clip.duration)}",
+                    ]
+                else:
+                    chain = [
+                        f"[{input_index}:v:0]trim=start={_fmt(clip.source_in)}:"
+                        f"end={_fmt(clip.source_out)}",
+                        "setpts=PTS-STARTPTS",
+                    ]
+                if transform.stabilize:
+                    chain.append("deshake")
+                if transform.crop_left or transform.crop_right or transform.crop_top or transform.crop_bottom:
+                    chain.append(
+                        f"crop=iw-{_fmt(transform.crop_left + transform.crop_right)}:"
+                        f"ih-{_fmt(transform.crop_top + transform.crop_bottom)}:"
+                        f"{_fmt(transform.crop_left)}:{_fmt(transform.crop_top)}"
+                    )
+                rotation = _keyframe_expr(clip, "rotation", transform.rotation)
+                if rotation != "0":
+                    chain.append(
+                        f"rotate=({rotation})*PI/180:ow=rotw(iw):oh=roth(ih)"
+                    )
+                if not preview:
+                    for effect in clip.effects:
+                        if effect.enabled:
+                            chain.append(
+                                effect_registry.get(effect.type).compile(
+                                    effect.parameters
+                                )
+                            )
+                chain.append(
+                    f"scale={width}:{height}:force_original_aspect_ratio=decrease"
+                )
+                scale_x = _keyframe_expr(clip, "scale_x", transform.scale_x)
+                scale_y = _keyframe_expr(clip, "scale_y", transform.scale_y)
+                chain.append(f"scale='iw*({scale_x})':'ih*({scale_y})':eval=frame")
+                if blend_mode == "normal":
+                    chain.extend(
+                        [
+                            "format=rgba",
+                            f"colorchannelmixer=aa={_fmt(transform.opacity)}",
+                            f"setpts=PTS+{_fmt(clip.timeline_start)}/TB",
+                        ]
+                    )
+                else:
+                    chain.append(f"setpts=PTS+{_fmt(clip.timeline_start)}/TB")
+                overlay_label = f"overlay{overlay_number}"
+                filters.append(",".join(chain) + f"[{overlay_label}]")
+                if mask_path:
+                    mask_source = self._source(str(mask_path))
+                    if not mask_source.is_file():
+                        raise FileNotFoundError(f"Composite mask is offline: {mask_source}")
+                    mask_index = len(paths)
+                    paths.append(mask_source)
+                    if mask_source.suffix.lower() in {
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".webp",
+                        ".bmp",
+                    }:
+                        inputs.extend(
+                            ["-loop", "1", "-t", _fmt(clip.duration), "-i", str(mask_source)]
+                        )
+                    else:
+                        inputs.extend(["-i", str(mask_source)])
+                    mask_label = f"mask{overlay_number}"
+                    filters.append(
+                        f"[{mask_index}:v:0]trim=duration={_fmt(clip.duration)},"
+                        "setpts=PTS-STARTPTS,format=gray"
+                        f"[{mask_label}]"
+                    )
+                    mask_scaled = f"maskscaled{overlay_number}"
+                    overlay_ref = f"overlayref{overlay_number}"
+                    filters.append(
+                        f"[{mask_label}][{overlay_label}]scale2ref="
+                        f"w=rw:h=rh[{mask_scaled}][{overlay_ref}]"
+                    )
+                    masked_label = f"masked{overlay_number}"
+                    filters.append(
+                        f"[{overlay_ref}][{mask_scaled}]alphamerge[{masked_label}]"
+                    )
+                    overlay_label = masked_label
+                local_time = f"(t-{_fmt(clip.timeline_start)})"
+                x = _keyframe_expr(clip, "x", transform.x, time_var=local_time)
+                y = _keyframe_expr(clip, "y", transform.y, time_var=local_time)
+                output_label = f"composite{overlay_number}"
+                if blend_mode == "normal":
+                    filters.append(
+                        f"[{current_v}][{overlay_label}]overlay="
+                        f"x=(W-w)/2+({x}):y=(H-h)/2+({y}):"
+                        f"enable='between(t\\,{_fmt(clip.timeline_start)}\\,{_fmt(clip.end)})':"
+                        f"eof_action=pass:format=auto[{output_label}]"
+                    )
+                else:
+                    if x != "0" or y != "0":
+                        raise NotImplementedError(
+                            "NOT_IMPLEMENTED: positioned overlays with a non-normal "
+                            "blend mode are not supported; use x=0 and y=0."
+                        )
+                    neutral = "white" if blend_mode == "multiply" else "black"
+                    full_label = f"blendfull{overlay_number}"
+                    filters.append(
+                        f"[{overlay_label}]pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:"
+                        f"color={neutral},crop={width}:{height},format=yuv420p[{full_label}]"
+                    )
+                    filters.append(
+                        f"[{current_v}][{full_label}]blend=all_mode={blend_mode}:"
+                        f"all_opacity={_fmt(transform.opacity)}:"
+                        f"enable='between(t\\,{_fmt(clip.timeline_start)}\\,{_fmt(clip.end)})'"
+                        f"[{output_label}]"
+                    )
+                current_v = output_label
+                overlay_number += 1
+
+        # Adjustment layers apply validated effects to the complete composite
+        # only inside their declared timeline interval.
+        adjustment_number = 0
+        for adjustment_track in sorted(
+            (
+                item
+                for item in self.project.tracks
+                if item.enabled and not item.muted and item.type == TrackType.ADJUSTMENT
+            ),
+            key=lambda item: item.order,
+        ):
+            for adjustment in adjustment_track.metadata.get("adjustments", []):
+                if not adjustment.get("enabled", True):
+                    continue
+                definition = effect_registry.get(str(adjustment["type"]))
+                compiled = definition.compile(adjustment.get("parameters", {}))
+                if "," in compiled:
+                    raise NotImplementedError(
+                        "NOT_IMPLEMENTED: multi-filter effects cannot be used on an "
+                        "adjustment layer yet."
+                    )
+                start = float(adjustment["at"])
+                end = start + float(adjustment["duration"])
+                output_label = f"adjusted{adjustment_number}"
+                separator = ":" if "=" in compiled else "="
+                filters.append(
+                    f"[{current_v}]{compiled}{separator}"
+                    f"enable='between(t\\,{_fmt(start)}\\,{_fmt(end)})'[{output_label}]"
+                )
+                current_v = output_label
+                adjustment_number += 1
+
         # Independent audio tracks are layered after the video track's native
         # sound has been assembled.  This keeps camera/dialogue audio intact
         # while allowing music and effects to overlap freely.
@@ -294,7 +655,11 @@ class GraphBuilder:
             and not audio_track.muted
             and audio_track.type == TrackType.AUDIO
             for clip in sorted(
-                (item for item in audio_track.clips if item.enabled and not item.muted),
+                (
+                    item
+                    for item in audio_track.clips
+                    if item.enabled and not item.muted and not item.audio.muted
+                ),
                 key=lambda item: (item.timeline_start, item.id),
             )
         ]
@@ -322,12 +687,7 @@ class GraphBuilder:
                 audio_chain.append("areverse")
             if abs(speed - 1) > 1e-9:
                 audio_chain.append(_atempo(speed))
-            audio_chain.extend(
-                [
-                    f"aresample={self.project.project.sample_rate}",
-                    "aformat=sample_fmts=fltp:channel_layouts=stereo",
-                ]
-            )
+            audio_chain.append(f"aresample={self.project.project.sample_rate}")
             natural_duration = (clip.source_out - clip.source_in) / speed
             if clip.loop:
                 loop_samples = max(
@@ -340,18 +700,11 @@ class GraphBuilder:
                     "asetpts=PTS-STARTPTS",
                 ]
             )
-            if clip.volume_db:
-                audio_chain.append(f"volume={_fmt(clip.volume_db)}dB")
-            if clip.audio_fade_in:
-                audio_chain.append(
-                    f"afade=t=in:st=0:d={_fmt(clip.audio_fade_in)}"
+            audio_chain.extend(
+                _audio_processing_filters(
+                    clip, clip.duration, self.project.project.sample_rate
                 )
-            if clip.audio_fade_out:
-                fade_start = max(0.0, clip.duration - clip.audio_fade_out)
-                audio_chain.append(
-                    f"afade=t=out:st={_fmt(fade_start)}:"
-                    f"d={_fmt(clip.audio_fade_out)}"
-                )
+            )
             if clip.timeline_start:
                 delay_ms = max(0, round(clip.timeline_start * 1000))
                 audio_chain.append(f"adelay={delay_ms}:all=1")

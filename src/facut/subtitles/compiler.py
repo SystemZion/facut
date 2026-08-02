@@ -47,6 +47,19 @@ class SubtitleCompiler:
             style_name = self._style_name(styles, overlay.style)
             x = self._position(overlay.x, document.project.width, axis="x")
             y = self._position(overlay.y, document.project.height, axis="y")
+            if overlay.style.safe_area:
+                x_margin = (
+                    document.project.width
+                    * overlay.style.safe_margin_percent
+                    / 100.0
+                )
+                y_margin = (
+                    document.project.height
+                    * overlay.style.safe_margin_percent
+                    / 100.0
+                )
+                x = min(max(x, x_margin), document.project.width - x_margin)
+                y = min(max(y, y_margin), document.project.height - y_margin)
             text = f"{{\\an5\\pos({x:.2f},{y:.2f})}}{self._escape(overlay.text)}"
             events.append(
                 self._dialogue(

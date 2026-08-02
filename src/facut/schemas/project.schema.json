@@ -1,5 +1,223 @@
 {
   "$defs": {
+    "AudioCompressorSettings": {
+      "additionalProperties": false,
+      "description": "Non-destructive dynamic-range compressor parameters.",
+      "properties": {
+        "threshold_db": {
+          "default": -18.0,
+          "maximum": 0.0,
+          "minimum": -60.0,
+          "title": "Threshold Db",
+          "type": "number"
+        },
+        "ratio": {
+          "default": 4.0,
+          "maximum": 20.0,
+          "minimum": 1.0,
+          "title": "Ratio",
+          "type": "number"
+        },
+        "attack_ms": {
+          "default": 20.0,
+          "maximum": 2000.0,
+          "minimum": 0.01,
+          "title": "Attack Ms",
+          "type": "number"
+        },
+        "release_ms": {
+          "default": 250.0,
+          "maximum": 9000.0,
+          "minimum": 1.0,
+          "title": "Release Ms",
+          "type": "number"
+        },
+        "makeup_db": {
+          "default": 0.0,
+          "maximum": 24.0,
+          "minimum": 0.0,
+          "title": "Makeup Db",
+          "type": "number"
+        }
+      },
+      "title": "AudioCompressorSettings",
+      "type": "object"
+    },
+    "AudioLimiterSettings": {
+      "additionalProperties": false,
+      "description": "True peak guard compiled to FFmpeg's alimiter filter.",
+      "properties": {
+        "ceiling_db": {
+          "default": -1.0,
+          "maximum": 0.0,
+          "minimum": -20.0,
+          "title": "Ceiling Db",
+          "type": "number"
+        },
+        "attack_ms": {
+          "default": 5.0,
+          "maximum": 80.0,
+          "minimum": 0.1,
+          "title": "Attack Ms",
+          "type": "number"
+        },
+        "release_ms": {
+          "default": 50.0,
+          "maximum": 8000.0,
+          "minimum": 1.0,
+          "title": "Release Ms",
+          "type": "number"
+        }
+      },
+      "title": "AudioLimiterSettings",
+      "type": "object"
+    },
+    "AudioLoudnessSettings": {
+      "additionalProperties": false,
+      "description": "Single-pass EBU R128 loudness normalization targets.",
+      "properties": {
+        "target_lufs": {
+          "default": -14.0,
+          "maximum": -5.0,
+          "minimum": -70.0,
+          "title": "Target Lufs",
+          "type": "number"
+        },
+        "true_peak_db": {
+          "default": -1.0,
+          "maximum": 0.0,
+          "minimum": -9.0,
+          "title": "True Peak Db",
+          "type": "number"
+        },
+        "loudness_range": {
+          "default": 11.0,
+          "maximum": 50.0,
+          "minimum": 1.0,
+          "title": "Loudness Range",
+          "type": "number"
+        }
+      },
+      "title": "AudioLoudnessSettings",
+      "type": "object"
+    },
+    "AudioProcessing": {
+      "additionalProperties": false,
+      "description": "Unified audio settings shared by native and independent audio clips.",
+      "properties": {
+        "gain_db": {
+          "default": 0.0,
+          "maximum": 24.0,
+          "minimum": -96.0,
+          "title": "Gain Db",
+          "type": "number"
+        },
+        "muted": {
+          "default": false,
+          "title": "Muted",
+          "type": "boolean"
+        },
+        "fade_in": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Fade In",
+          "type": "number"
+        },
+        "fade_out": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Fade Out",
+          "type": "number"
+        },
+        "highpass_hz": {
+          "anyOf": [
+            {
+              "maximum": 20000.0,
+              "minimum": 20.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Highpass Hz"
+        },
+        "denoise_strength": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.01,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Denoise Strength"
+        },
+        "compressor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioCompressorSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limiter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioLimiterSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "loudness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioLoudnessSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "channel_mode": {
+          "default": "original",
+          "enum": [
+            "original",
+            "mono",
+            "stereo"
+          ],
+          "title": "Channel Mode",
+          "type": "string"
+        },
+        "pan": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": -1.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pan"
+        }
+      },
+      "title": "AudioProcessing",
+      "type": "object"
+    },
     "Clip": {
       "additionalProperties": false,
       "properties": {
@@ -65,6 +283,19 @@
           "default": null,
           "title": "Timeline Duration"
         },
+        "freeze_frame": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Freeze Frame"
+        },
         "loop": {
           "default": false,
           "title": "Loop",
@@ -81,6 +312,9 @@
           "minimum": 0.0,
           "title": "Audio Fade Out",
           "type": "number"
+        },
+        "audio": {
+          "$ref": "#/$defs/AudioProcessing"
         },
         "transform": {
           "$ref": "#/$defs/Transform"
@@ -887,6 +1121,18 @@
           "default": 0.0,
           "title": "Letter Spacing",
           "type": "number"
+        },
+        "safe_area": {
+          "default": false,
+          "title": "Safe Area",
+          "type": "boolean"
+        },
+        "safe_margin_percent": {
+          "default": 5.0,
+          "maximum": 25.0,
+          "minimum": 0.0,
+          "title": "Safe Margin Percent",
+          "type": "number"
         }
       },
       "title": "TextStyle",
@@ -1048,6 +1294,16 @@
         "flip_y": {
           "default": false,
           "title": "Flip Y",
+          "type": "boolean"
+        },
+        "autorotate": {
+          "default": true,
+          "title": "Autorotate",
+          "type": "boolean"
+        },
+        "stabilize": {
+          "default": false,
+          "title": "Stabilize",
           "type": "boolean"
         }
       },

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,12 +61,113 @@ def _font_discovery() -> dict[str, Any]:
     return {"available": bool(available), "directories": available}
 
 
+_HARDWARE_ENCODERS = {
+    "nvenc": ("h264_nvenc", "hevc_nvenc"),
+    "qsv": ("h264_qsv", "hevc_qsv"),
+    "amf": ("h264_amf", "hevc_amf"),
+    "videotoolbox": ("h264_videotoolbox", "hevc_videotoolbox"),
+}
+
+
+def _encoder_failure_summary(result: subprocess.CompletedProcess[str] | None) -> str:
+    if result is None:
+        return "FFmpeg could not be started or the encoder test timed out."
+    output = result.stderr or result.stdout or ""
+    lines = [
+        re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
+        for line in output.splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return f"FFmpeg exited with code {result.returncode}."
+    selected = lines if len(lines) <= 4 else [*lines[:2], *lines[-2:]]
+    return " | ".join(selected)[:1000]
+
+
+def _probe_hardware_encoder(
+    ffmpeg_path: str,
+    backend: str,
+    available_encoders: set[str],
+) -> dict[str, Any]:
+    """Run a tiny generated encode so listed hardware is not mistaken for usable hardware."""
+
+    candidates = _HARDWARE_ENCODERS[backend]
+    encoder = next((name for name in candidates if name in available_encoders), candidates[0])
+    detected = any(name in available_encoders for name in candidates)
+    diagnostic: dict[str, Any] = {
+        "detected": detected,
+        "usable": False,
+        "implemented": True,
+        "encoder": encoder,
+    }
+    if not detected:
+        diagnostic["test"] = {
+            "status": "not_run",
+            "reason": "No matching encoder is listed by FFmpeg.",
+        }
+        return diagnostic
+
+    frame_count = 6
+    started = time.perf_counter()
+    result = _run(
+        [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:r=24:d=0.25",
+            "-frames:v",
+            str(frame_count),
+            "-an",
+            "-c:v",
+            encoder,
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "null",
+            "-",
+        ],
+        timeout=6.0,
+    )
+    elapsed = max(time.perf_counter() - started, 0.000001)
+    elapsed_seconds = round(elapsed, 4)
+    if result is not None and result.returncode == 0:
+        diagnostic["usable"] = True
+        diagnostic["test"] = {
+            "status": "success",
+            "elapsed_seconds": elapsed_seconds,
+            "frames": frame_count,
+            "frames_per_second": round(frame_count / elapsed, 2),
+        }
+    else:
+        diagnostic["test"] = {
+            "status": "failed",
+            "elapsed_seconds": elapsed_seconds,
+            "failure_summary": _encoder_failure_summary(result),
+        }
+    return diagnostic
+
+
+def _listed_encoder_names(encoders_text: str) -> set[str]:
+    names: set[str] = set()
+    for line in encoders_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and len(parts[0]) == 6:
+            names.add(parts[1])
+    return names
+
+
 def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
     """Collect bounded diagnostics without decoding any user media."""
 
     warnings: list[str] = []
-    ffmpeg_path = shutil.which(config.tools.ffmpeg)
-    ffprobe_path = shutil.which(config.tools.ffprobe)
+    located_ffmpeg = shutil.which(config.tools.ffmpeg)
+    located_ffprobe = shutil.which(config.tools.ffprobe)
+    ffmpeg_path = str(Path(located_ffmpeg).resolve()) if located_ffmpeg else None
+    ffprobe_path = str(Path(located_ffprobe).resolve()) if located_ffprobe else None
     ffmpeg_version = _first_line(_run([ffmpeg_path, "-version"])) if ffmpeg_path else None
     ffprobe_version = _first_line(_run([ffprobe_path, "-version"])) if ffprobe_path else None
 
@@ -101,12 +204,30 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
         "opus": "libopus" in encoders_text or " opus " in encoders_text,
         "pcm": "pcm_s16le" in encoders_text,
     }
-    hardware_encoders = {
-        "nvenc": "h264_nvenc" in encoders_text or "hevc_nvenc" in encoders_text,
-        "qsv": "h264_qsv" in encoders_text or "hevc_qsv" in encoders_text,
-        "amf": "h264_amf" in encoders_text or "hevc_amf" in encoders_text,
-        "videotoolbox": "h264_videotoolbox" in encoders_text,
-    }
+    listed_encoders = _listed_encoder_names(encoders_text)
+    hardware_encoders = (
+        {
+            name: _probe_hardware_encoder(ffmpeg_path, name, listed_encoders)
+            for name in _HARDWARE_ENCODERS
+        }
+        if ffmpeg_path
+        else {
+            name: {
+                "detected": False,
+                "usable": False,
+                "implemented": True,
+                "encoder": candidates[0],
+                "test": {"status": "not_run", "reason": "FFmpeg is unavailable."},
+            }
+            for name, candidates in _HARDWARE_ENCODERS.items()
+        }
+    )
+    for name, diagnostic in hardware_encoders.items():
+        if diagnostic["detected"] and not diagnostic["usable"]:
+            warnings.append(
+                f"{name.upper()} is listed by FFmpeg but failed the sample encode: "
+                f"{diagnostic['test'].get('failure_summary', 'unknown failure')}"
+            )
 
     temp_path = config.temporary_directory
     cache_path = config.cache.directory
@@ -137,12 +258,12 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
             },
             "ffmpeg": {
                 "available": bool(ffmpeg_version),
-                "executable": Path(ffmpeg_path).name if ffmpeg_path else None,
+                "executable": ffmpeg_path,
                 "version": ffmpeg_version,
             },
             "ffprobe": {
                 "available": bool(ffprobe_version),
-                "executable": Path(ffprobe_path).name if ffprobe_path else None,
+                "executable": ffprobe_path,
                 "version": ffprobe_version,
             },
             "encoders": {
