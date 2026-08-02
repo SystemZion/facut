@@ -37,6 +37,7 @@ yaml = ["PyYAML>=6.0,<7"]
 dev = [
   "pytest>=8.2,<9",
   "pytest-cov>=5,<7",
+  "pytest-timeout>=2.3,<3",
 ]
 build = [
   "pyinstaller>=6.10,<7",
