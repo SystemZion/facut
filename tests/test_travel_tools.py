@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
+
+import pytest
 
 from facut.core.models import Clip, MediaAsset, MediaKind, MediaTechnicalInfo, Track, TrackType
 from facut.core.project_manager import ProjectManager
@@ -27,9 +31,11 @@ def test_gpx_parse_and_actual_small_video_render(tmp_path) -> None:
     assert route["distance_meters"] > 1000
     assert route["elapsed_seconds"] == 600
     output = tmp_path / "route.mp4"
-    bundled = Path(__file__).parents[1] / "vendor" / "ffmpeg" / "ffmpeg.exe"
+    ffmpeg = os.environ.get("FACUT_TEST_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("FFmpeg is unavailable")
     result = render_route_video(
-        route, output, ffmpeg=str(bundled), width=320, height=240, fps=2, duration=1
+        route, output, ffmpeg=ffmpeg, width=320, height=240, fps=2, duration=1
     )
     assert output.stat().st_size > 0
     assert result["duration"] == 1
