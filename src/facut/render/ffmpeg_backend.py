@@ -120,6 +120,8 @@ class FFmpegBackend:
         audio_bitrate: str = "192k",
         bitrate: str | None = None,
         hardware: str = "auto",
+        color_space: str | None = None,
+        audio_sample_rate: int | None = None,
         overwrite: bool = False,
         preview: bool = False,
         range_from: float | None = None,
@@ -162,6 +164,8 @@ class FFmpegBackend:
                     audio_codec=audio_codec,
                     audio_bitrate=audio_bitrate,
                     bitrate=bitrate,
+                    color_space=color_space,
+                    audio_sample_rate=audio_sample_rate,
                     preview=preview,
                     overwrite=overwrite,
                     progress=progress,
@@ -183,6 +187,8 @@ class FFmpegBackend:
                     audio_codec=audio_codec,
                     audio_bitrate=audio_bitrate,
                     bitrate=bitrate,
+                    color_space=color_space,
+                    audio_sample_rate=audio_sample_rate,
                     preview=preview,
                     overwrite=True,
                     progress=progress,
@@ -256,6 +262,8 @@ class FFmpegBackend:
         audio_codec: str,
         audio_bitrate: str,
         bitrate: str | None,
+        color_space: str | None,
+        audio_sample_rate: int | None,
         preview: bool,
         overwrite: bool,
         progress: ProgressCallback | None,
@@ -289,12 +297,30 @@ class FFmpegBackend:
             args.extend(["-b:v", bitrate or ("4M" if preview else "12M")])
         if bitrate and choice.encoder != "h264_videotoolbox":
             args.extend(["-maxrate", bitrate, "-bufsize", bitrate])
+        if color_space:
+            args.extend(
+                [
+                    "-pix_fmt", "yuv420p",
+                    "-color_primaries", color_space,
+                    "-color_trc", color_space,
+                    "-colorspace", color_space,
+                ]
+            )
+            if color_space == "bt709":
+                args.extend(
+                    [
+                        "-bsf:v",
+                        "h264_metadata=colour_primaries=1:"
+                        "transfer_characteristics=1:matrix_coefficients=1",
+                    ]
+                )
         args.extend(
             [
                 "-c:a",
                 audio_codec,
                 "-b:a",
                 audio_bitrate,
+                *(["-ar", str(audio_sample_rate)] if audio_sample_rate else []),
                 "-t",
                 f"{graph.duration:.9f}",
                 "-shortest",

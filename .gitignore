@@ -27,6 +27,7 @@ venv/
 /previews/
 /renders/
 /history/
+/artifacts/
 
 # Editors and operating systems
 .idea/

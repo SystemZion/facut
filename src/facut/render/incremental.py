@@ -130,6 +130,8 @@ class IncrementalRenderer:
         audio_bitrate: str = "320k",
         bitrate: str | None = None,
         hardware: str = "auto",
+        color_space: str | None = None,
+        audio_sample_rate: int | None = None,
         overwrite: bool = False,
         progress: ProgressCallback | None = None,
     ) -> IncrementalRenderResult:
@@ -177,6 +179,8 @@ class IncrementalRenderer:
                 "audio_bitrate": audio_bitrate,
                 "bitrate": bitrate,
                 "hardware": hardware,
+                "color_space": color_space,
+                "audio_sample_rate": audio_sample_rate,
             }
             key = cache_key(
                 inputs=[source],
@@ -239,6 +243,8 @@ class IncrementalRenderer:
                     audio_bitrate=audio_bitrate,
                     bitrate=bitrate,
                     hardware=hardware,
+                    color_space=color_space,
+                    audio_sample_rate=audio_sample_rate,
                     overwrite=False,
                     progress=segment_progress,
                 )
@@ -277,6 +283,25 @@ class IncrementalRenderer:
             audio_codec,
             "-b:a",
             audio_bitrate,
+            *(["-ar", str(audio_sample_rate)] if audio_sample_rate else []),
+            *(
+                [
+                    "-color_primaries", color_space,
+                    "-color_trc", color_space,
+                    "-colorspace", color_space,
+                ]
+                if color_space
+                else []
+            ),
+            *(
+                [
+                    "-bsf:v",
+                    "h264_metadata=colour_primaries=1:"
+                    "transfer_characteristics=1:matrix_coefficients=1",
+                ]
+                if color_space == "bt709"
+                else []
+            ),
             "-t",
             f"{project.project.duration:.9f}",
             "-movflags",

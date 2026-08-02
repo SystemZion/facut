@@ -213,9 +213,15 @@ from facut.cli.analyze_commands import analyze_app  # noqa: E402
 from facut.cli.sequence_commands import sequence_app  # noqa: E402
 from facut.cli.serve_commands import serve_command  # noqa: E402
 from facut.cli.effect_commands import effect_app  # noqa: E402
+from facut.cli.ingest_commands import ingest_command  # noqa: E402
+from facut.cli.delivery_commands import (  # noqa: E402
+    deliver_command,
+    delivery_presets_command,
+)
 
 app.command("init")(init_command)
 app.command("import")(import_command)
+app.command("ingest")(ingest_command)
 app.command("inspect")(inspect_command)
 app.command("undo")(undo_command)
 app.command("redo")(redo_command)
@@ -236,6 +242,8 @@ app.command("qc")(qc_command)
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(sequence_app, name="sequence")
 app.command("serve")(serve_command)
+app.command("deliver")(deliver_command)
+app.command("delivery-presets")(delivery_presets_command)
 app.add_typer(effect_app, name="effect")
 
 

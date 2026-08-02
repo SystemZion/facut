@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 
 from facut.cli.common import manager_for, public_error
-from facut.cli.render_commands import RENDER_PRESETS
+from facut.render.presets import RENDER_PRESETS, resolve_render_preset
 from facut.core.sequences import (
     checkout_sequence,
     duplicate_sequence,
@@ -147,7 +147,9 @@ def render_all(
         document = manager.require_document()
         if preset not in RENDER_PRESETS:
             raise ValueError(f'Unknown render preset "{preset}".')
-        settings = RENDER_PRESETS[preset]
+        settings = resolve_render_preset(
+            preset, source_fps=document.project.fps
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         backend = FFmpegBackend(state.config.tools.ffmpeg)
         results = []
@@ -163,6 +165,9 @@ def render_all(
                 height=settings["height"],
                 fps=settings["fps"],
                 bitrate=settings["bitrate"],
+                audio_bitrate=settings["audio_bitrate"],
+                audio_sample_rate=settings["audio_sample_rate"],
+                color_space=settings.get("color_space"),
                 hardware=hardware,
                 overwrite=overwrite,
             )

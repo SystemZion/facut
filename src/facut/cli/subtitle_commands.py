@@ -23,58 +23,15 @@ from facut.subtitles.editor import (
     shift_track,
 )
 from facut.subtitles.formats import export_srt, export_vtt, parse_subtitle_file
+from facut.subtitles.templates import (
+    TEXT_TEMPLATES,
+    list_text_templates,
+    resolve_text_template,
+)
 
 
 subtitle_app = typer.Typer(help="Import, shift, inspect, export, and compile subtitles.")
 text_app = typer.Typer(help="Add and manage timed free-text overlays.")
-
-TEXT_TEMPLATES: dict[str, dict[str, Any]] = {
-    "documentary-lower-third": {
-        "x": "8%",
-        "y": "82%",
-        "font_size": 52.0,
-        "color": "#FFFFFF",
-        "stroke_color": "#000000",
-        "stroke_width": 1.5,
-        "background": "#00000099",
-        "shadow": 2.0,
-        "alignment": "left",
-        "safe_area": True,
-    },
-    "chapter": {
-        "x": "center",
-        "y": "center",
-        "font_size": 84.0,
-        "color": "#FFFFFF",
-        "stroke_width": 2.0,
-        "shadow": 3.0,
-        "alignment": "center",
-        "safe_area": True,
-    },
-    "song-title": {
-        "x": "8%",
-        "y": "12%",
-        "font_size": 46.0,
-        "color": "#FFFFFF",
-        "stroke_width": 1.0,
-        "background": "#101820B3",
-        "shadow": 2.0,
-        "alignment": "left",
-        "safe_area": True,
-    },
-    "caption-box": {
-        "x": "center",
-        "y": "88%",
-        "font_size": 48.0,
-        "color": "#FFFFFF",
-        "stroke_width": 0.0,
-        "background": "#000000B3",
-        "shadow": 0.0,
-        "alignment": "center",
-        "safe_area": True,
-    },
-}
-
 
 def _state(ctx: typer.Context):
     from facut.cli.main import CliState
@@ -324,6 +281,9 @@ def text_add(
     text: Annotated[str, typer.Option("--text")],
     at: Annotated[str, typer.Option("--at")],
     duration: Annotated[str, typer.Option("--duration")],
+    subtitle: Annotated[
+        str | None, typer.Option("--subtitle", help="Optional secondary line.")
+    ] = None,
     x: Annotated[str | None, typer.Option("--x")] = None,
     y: Annotated[str | None, typer.Option("--y")] = None,
     track: Annotated[str | None, typer.Option("--track")] = None,
@@ -334,6 +294,9 @@ def text_add(
     stroke_color: Annotated[str | None, typer.Option("--stroke-color")] = None,
     stroke_width: Annotated[float | None, typer.Option("--stroke-width")] = None,
     background: Annotated[str | None, typer.Option("--background")] = None,
+    accent_color: Annotated[
+        str | None, typer.Option("--accent-color", help="Template accent override.")
+    ] = None,
     shadow: Annotated[float | None, typer.Option("--shadow")] = None,
     alignment: Annotated[str | None, typer.Option("--alignment")] = None,
     letter_spacing: Annotated[
@@ -359,9 +322,13 @@ def text_add(
                 f'Unknown text template "{template}". Available: '
                 f'{", ".join(TEXT_TEMPLATES)}.'
             )
-        preset = dict(TEXT_TEMPLATES.get(template or "", {}))
-        resolved_x = x or str(preset.pop("x", "center"))
-        resolved_y = y or str(preset.pop("y", "80%"))
+        definition = resolve_text_template(template) if template else {}
+        preset = dict(definition.get("style", {}))
+        resolved_x = x or str(definition.get("x", "center"))
+        resolved_y = y or str(definition.get("y", "80%"))
+        template_parameters = dict(definition.get("parameters", {}))
+        if accent_color is not None:
+            template_parameters["accent_color"] = accent_color
         style_values = {
             **preset,
             "font_family": font,
@@ -383,6 +350,7 @@ def text_add(
             return add_text_overlay(
                 candidate,
                 text=text,
+                subtitle=subtitle,
                 at=at_seconds,
                 duration=duration_seconds,
                 x=resolved_x,
@@ -391,6 +359,8 @@ def text_add(
                 style=style,
                 entrance=entrance,
                 exit=exit_animation,
+                template=template,
+                template_parameters=template_parameters,
             )
 
         result, state = manager.mutate(
@@ -399,12 +369,14 @@ def text_add(
             operation,
             command={
                 "text": text,
+                "subtitle": subtitle,
                 "at": at,
                 "duration": duration,
                 "x": resolved_x,
                 "y": resolved_y,
                 "track": track,
                 "template": template,
+                "accent_color": accent_color,
             },
             dry_run=dry_run,
         )
@@ -421,8 +393,8 @@ def text_presets(ctx: typer.Context) -> None:
 
     emit(
         _state(ctx),
-        success_response("text.presets", TEXT_TEMPLATES),
-        human=json.dumps(TEXT_TEMPLATES, ensure_ascii=False, indent=2),
+        success_response("text.presets", list_text_templates()),
+        human=json.dumps(list_text_templates(), ensure_ascii=False, indent=2),
     )
 
 
@@ -448,7 +420,7 @@ def text_import_csv(
             template_name = row.get("template") or default_template
             if template_name not in TEXT_TEMPLATES:
                 raise ValueError(f'Unknown text template "{template_name}".')
-            preset = dict(TEXT_TEMPLATES[template_name])
+            definition = resolve_text_template(template_name)
             prepared.append(
                 {
                     "text": row["text"],
@@ -456,10 +428,11 @@ def text_import_csv(
                     "duration": float(
                         parse_time(row["duration"], document.project.fps).seconds
                     ),
-                    "x": preset.pop("x", "center"),
-                    "y": preset.pop("y", "80%"),
-                    "style": TextStyle.model_validate(preset),
+                    "x": definition.get("x", "center"),
+                    "y": definition.get("y", "80%"),
+                    "style": TextStyle.model_validate(definition.get("style", {})),
                     "template": template_name,
+                    "template_parameters": definition.get("parameters", {}),
                 }
             )
 
@@ -473,6 +446,8 @@ def text_import_csv(
                     x=item["x"],
                     y=item["y"],
                     style=item["style"],
+                    template=item["template"],
+                    template_parameters=item["template_parameters"],
                 )
                 for item in prepared
             ]

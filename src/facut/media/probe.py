@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,9 @@ def _parse_probe(payload: dict[str, Any]) -> MediaTechnicalInfo:
     audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
     tags = container.get("tags") or {}
     video_tags = video.get("tags") or {}
+    normalized_tags = {
+        str(key).casefold(): value for key, value in {**tags, **video_tags}.items()
+    }
     side_data = video.get("side_data_list") or []
     rotation = video_tags.get("rotate")
     if rotation is None:
@@ -140,6 +144,12 @@ def _parse_probe(payload: dict[str, Any]) -> MediaTechnicalInfo:
             (_number(stream.get("duration")) or 0.0 for stream in streams),
             default=0.0,
         )
+    creation_time = _first_tag(
+        normalized_tags, "creation_time", "com.apple.quicktime.creationdate", "date"
+    )
+    latitude, longitude, altitude = _location(normalized_tags)
+    color_transfer = video.get("color_transfer")
+    dynamic_range = _dynamic_range(color_transfer, normalized_tags)
     return MediaTechnicalInfo(
         container=container.get("format_name"),
         duration=duration,
@@ -152,15 +162,97 @@ def _parse_probe(payload: dict[str, Any]) -> MediaTechnicalInfo:
         average_frame_rate=average_rate,
         pixel_format=video.get("pix_fmt"),
         color_space=video.get("color_space"),
-        color_transfer=video.get("color_transfer"),
+        color_transfer=color_transfer,
         color_primaries=video.get("color_primaries"),
         audio_channels=_integer(audio.get("channels")),
         sample_rate=_integer(audio.get("sample_rate")),
         rotation=int(rotation or 0),
         has_subtitles=any(stream.get("codec_type") == "subtitle" for stream in streams),
         variable_frame_rate=variable,
-        creation_time=tags.get("creation_time") or video_tags.get("creation_time"),
+        creation_time=creation_time,
+        timecode=_first_tag(normalized_tags, "timecode", "com.apple.quicktime.timecode"),
+        timezone_offset=_timezone_offset(creation_time)
+        or _first_tag(normalized_tags, "time_zone", "timezone"),
+        camera_make=_first_tag(
+            normalized_tags, "make", "com.apple.quicktime.make", "manufacturer"
+        ),
+        camera_model=_first_tag(
+            normalized_tags, "model", "com.apple.quicktime.model", "camera_model"
+        ),
+        lens_model=_first_tag(
+            normalized_tags, "lens_model", "lensmodel", "com.apple.quicktime.lens.model"
+        ),
+        latitude=latitude,
+        longitude=longitude,
+        altitude=altitude,
+        dynamic_range=dynamic_range,
     )
+
+
+def _first_tag(tags: dict[str, Any], *names: str) -> str | None:
+    for name in names:
+        value = tags.get(name.casefold())
+        if value not in {None, ""}:
+            return str(value)
+    return None
+
+
+_ISO6709 = re.compile(
+    r"^(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)"
+    r"(?P<alt>[+-]\d+(?:\.\d+)?)?/?$"
+)
+
+
+def _location(tags: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    location = _first_tag(
+        tags,
+        "com.apple.quicktime.location.iso6709",
+        "location",
+        "location-eng",
+    )
+    if location:
+        match = _ISO6709.match(location.strip())
+        if match:
+            return (
+                _number(match.group("lat")),
+                _number(match.group("lon")),
+                _number(match.group("alt")),
+            )
+    return (
+        _number(_first_tag(tags, "gps_latitude", "latitude")),
+        _number(_first_tag(tags, "gps_longitude", "longitude")),
+        _number(_first_tag(tags, "gps_altitude", "altitude")),
+    )
+
+
+def _timezone_offset(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r"([+-]\d{2}:?\d{2}|Z)$", value.strip(), re.I)
+    if not match:
+        return None
+    offset = match.group(1).upper()
+    if offset == "Z":
+        return "+00:00"
+    return offset if ":" in offset else f"{offset[:3]}:{offset[3:]}"
+
+
+def _dynamic_range(transfer: Any, tags: dict[str, Any]) -> str:
+    normalized = str(transfer or "").casefold()
+    if normalized in {"smpte2084", "pq"}:
+        return "hdr-pq"
+    if normalized in {"arib-std-b67", "hlg"}:
+        return "hdr-hlg"
+    descriptive = " ".join(
+        str(value).casefold()
+        for key, value in tags.items()
+        if any(token in key for token in ("gamma", "profile", "color"))
+    )
+    if "log" in descriptive or normalized.startswith("log"):
+        return "log"
+    if normalized in {"bt709", "iec61966-2-1", "smpte170m", "bt470bg"}:
+        return "sdr"
+    return "unknown"
 
 
 def _ratio(value: Any) -> float | None:

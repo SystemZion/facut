@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.3.0` 已打通代理—精剪—声音—QC—多版本交付链路：原片/代理自动切换、片段级增量缓存、多视频轨合成、画面变换与停帧、完整音频处理、JSONL 渲染进度、自动 QC、素材分析、标记、命名序列、字幕模板及常驻 JSON-RPC 会话。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前版本 `0.4.0` 在代理—精剪—声音—QC 链路上增加专业旅拍底座：混合设备摄取、相机/GPS/时区/HDR 元数据、内容哈希分析缓存、带证据和置信度的保守分类、单主序列多平台交付，以及从“临港两日”成片提炼的电影感中英双层标题模板。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
 
 ## 安装
 
@@ -40,11 +40,11 @@ facut doctor
 当前可执行的公共接口：
 
 ```text
-facut init/import/inspect/help
+facut init/import/ingest/inspect/help
 facut timeline/clip/transition/effect/audio
 facut proxy/analyze/qc/marker
 facut subtitle/text
-facut preview/render/sequence
+facut preview/render/deliver/delivery-presets/sequence
 facut project/history
 facut undo/redo/run/serve/doctor
 ```
@@ -150,6 +150,18 @@ facut --project demo serve
 
 它通过 stdin/stdout 交换逐行 JSON-RPC，支持 `ping`、`project.snapshot`、`timeline.show`、原子 `run` 和 `shutdown`，同一进程复用已载入工程。
 
+## 专业旅拍摄取与素材理解
+
+```powershell
+facut ingest D:\JapanTrip --trip "日本旅行2026" --verify sha256 --proxy auto
+facut --project 日本旅行2026 inspect <MEDIA_ID> --json
+facut --project 日本旅行2026 analyze travel <MEDIA_ID> --save --json
+```
+
+`ingest` 递归导入手机、相机、运动相机、无人机、录音与字幕素材，逐文件流式计算 SHA-256，并可先查找同名/LRF 代理、缺失时生成 540p 代理。默认新建 3840×2160、48kHz 工程；也可配合全局 `--project` 写入已有工程。
+
+FFprobe 元数据会保留旋转、VFR、创建时间、时区、时间码、相机厂商/型号、镜头、GPS、色彩空间和 HDR-PQ/HDR-HLG/Log 线索。`analyze travel` 第一版只根据路径和元数据产生可解释候选，每项含 `confidence` 与 `evidence`；文件夹名并不被当作画面事实。需要人物、动作、地点或镜头语义时会明确返回 `plugin_required`。同一内容哈希和参数的分析结果写入工程缓存，后续调用直接复用。
+
 ## 完整可运行示例
 
 裁切并合并：
@@ -182,11 +194,13 @@ facut --project demo subtitle import captions.srt --track S1
 facut --project demo subtitle shift S1 --offset +500ms
 facut --project demo subtitle export S1 --format vtt --output captions.vtt
 facut --project demo text add --text "临港两日" --at 1s --duration 3s --y 20%
+facut --project demo text add --text "抬头，是更大的尺度" --subtitle "LOOK UP · THE SCALE CHANGES" --at 4s --duration 3s --template lingang-cinematic-panel
+facut --project demo text add --text "再来" --subtitle "同一条雪道，重新滑下" --at 48s --duration 2s --template lingang-cinematic-mint
 facut --project demo subtitle compile-ass --output render-text.ass
 facut --project demo render --output subtitled.mp4
 ```
 
-渲染和预览会自动将工程中的字幕与文字编译为临时 ASS 并烧录。`compile-ass` 仍可生成独立、可检查的 ASS 侧车文件。
+渲染和预览会自动将工程中的字幕与文字编译为临时 ASS 并烧录。`compile-ass` 仍可生成独立、可检查的 ASS 侧车文件。临港系列模板不是简单的颜色预设：编译器会生成半透明圆角矢量面板、细描边、强调色竖线和独立主副标题图层，并按 1080p/4K 画布等比例缩放。内置 `lingang-cinematic-panel`、`lingang-cinematic-mint`、`lingang-cinematic-warm`、`lingang-day-card` 和 `lingang-main-title`；可用 `--accent-color` 覆盖强调色。软件不捆绑第三方字体文件，默认使用系统字体以避免授权问题。
 
 背景音乐与原声混合：
 
@@ -241,7 +255,16 @@ facut text presets
 facut --project demo text import-csv titles.csv --template documentary-lower-third
 ```
 
-命名 sequence 保存时间线快照并共享素材/代理池，可在一个工程维护主片、精华版等交付版本。文字内置纪录片下三分之一、章节、歌曲标题和字幕底板模板，并支持阴影、半透明底、安全区、对齐和字距。
+命名 sequence 保存时间线快照并共享素材/代理池，可在一个工程维护主片、精华版等交付版本。文字模板支持阴影、半透明底、安全区、对齐、字距和模板专属矢量图层。
+
+一个主序列可一次生成横版、竖版与方形派生文件：
+
+```bash
+facut delivery-presets --json
+facut --project demo deliver --preset youtube-4k-sdr --also bilibili-4k,shorts-9x16,community-1x1 --output-dir renders/delivery --hardware auto
+```
+
+YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧率使用 68Mbps，输出 AAC 384kbps、BT.709、4:2:0 和 MP4 Fast Start。B站预设明确标记为 FACUT 创作者工作流默认值，不伪称平台官方上限。竖版输出当前使用确定性画面适配并发出警告；主体跟踪式自动重构图尚未实现。
 
 ### 当前明确限制
 
@@ -250,6 +273,8 @@ facut --project demo text import-csv titles.csv --template documentary-lower-thi
 - 调整层当前接受单 FFmpeg 节点效果；像素化这种多节点效果暂不接受。
 - 画面关键帧当前为线性 x/y/scale/rotation；光流补帧和高级稳定模型尚未实现。
 - ASR 需要用户提供本地模型；歌曲识别需要本地指纹数据库插件。
+- 旅拍语义分类目前以元数据/路径规则为确定性底座；视觉语义搜索、人物识别、故事生成和 B-roll 覆盖诊断仍需后续本地视觉索引插件。
+- GPX/KML 路线动画、主体跟踪自动重构图、OpenTimelineIO/FCPXML 交换尚未实现。
 - 增量缓存会对复杂工程安全降级为整片渲染；跨转场区间复用是后续优化。
 
 ## 开发与测试

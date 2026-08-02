@@ -94,6 +94,7 @@ def add_text_overlay(
     document: ProjectDocument,
     *,
     text: str,
+    subtitle: str | None = None,
     at: float,
     duration: float,
     x: float | str = "center",
@@ -102,11 +103,14 @@ def add_text_overlay(
     style: TextStyle | None = None,
     entrance: str | None = None,
     exit: str | None = None,
+    template: str | None = None,
+    template_parameters: dict[str, object] | None = None,
 ) -> TextOverlay:
     if track_id is not None and document.find_track(track_id) is None:
         raise SubtitleEditError(f'Track "{track_id}" was not found.')
     overlay = TextOverlay(
         text=text,
+        subtitle=subtitle,
         at=at,
         duration=duration,
         x=x,
@@ -115,6 +119,8 @@ def add_text_overlay(
         style=style or TextStyle(),
         entrance=entrance,
         exit=exit,
+        template=template,
+        template_parameters=template_parameters or {},
     )
     document.text_overlays.append(overlay)
     document.text_overlays.sort(key=lambda item: (item.at, item.id))

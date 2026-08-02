@@ -782,6 +782,118 @@
           "default": null,
           "title": "Creation Time"
         },
+        "timecode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timecode"
+        },
+        "timezone_offset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone Offset"
+        },
+        "camera_make": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Make"
+        },
+        "camera_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Model"
+        },
+        "lens_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lens Model"
+        },
+        "latitude": {
+          "anyOf": [
+            {
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latitude"
+        },
+        "longitude": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Longitude"
+        },
+        "altitude": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Altitude"
+        },
+        "dynamic_range": {
+          "default": "unknown",
+          "enum": [
+            "sdr",
+            "hdr-pq",
+            "hdr-hlg",
+            "log",
+            "unknown"
+          ],
+          "title": "Dynamic Range",
+          "type": "string"
+        },
         "keyframes": {
           "items": {
             "type": "number"
@@ -958,6 +1070,18 @@
           "title": "Text",
           "type": "string"
         },
+        "subtitle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subtitle"
+        },
         "at": {
           "minimum": 0.0,
           "title": "At",
@@ -1018,6 +1142,23 @@
           ],
           "default": null,
           "title": "Exit"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "template_parameters": {
+          "additionalProperties": true,
+          "title": "Template Parameters",
+          "type": "object"
         },
         "enabled": {
           "default": true,

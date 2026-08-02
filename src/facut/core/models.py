@@ -109,6 +109,15 @@ class MediaTechnicalInfo(StrictModel):
     has_subtitles: bool = False
     variable_frame_rate: bool = False
     creation_time: str | None = None
+    timecode: str | None = None
+    timezone_offset: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    lens_model: str | None = None
+    latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    longitude: float | None = Field(default=None, ge=-180.0, le=180.0)
+    altitude: float | None = None
+    dynamic_range: Literal["sdr", "hdr-pq", "hdr-hlg", "log", "unknown"] = "unknown"
     keyframes: list[float] = Field(default_factory=list)
 
 
@@ -335,6 +344,7 @@ class TextOverlay(StrictModel):
     id: str = Field(default_factory=lambda: new_id("text"))
     track_id: str | None = None
     text: str = Field(min_length=1)
+    subtitle: str | None = None
     at: float = Field(ge=0.0)
     duration: float = Field(gt=0.0)
     x: float | str = "center"
@@ -342,6 +352,8 @@ class TextOverlay(StrictModel):
     style: TextStyle = Field(default_factory=TextStyle)
     entrance: str | None = None
     exit: str | None = None
+    template: str | None = None
+    template_parameters: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 

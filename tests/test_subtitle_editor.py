@@ -74,3 +74,26 @@ def test_ass_compiler_includes_cues_and_positioned_text() -> None:
     assert r"\pos(960.00,216.00)" in plan.content
     assert "临港 VLOG" in plan.content
 
+
+def test_lingang_template_compiles_vector_panel_and_bilingual_layers() -> None:
+    project = _project()
+    project.project.width = 3840
+    project.project.height = 2160
+    add_text_overlay(
+        project,
+        text="抬头，是更大的尺度",
+        subtitle="LOOK UP · THE SCALE CHANGES",
+        at=0,
+        duration=3,
+        x="5%",
+        y="71.3%",
+        template="lingang-cinematic-panel",
+        template_parameters={"accent_color": "#66E1FF"},
+    )
+    plan = SubtitleCompiler().compile(project)
+    assert r"\p1" in plan.content
+    assert "Dialogue: 4" in plan.content
+    assert "抬头，是更大的尺度" in plan.content
+    assert "LOOK UP · THE SCALE CHANGES" in plan.content
+    assert "FFE166" in plan.content  # ASS BGR form of #66E1FF.
+    assert "Fontsize" in plan.content

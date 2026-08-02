@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -13,13 +16,17 @@ from facut.analysis import (
     analyze_quality,
     analyze_scenes,
     analyze_song_metadata,
+    analyze_travel_metadata,
     transcribe_local,
 )
 from facut.cli.common import manager_for, public_error
 from facut.responses import success_response
+from facut.media.probe import probe_media
 
 
-analyze_app = typer.Typer(help="Analyze quality, scenes, beats, speech, and song metadata.")
+analyze_app = typer.Typer(
+    help="Analyze quality, scenes, beats, speech, travel metadata, and song metadata."
+)
 
 
 def _state(ctx: typer.Context):
@@ -53,12 +60,53 @@ def _emit_analysis(
     analyzer: Callable[[Path], dict[str, Any]],
     *,
     save: bool,
+    cache_parameters: dict[str, Any] | None = None,
 ) -> None:
     from facut.cli.main import emit
 
     try:
         path, media_id, manager = _resolve(ctx, target)
-        result = analyzer(path)
+        cache_key = None
+        cache_path = None
+        cache_hit = False
+        if media_id is not None and manager is not None:
+            asset = manager.require_document().find_media(media_id)
+            assert asset is not None
+            encoded = json.dumps(
+                {
+                    "analysis": command,
+                    "algorithm_version": 1,
+                    "media_sha256": asset.sha256,
+                    "parameters": cache_parameters or {},
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            cache_key = hashlib.sha256(encoded).hexdigest()
+            cache_path = manager.project_dir / "cache" / "analysis" / f"{cache_key}.json"
+        if cache_path is not None and cache_path.is_file():
+            result = json.loads(cache_path.read_text(encoding="utf-8"))
+            cache_hit = True
+        else:
+            result = analyzer(path)
+            if cache_path is not None:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=cache_path.parent,
+                    prefix=f".{cache_key}-",
+                    suffix=".tmp",
+                    delete=False,
+                ) as stream:
+                    json.dump(result, stream, ensure_ascii=False, indent=2)
+                    stream.write("\n")
+                    temporary = Path(stream.name)
+                os.replace(temporary, cache_path)
+        result = {
+            **result,
+            "cache": {"hit": cache_hit, "key": cache_key},
+        }
         revision = None
         if save:
             if media_id is None or manager is None:
@@ -101,6 +149,7 @@ def scenes(
         target,
         lambda path: analyze_scenes(path, threshold=threshold, ffmpeg=state.config.tools.ffmpeg),
         save=save,
+        cache_parameters={"threshold": threshold},
     )
 
 
@@ -121,6 +170,7 @@ def quality(
             ffprobe=state.config.tools.ffprobe,
         ),
         save=save,
+        cache_parameters={},
     )
 
 
@@ -137,6 +187,7 @@ def beats(
         target,
         lambda path: analyze_beats(path, ffmpeg=state.config.tools.ffmpeg),
         save=save,
+        cache_parameters={},
     )
 
 
@@ -154,6 +205,7 @@ def transcript(
         target,
         lambda path: transcribe_local(path, model_path=model, language=language),
         save=save,
+        cache_parameters={"model": str(model), "language": language},
     )
 
 
@@ -170,4 +222,27 @@ def song(
         target,
         lambda path: analyze_song_metadata(path, ffprobe=state.config.tools.ffprobe),
         save=save,
+        cache_parameters={},
+    )
+
+
+@analyze_app.command("travel")
+def travel(
+    ctx: typer.Context,
+    target: str,
+    save: Annotated[bool, typer.Option("--save")] = False,
+) -> None:
+    """Classify travel metadata conservatively and expose missing vision capability."""
+
+    state = _state(ctx)
+    _emit_analysis(
+        ctx,
+        "analyze.travel",
+        target,
+        lambda path: analyze_travel_metadata(
+            path,
+            probe_media(path, ffprobe=state.config.tools.ffprobe),
+        ),
+        save=save,
+        cache_parameters={},
     )
