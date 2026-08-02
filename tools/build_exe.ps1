@@ -72,6 +72,10 @@ $PyInstallerArgs = @(
     "--exclude-module", "pyarrow",
     "--collect-data", "facut"
 )
+$PyInstallerArgs += @(
+    "--add-data",
+    "$(Join-Path $ProjectRoot 'src\facut\analysis\asr_worker.py');facut_worker"
+)
 
 if ($FFmpeg) {
     if (-not (Test-Path -LiteralPath $FFmpeg -PathType Leaf)) {

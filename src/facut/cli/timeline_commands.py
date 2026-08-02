@@ -69,14 +69,27 @@ def timeline_add(
     ctx: typer.Context,
     media_id: Annotated[str, typer.Argument()],
     track: Annotated[str, typer.Option("--track")],
-    at: Annotated[str, typer.Option("--at")] = "0",
+    at: Annotated[str | None, typer.Option("--at")] = None,
+    append: Annotated[
+        bool,
+        typer.Option("--append", help="Place the clip at the current end of its track."),
+    ] = False,
     source_in: Annotated[str, typer.Option("--in")] = "0",
     source_out: Annotated[str | None, typer.Option("--out")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Place a source range on a timeline track."""
 
-    params = {"media_id": media_id, "track": track, "at": at, "in": source_in}
+    if append and at is not None:
+        _abort(ctx, "timeline.add", ValueError("Use either --append or --at, not both."))
+        return
+    params = {
+        "media_id": media_id,
+        "track": track,
+        "at": at or "0",
+        "append": append,
+        "in": source_in,
+    }
     if source_out is not None:
         params["out"] = source_out
     _execute(ctx, "timeline.add", params, dry_run)

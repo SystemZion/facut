@@ -187,6 +187,7 @@ class TimelineEngine:
         source_in: str | float = 0,
         source_out: str | float | None = None,
         clip_id: str | None = None,
+        append: bool = False,
     ) -> Clip:
         track = self._track(track_id)
         if track.locked:
@@ -203,22 +204,80 @@ class TimelineEngine:
             raise TimelineError(
                 f'Media "{media_id}" has no duration; specify an explicit out point.'
             )
-        if media_duration is not None and out_seconds > media_duration + 1e-6:
-            raise TimelineError(
-                f"Source out {out_seconds:.3f}s exceeds media duration {media_duration:.3f}s."
-            )
+        timeline_warnings: list[str] = []
+        if media_duration is not None and out_seconds > media_duration:
+            excess = out_seconds - media_duration
+            if excess <= 1 / self.fps + 1e-9:
+                timeline_warnings.append(
+                    f"Source out was clamped by {excess:.6f}s to the probed media duration."
+                )
+                out_seconds = media_duration
+            else:
+                raise TimelineError(
+                    f"Source out {out_seconds:.3f}s exceeds media duration {media_duration:.3f}s."
+                )
+        timeline_start = (
+            max((item.end for item in track.clips if item.enabled), default=0.0)
+            if append
+            else seconds(at, self.fps)
+        )
         clip = Clip(
             id=clip_id or new_id("clip"),
             media_id=media_id,
             track_id=track_id,
-            timeline_start=seconds(at, self.fps),
+            timeline_start=timeline_start,
             source_in=in_seconds,
             source_out=out_seconds,
         )
+        if timeline_warnings:
+            clip.metadata["timeline_warnings"] = timeline_warnings
         track.clips.append(clip)
         track.clips.sort(key=lambda item: (item.timeline_start, item.id))
+        self.snap_subframe_boundaries(track.id)
         self.project.recompute_duration()
         return clip
+
+    def snap_subframe_boundaries(self, track_id: str | None = None) -> list[dict[str, Any]]:
+        """Close accidental sub-frame gaps/overlaps while preserving real transitions."""
+
+        transition_pairs = {
+            (item.from_clip_id, item.to_clip_id)
+            for item in self.project.transitions
+            if item.from_clip_id and item.to_clip_id
+        }
+        tolerance = 1 / self.fps + 1e-9
+        changes: list[dict[str, Any]] = []
+        tracks = [self._track(track_id)] if track_id else self.project.tracks
+        for track in tracks:
+            if track.type == TrackType.AUDIO:
+                continue
+            clips = sorted(
+                (item for item in track.clips if item.enabled),
+                key=lambda item: item.timeline_start,
+            )
+            for left, right in zip(clips, clips[1:]):
+                if (left.id, right.id) in transition_pairs:
+                    continue
+                delta = right.timeline_start - left.end
+                if 1e-9 < abs(delta) <= tolerance:
+                    old_start = right.timeline_start
+                    right.timeline_start = left.end
+                    warning = (
+                        f"Sub-frame {'gap' if delta > 0 else 'overlap'} of "
+                        f"{abs(delta):.6f}s was snapped to clip {left.id}."
+                    )
+                    right.metadata.setdefault("timeline_warnings", []).append(warning)
+                    changes.append(
+                        {
+                            "clip_id": right.id,
+                            "old_start": old_start,
+                            "new_start": right.timeline_start,
+                            "delta": delta,
+                        }
+                    )
+        if changes:
+            self.project.recompute_duration()
+        return changes
 
     def add_audio_clip(
         self,
@@ -475,6 +534,9 @@ class TimelineEngine:
             destination.clips.append(clip)
         old_track.clips.sort(key=lambda item: (item.timeline_start, item.id))
         destination.clips.sort(key=lambda item: (item.timeline_start, item.id))
+        self.snap_subframe_boundaries(old_track.id)
+        if destination.id != old_track.id:
+            self.snap_subframe_boundaries(destination.id)
         self.project.recompute_duration()
         return clip
 
@@ -874,6 +936,7 @@ class TimelineEngine:
         return result
 
     def validate(self) -> None:
+        self.snap_subframe_boundaries()
         conflicts = self.conflicts()
         if conflicts:
             first = conflicts[0]

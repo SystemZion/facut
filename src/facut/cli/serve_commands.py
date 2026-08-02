@@ -16,11 +16,19 @@ from facut.core.command_engine import CommandEngine
 from facut.core.sequences import materialize_sequence
 from facut.intelligence import (
     apply_story_plan,
+    build_narration_plan,
     build_semantic_index,
     build_story_plan,
     diagnose_broll,
     load_semantic_index,
     search_semantic_index,
+)
+from facut.voice import (
+    VoiceProfileStore,
+    build_recording_plan,
+    provider_status,
+    synthesize_with_provider,
+    validate_voice_samples,
 )
 
 
@@ -257,6 +265,99 @@ def serve_command(
                     "errors": [],
                     "project_revision": manager.require_document().revision,
                 }
+            elif method == "narration.suggest":
+                data = build_narration_plan(
+                    manager.require_document(),
+                    load_semantic_index(manager.project_dir),
+                    style=str(params.get("style", "natural-vlog")),
+                    language=str(params.get("language", "zh-CN")),
+                    max_lines=int(params.get("max_lines", 12)),
+                    minimum_confidence=float(params.get("minimum_confidence", 0.55)),
+                )
+                result = {
+                    "status": "success",
+                    "command": method,
+                    "data": data,
+                    "warnings": [*data["warnings"], *data["limitations"]],
+                    "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "narration.synthesize":
+                plan_path = Path(str(params["plan"])).expanduser().resolve()
+                payload = json.loads(plan_path.read_text(encoding="utf-8"))
+                lines = payload.get("lines") or payload.get("data", {}).get("lines")
+                if not isinstance(lines, list) or not lines:
+                    raise ValueError('Narration plan requires a non-empty "lines" list.')
+                store = VoiceProfileStore()
+                profile = store.get(str(params["voice_profile"]))
+                data = synthesize_with_provider(
+                    profile,
+                    store.profile_directory(profile.id),
+                    lines,
+                    str(params["preview_dir"]),
+                    provider=params.get("provider"),
+                )
+                result = {
+                    "status": "success",
+                    "command": method,
+                    "data": data,
+                    "warnings": data.get("warnings", []),
+                    "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "voice.profile.create":
+                profile = VoiceProfileStore().create(
+                    str(params["name"]),
+                    speaker_id=str(params["speaker"]),
+                    language=str(params.get("language", "zh-CN")),
+                    style=str(params.get("style", "natural-vlog")),
+                    consent_relationship=str(params["consent"]),
+                    consent_statement=str(params["consent_statement"]),
+                )
+                result = {"status": "success", "command": method, "data": profile.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.list":
+                profiles = [item.public_dict() for item in VoiceProfileStore().list()]
+                result = {"status": "success", "command": method, "data": {"count": len(profiles), "profiles": profiles}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.import":
+                profile = VoiceProfileStore().import_samples(
+                    str(params["profile_id"]),
+                    [str(item) for item in params["samples"]],
+                    transcript=params.get("transcript"),
+                )
+                result = {"status": "success", "command": method, "data": profile.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.validate":
+                store = VoiceProfileStore()
+                profile = store.get(str(params["profile_id"]))
+                data = validate_voice_samples(
+                    store.sample_paths(profile),
+                    recommended_total_seconds=float(params.get("recommended_seconds", 600)),
+                )
+                profile = store.set_status(
+                    profile.id,
+                    {"pass": "ready", "warning": "warning", "fail": "invalid"}[data["status"]],
+                )
+                result = {"status": "success", "command": method, "data": {"profile_id": profile.id, "profile_status": profile.status, "report": data}, "warnings": [item["message"] for item in data["issues"]], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.delete":
+                if params.get("confirm") is not True:
+                    raise ValueError("Voice profile deletion requires confirm=true.")
+                profile_id = str(params["profile_id"])
+                destination = VoiceProfileStore().delete(profile_id)
+                result = {"status": "success", "command": method, "data": {"profile_id": profile_id, "recoverable": True, "trash_name": destination.name}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.restore":
+                profile = VoiceProfileStore().restore(str(params["trash_name"]))
+                result = {"status": "success", "command": method, "data": profile.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.record-plan":
+                store = VoiceProfileStore()
+                profile = store.get(str(params["profile_id"]))
+                data = build_recording_plan(
+                    profile,
+                    target_minutes=int(params.get("target_minutes", 10)),
+                    script=str(params.get("script", "mandarin-balanced-v1")),
+                )
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.provider.status":
+                data = provider_status(params.get("provider"))
+                result = {"status": "success", "command": method, "data": data, "warnings": [] if data["available"] else ["No local voice synthesis provider is available."], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "map.inspect":
                 from facut.travel import parse_gpx
 

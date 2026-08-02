@@ -96,7 +96,7 @@ def _validate_external(
         item = dict(raw)
         item.update(
             {
-                "id": str(raw.get("id") or f"obs_{media_id}_{index:04d}"),
+                "id": str(raw.get("id") or f"obs_ext_{media_id}_{index:04d}"),
                 "media_id": media_id,
                 "start": start,
                 "end": end,
@@ -125,6 +125,23 @@ def build_semantic_index(
         raw = path.read_bytes()
         input_hash = hashlib.sha256(raw).hexdigest()
         external = _validate_external(document, json.loads(raw.decode("utf-8")))
+        known_ids = {item["id"] for item in observations}
+        duplicate_ids = sorted(
+            item["id"] for item in external if item["id"] in known_ids
+        )
+        external_ids = [item["id"] for item in external]
+        duplicate_ids.extend(
+            sorted(
+                item
+                for item, count in Counter(external_ids).items()
+                if count > 1
+            )
+        )
+        if duplicate_ids:
+            raise ValueError(
+                "Vision observations contain duplicate IDs: "
+                + ", ".join(sorted(set(duplicate_ids)))
+            )
         observations.extend(external)
         providers.extend(sorted({item["provider"] for item in external}))
     document_fingerprint = hashlib.sha256(

@@ -174,6 +174,20 @@ class QCEngine:
         has_video = any(item.get("codec_type") == "video" for item in streams)
         has_audio = any(item.get("codec_type") == "audio" for item in streams)
         duration = _duration(metadata)
+        if has_video and source.kind != "image":
+            checks["delivery_video"] = _check_delivery_video(streams)
+        else:
+            checks["delivery_video"] = CheckResult(
+                status=QCStatus.SKIPPED,
+                summary="Delivery video checks require a timed video stream.",
+            )
+        if has_audio:
+            checks["delivery_audio"] = _check_delivery_audio(streams)
+        else:
+            checks["delivery_audio"] = CheckResult(
+                status=QCStatus.SKIPPED,
+                summary="Delivery audio checks require an audio stream.",
+            )
         if has_video or has_audio:
             checks["decode"] = self._safe_check(
                 "Full decode",
@@ -350,6 +364,9 @@ def _compact_metadata(raw: dict[str, Any]) -> dict[str, Any]:
                     "pix_fmt",
                     "r_frame_rate",
                     "avg_frame_rate",
+                    "color_space",
+                    "color_transfer",
+                    "color_primaries",
                     "sample_rate",
                     "channels",
                     "channel_layout",
@@ -379,3 +396,97 @@ def _duration(metadata: dict[str, Any]) -> float | None:
         except (TypeError, ValueError):
             continue
     return max(values) if values else None
+
+
+def _rate(value: Any) -> float | None:
+    if value in {None, "", "0/0"}:
+        return None
+    try:
+        numerator, denominator = str(value).split("/", 1)
+        denominator_value = float(denominator)
+        return float(numerator) / denominator_value if denominator_value else None
+    except (TypeError, ValueError):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+
+def _check_delivery_video(streams: list[dict[str, Any]]) -> CheckResult:
+    video = next(item for item in streams if item.get("codec_type") == "video")
+    issues: list[str] = []
+    pixel_format = str(video.get("pix_fmt") or "unknown")
+    if pixel_format != "yuv420p":
+        issues.append(f"Pixel format is {pixel_format}, expected yuv420p for broad SDR delivery.")
+    color = {
+        key: video.get(key)
+        for key in ("color_space", "color_transfer", "color_primaries")
+        if video.get(key) not in {None, "unknown"}
+    }
+    missing_color = sorted(
+        key
+        for key in ("color_space", "color_transfer", "color_primaries")
+        if key not in color
+    )
+    if missing_color:
+        issues.append(
+            "BT.709 delivery metadata is incomplete: "
+            + ", ".join(missing_color)
+            + "."
+        )
+    incompatible_color = {
+        key: value for key, value in color.items() if value != "bt709"
+    }
+    if incompatible_color:
+        issues.append(f"Color metadata is not BT.709 SDR: {incompatible_color}.")
+    nominal = _rate(video.get("r_frame_rate"))
+    average = _rate(video.get("avg_frame_rate"))
+    variable = bool(
+        nominal
+        and average
+        and abs(nominal - average) > max(0.01, nominal * 0.001)
+    )
+    if variable:
+        issues.append(
+            f"Average frame rate {average:.6g} differs from nominal {nominal:.6g}; review VFR handling."
+        )
+    return CheckResult(
+        status=QCStatus.WARNING if issues else QCStatus.PASS,
+        summary=(
+            "Video delivery metadata needs review."
+            if issues
+            else "Video is yuv420p with stable frame-rate metadata."
+        ),
+        data={
+            "pixel_format": pixel_format,
+            "color": color,
+            "nominal_fps": nominal,
+            "average_fps": average,
+            "variable_frame_rate": variable,
+        },
+        errors=issues,
+    )
+
+
+def _check_delivery_audio(streams: list[dict[str, Any]]) -> CheckResult:
+    audio = next(item for item in streams if item.get("codec_type") == "audio")
+    channels = int(audio.get("channels") or 0)
+    issues: list[str] = []
+    if channels not in {1, 2}:
+        issues.append(
+            f"Audio has {channels or 'unknown'} channels; common VLOG delivery expects mono or stereo."
+        )
+    return CheckResult(
+        status=QCStatus.WARNING if issues else QCStatus.PASS,
+        summary=(
+            "Audio channel layout needs review."
+            if issues
+            else "Audio channel layout is suitable for common platform delivery."
+        ),
+        data={
+            "channels": channels or None,
+            "channel_layout": audio.get("channel_layout"),
+            "sample_rate": audio.get("sample_rate"),
+        },
+        errors=issues,
+    )

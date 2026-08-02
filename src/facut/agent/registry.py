@@ -47,19 +47,37 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "timeline.add": {
-        "summary": "Place a source range on a track.",
+        "summary": "Place a source range on a track or append it to the track end.",
         "mutates": True,
         "rpc": True,
         "parameters": _object(
             {
                 "media_id": {"type": "string"},
                 "track": {"type": "string"},
-                "at": {"type": "number", "minimum": 0},
-                "in": {"type": "number", "minimum": 0},
-                "out": {"type": "number", "exclusiveMinimum": 0},
+                "at": {
+                    "oneOf": [
+                        {"type": "number", "minimum": 0},
+                        {"type": "string", "minLength": 1},
+                    ],
+                    "default": 0,
+                },
+                "append": {"type": "boolean", "default": False},
+                "in": {
+                    "oneOf": [
+                        {"type": "number", "minimum": 0},
+                        {"type": "string", "minLength": 1},
+                    ],
+                    "default": 0,
+                },
+                "out": {
+                    "oneOf": [
+                        {"type": "number", "exclusiveMinimum": 0},
+                        {"type": "string", "minLength": 1},
+                    ]
+                },
                 "dry_run": {"type": "boolean", "default": False},
             },
-            ["media_id", "track", "out"],
+            ["media_id", "track"],
         ),
     },
     "clip.move": {
@@ -159,6 +177,137 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "parameters": _object(
             {"maximum_aroll": {"type": "number", "minimum": 1, "default": 8}}
         ),
+    },
+    "narration.suggest": {
+        "summary": "Suggest evidence-grounded VLOG talking points and review-first draft narration.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "style": {
+                    "enum": ["natural-vlog", "travel-documentary", "cinematic-travel"],
+                    "default": "natural-vlog",
+                },
+                "language": {"type": "string", "default": "zh-CN"},
+                "max_lines": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+                "minimum_confidence": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.55},
+            }
+        ),
+    },
+    "narration.synthesize": {
+        "summary": "Synthesize reviewed narration with an explicitly configured local voice provider.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "string", "minLength": 1},
+                "voice_profile": {"type": "string", "minLength": 1},
+                "preview_dir": {"type": "string", "minLength": 1},
+                "provider": {"type": ["string", "null"]},
+            },
+            ["plan", "voice_profile", "preview_dir"],
+        ),
+    },
+    "voice.profile.create": {
+        "summary": "Create one consent-gated local digital voice profile.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "name": {"type": "string", "minLength": 1},
+                "speaker": {"type": "string", "minLength": 1},
+                "language": {"type": "string", "default": "zh-CN"},
+                "style": {"type": "string", "default": "natural-vlog"},
+                "consent": {"enum": ["self", "authorized"]},
+                "consent_statement": {"type": "string", "minLength": 12},
+            },
+            ["name", "speaker", "consent", "consent_statement"],
+        ),
+    },
+    "voice.profile.list": {
+        "summary": "List local voice profiles without exposing private absolute paths.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "voice.profile.import": {
+        "summary": "Copy authorized PCM WAV samples into a voice profile with hash deduplication.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile_id": {"type": "string"},
+                "samples": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "transcript": {"type": ["string", "null"]},
+            },
+            ["profile_id", "samples"],
+        ),
+    },
+    "voice.profile.validate": {
+        "summary": "Run bounded PCM voice-sample QC for one profile.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile_id": {"type": "string"},
+                "recommended_seconds": {"type": "number", "minimum": 1, "default": 600},
+            },
+            ["profile_id"],
+        ),
+    },
+    "voice.profile.delete": {
+        "summary": "Move a voice profile to recoverable local trash.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"profile_id": {"type": "string"}, "confirm": {"const": True}},
+            ["profile_id", "confirm"],
+        ),
+    },
+    "voice.profile.restore": {
+        "summary": "Restore one voice profile from FACUT's recoverable local trash.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"trash_name": {"type": "string", "minLength": 1}}, ["trash_name"]
+        ),
+    },
+    "voice.record-plan": {
+        "summary": "Generate a deterministic balanced recording prompt plan.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile_id": {"type": "string"},
+                "target_minutes": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10},
+                "script": {"type": "string", "default": "mandarin-balanced-v1"},
+            },
+            ["profile_id"],
+        ),
+    },
+    "voice.record": {
+        "summary": "Open the localhost-only FACUT microphone recording studio for one authorized profile.",
+        "mutates": True,
+        "rpc": False,
+        "requires_user_interaction": True,
+        "cli": "facut voice record <profile_id>",
+        "parameters": _object(
+            {
+                "profile_id": {"type": "string"},
+                "target_minutes": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10},
+                "script": {"type": "string", "default": "mandarin-balanced-v1"},
+                "port": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0},
+                "no_open": {"type": "boolean", "default": False},
+            },
+            ["profile_id"],
+        ),
+    },
+    "voice.provider.status": {
+        "summary": "Inspect the explicitly configured offline voice synthesis provider.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"provider": {"type": ["string", "null"]}}),
     },
     "map.inspect": {
         "summary": "Parse GPX route statistics and normalized track points.",

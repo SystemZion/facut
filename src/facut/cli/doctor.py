@@ -10,11 +10,49 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
 from pathlib import Path
 from typing import Any
 
 from facut import __version__
 from facut.config import AppConfig
+from facut.media.cuda_runtime import configure_cuda_dll_directories
+
+
+def _asr_worker_path() -> Path:
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return Path(bundle_root) / "facut_worker" / "asr_worker.py"
+    return Path(__file__).resolve().parents[1] / "analysis" / "asr_worker.py"
+
+
+def _external_asr_probe(config: AppConfig) -> dict[str, Any] | None:
+    python = config.tools.analysis_python or shutil.which("python")
+    worker = _asr_worker_path()
+    if not python or not worker.is_file():
+        return None
+    result = _run([str(python), str(worker), "--probe"], timeout=20.0)
+    if result is None or result.returncode != 0:
+        return {
+            "mode": "external-python",
+            "python": str(python),
+            "usable": False,
+            "error": _encoder_failure_summary(result),
+        }
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "mode": "external-python",
+            "python": str(python),
+            "usable": False,
+            "error": "The ASR worker returned invalid JSON.",
+        }
+    return {
+        "mode": "external-python",
+        **payload,
+        "usable": bool(payload.get("faster_whisper_available")),
+    }
 
 
 def _run(arguments: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProcess[str] | None:
@@ -38,6 +76,13 @@ def _first_line(result: subprocess.CompletedProcess[str] | None) -> str | None:
         return None
     output = result.stdout or result.stderr
     return output.splitlines()[0].strip() if output else None
+
+
+def _ffmpeg_major(version_line: str | None) -> int | None:
+    if not version_line:
+        return None
+    match = re.search(r"ffmpeg version\s+(?:n)?(\d+)", version_line, re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
 def _writable_directory(path: Path) -> bool:
@@ -164,12 +209,34 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
     """Collect bounded diagnostics without decoding any user media."""
 
     warnings: list[str] = []
+    cuda_dll_directories = configure_cuda_dll_directories()
+    try:
+        import ctranslate2
+
+        cuda_devices = ctranslate2.get_cuda_device_count()
+        ctranslate_version = getattr(ctranslate2, "__version__", None)
+    except (ImportError, OSError, RuntimeError):
+        cuda_devices = 0
+        ctranslate_version = None
+    external_asr = _external_asr_probe(config) if ctranslate_version is None else None
+    if external_asr is not None:
+        cuda_devices = int(external_asr.get("cuda_devices") or 0)
+        ctranslate_version = external_asr.get("ctranslate2_version")
+        cuda_dll_directories = [
+            Path(item) for item in external_asr.get("cuda_dll_directories") or []
+        ]
     located_ffmpeg = shutil.which(config.tools.ffmpeg)
     located_ffprobe = shutil.which(config.tools.ffprobe)
     ffmpeg_path = str(Path(located_ffmpeg).resolve()) if located_ffmpeg else None
     ffprobe_path = str(Path(located_ffprobe).resolve()) if located_ffprobe else None
     ffmpeg_version = _first_line(_run([ffmpeg_path, "-version"])) if ffmpeg_path else None
     ffprobe_version = _first_line(_run([ffprobe_path, "-version"])) if ffprobe_path else None
+    ffmpeg_major = _ffmpeg_major(ffmpeg_version)
+    ffmpeg_modern = ffmpeg_major is not None and ffmpeg_major >= 5
+    if ffmpeg_version and not ffmpeg_modern:
+        warnings.append(
+            "FFmpeg is too old for reliable HEVC/4K workflows; use FACUT's bundled FFmpeg."
+        )
 
     encoders_text = ""
     filters_text = ""
@@ -260,6 +327,8 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
                 "available": bool(ffmpeg_version),
                 "executable": ffmpeg_path,
                 "version": ffmpeg_version,
+                "major": ffmpeg_major,
+                "modern_media_support": ffmpeg_modern,
             },
             "ffprobe": {
                 "available": bool(ffprobe_version),
@@ -276,13 +345,39 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
                 "temporary_writable": temp_writable,
                 "cache_writable": cache_writable,
                 "free_bytes": free_bytes,
+                "models": str(Path(config.models.directory).expanduser().resolve()),
+            },
+            "models": {
+                name: {
+                    "directory": str(config.models.resolve(name)),
+                    "available": config.models.resolve(name).is_dir(),
+                    "explicit": getattr(config.models, name) is not None,
+                }
+                for name in ("voice_model", "srt_model")
+            },
+            "asr_gpu": {
+                "mode": "in-process" if external_asr is None else "external-python",
+                "python": external_asr.get("python") if external_asr else sys.executable,
+                "ctranslate2_version": ctranslate_version,
+                "cuda_devices": cuda_devices,
+                "cuda_dll_directories": [str(path) for path in cuda_dll_directories],
+                "usable": bool(
+                    (external_asr or {}).get("usable", ctranslate_version is not None)
+                ),
+                "gpu_usable": cuda_devices > 0,
             },
             "fonts": _font_discovery(),
             "sample_render": {
                 "status": "not_run",
                 "reason": "Use --sample-render to run the optional codec smoke test.",
             },
-            "healthy": bool(ffmpeg_version and ffprobe_version and temp_writable and cache_writable),
+            "healthy": bool(
+                ffmpeg_version
+                and ffmpeg_modern
+                and ffprobe_version
+                and temp_writable
+                and cache_writable
+            ),
         },
         warnings,
     )

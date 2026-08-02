@@ -13,6 +13,7 @@ import typer
 from facut.cli.common import manager_for, public_error
 from facut.core.timeline_engine import parse_time
 from facut.render import FFmpegBackend
+from facut.render.direct_copy import direct_copy_plan, render_direct_copy
 from facut.render.incremental import IncrementalRenderer, incremental_eligibility
 from facut.render.presets import RENDER_PRESETS, resolve_render_preset
 from facut.responses import success_response
@@ -312,6 +313,30 @@ def render_command(
             help="Reuse unchanged clip renders when the timeline is eligible.",
         ),
     ] = True,
+    fast_path: Annotated[
+        str,
+        typer.Option(
+            "--fast-path",
+            help="Lossless sequential assembly: auto, off, or force (keyframe trim).",
+        ),
+    ] = "auto",
+    loudness: Annotated[
+        float | None,
+        typer.Option("--loudness", help="Two-pass master loudness target in LUFS."),
+    ] = None,
+    true_peak: Annotated[
+        float, typer.Option("--true-peak", help="Master true-peak ceiling in dBTP.")
+    ] = -1.0,
+    lra: Annotated[
+        float, typer.Option("--lra", help="Master loudness-range target.")
+    ] = 11.0,
+    burn_subtitle: Annotated[
+        Path | None,
+        typer.Option(
+            "--burn-subtitle",
+            help="Burn an external ASS/SRT/VTT file; ASS karaoke tags are preserved.",
+        ),
+    ] = None,
     sequence: Annotated[
         str | None,
         typer.Option("--sequence", help="Render a saved named sequence."),
@@ -348,6 +373,15 @@ def render_command(
             color_space = None
             audio_sample_rate = None
         audio_bitrate = audio_bitrate or "320k"
+        fast_path = fast_path.strip().casefold()
+        if fast_path not in {"auto", "off", "force"}:
+            raise ValueError("--fast-path must be auto, off, or force.")
+        if loudness is not None and not -70.0 <= loudness <= -5.0:
+            raise ValueError("--loudness must be between -70 and -5 LUFS.")
+        if not -9.0 <= true_peak <= 0.0:
+            raise ValueError("--true-peak must be between -9 and 0 dBTP.")
+        if not 1.0 <= lra <= 50.0:
+            raise ValueError("--lra must be between 1 and 50.")
         backend = FFmpegBackend(state.config.tools.ffmpeg)
         progress = _progress_callback(
             state,
@@ -355,8 +389,41 @@ def render_command(
             "render",
             jsonl=jsonl_progress,
         )
+        copy_plan = direct_copy_plan(
+            document,
+            manager.project_dir,
+            codec=codec,
+            width=width,
+            height=height,
+            fps=fps,
+            audio_sample_rate=audio_sample_rate,
+            color_space=color_space,
+            allow_trimmed=fast_path == "force",
+        )
+        if loudness is not None:
+            copy_plan.eligible = False
+            copy_plan.reason = "master loudness normalization requires audio filtering"
+        if burn_subtitle is not None:
+            copy_plan.eligible = False
+            copy_plan.reason = "external subtitle burn-in requires rendered frames"
+        if fast_path == "force" and not copy_plan.eligible:
+            raise ValueError(
+                f"Forced stream-copy is unsafe for this timeline: {copy_plan.reason}."
+            )
         eligible, fallback_reason = incremental_eligibility(document)
-        if incremental and eligible:
+        if loudness is not None:
+            eligible, fallback_reason = False, "master loudness spans the complete timeline"
+        if burn_subtitle is not None:
+            eligible, fallback_reason = False, "external subtitle burn-in spans segment boundaries"
+        if fast_path != "off" and copy_plan.eligible:
+            result = render_direct_copy(
+                backend.ffmpeg,
+                copy_plan,
+                output,
+                overwrite=overwrite,
+                progress=progress,
+            )
+        elif incremental and eligible:
             result = IncrementalRenderer(
                 backend, manager.project_dir / "cache" / "render"
             ).render(
@@ -376,6 +443,10 @@ def render_command(
                 overwrite=overwrite,
                 progress=progress,
             )
+            if fast_path == "auto" and copy_plan.reason:
+                result.warnings.append(
+                    f"Stream-copy fallback: {copy_plan.reason}."
+                )
         else:
             result = backend.render(
                 document,
@@ -393,10 +464,18 @@ def render_command(
                 audio_sample_rate=audio_sample_rate,
                 overwrite=overwrite,
                 progress=progress,
+                burn_subtitle=burn_subtitle,
+                loudness_target=loudness,
+                true_peak=true_peak,
+                loudness_range=lra,
             )
             if incremental and fallback_reason:
                 result.warnings.append(
                     f"Incremental cache fallback: {fallback_reason}."
+                )
+            if fast_path == "auto" and copy_plan.reason:
+                result.warnings.append(
+                    f"Stream-copy fallback: {copy_plan.reason}."
                 )
         emit(
             state,

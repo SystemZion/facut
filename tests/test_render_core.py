@@ -23,6 +23,7 @@ from facut.render.cache import cache_key
 from facut.render.ffmpeg_backend import FFmpegBackend
 from facut.render.graph_builder import GraphBuilder
 from facut.render.hardware import choose_h264_encoder
+from facut.exceptions import NotImplementedFacutError
 
 
 def _ffmpeg_with_xfade() -> tuple[str, str, str] | None:
@@ -130,7 +131,65 @@ def test_graph_contains_real_xfade(tmp_path: Path) -> None:
     graph = GraphBuilder(_document(tmp_path), tmp_path).build()
     assert "xfade=transition=fade:duration=0.5:offset=1.5" in graph.filter_complex
     assert "acrossfade=d=0.5" in graph.filter_complex
+    assert graph.filter_complex.endswith("format=yuv420p[vdelivery]")
+    assert graph.video_label == "vdelivery"
     assert graph.duration == pytest.approx(3.5)
+
+
+def test_keyframed_position_is_evaluated_by_overlay_not_pad(tmp_path: Path) -> None:
+    for name in ("red.mp4", "blue.mp4"):
+        (tmp_path / name).write_bytes(b"placeholder")
+    document = _document(tmp_path)
+    clip = document.tracks[0].clips[0]
+    TimelineEngine(document).transform_clip(
+        clip.id,
+        fit="cover",
+        keyframes=[
+            {"property": "x", "time": 0, "value": -40},
+            {"property": "x", "time": 1, "value": 40},
+        ],
+    )
+    graph = GraphBuilder(document, tmp_path).build()
+    first_chain = graph.filter_complex.split("[v0]", 1)[0]
+    assert "pad=max" not in first_chain
+    assert "overlay=x=(W-w)/2+(if(lt(t" in first_chain
+    assert "eval=frame" in first_chain
+
+
+def test_bt709_delivery_rejects_hdr_relabel(tmp_path: Path) -> None:
+    (tmp_path / "hdr.mp4").write_bytes(b"placeholder")
+    document = ProjectDocument(
+        project=ProjectSettings(name="hdr", width=320, height=180, fps=30),
+        media=[
+            MediaAsset(
+                id="hdr",
+                kind=MediaKind.VIDEO,
+                path="hdr.mp4",
+                original_name="hdr.mp4",
+                size=11,
+                sha256="a" * 64,
+                technical=MediaTechnicalInfo(
+                    duration=2,
+                    color_space="bt2020nc",
+                    color_transfer="smpte2084",
+                    color_primaries="bt2020",
+                    dynamic_range="hdr-pq",
+                ),
+            )
+        ],
+    )
+    timeline = TimelineEngine(document)
+    timeline.add_track("video", "V1")
+    timeline.add_clip("hdr", "V1", at=0, source_in=0, source_out=2)
+    backend = FFmpegBackend.__new__(FFmpegBackend)
+    backend.ffmpeg = "unused"
+    with pytest.raises(NotImplementedFacutError, match="will not silently relabel|requires a real"):
+        backend.render(
+            document,
+            tmp_path,
+            tmp_path / "output.mp4",
+            color_space="bt709",
+        )
 
 
 def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
@@ -207,6 +266,9 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
         tmp_path / "final.mp4",
         hardware="none" if encoder == "libx264" else "qsv",
         progress=progress_events.append,
+        loudness_target=-14,
+        true_peak=-1,
+        loudness_range=11,
     )
     preview = backend.preview_range(
         document,
@@ -221,7 +283,10 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
     assert preview.output.is_file()
     assert progress_events
     assert progress_events[-1]["progress"] == pytest.approx(1.0)
+    assert any(event["stage"] == "loudness_scan" for event in progress_events)
     assert "eta_seconds" in progress_events[-1]
+    assert list((tmp_path / "logs").glob("loudness-pass1-*.log"))
+    assert list((tmp_path / "logs").glob("render-*.log"))
     for path, expected in ((final.output, 3.5), (preview.output, 1.5)):
         probe = subprocess.run(
             [

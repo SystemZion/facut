@@ -11,6 +11,7 @@ import typer
 from facut.cli.common import manager_for, public_error
 from facut.intelligence import (
     apply_story_plan,
+    build_narration_plan,
     build_semantic_index,
     build_story_plan,
     diagnose_broll,
@@ -18,11 +19,13 @@ from facut.intelligence import (
     search_semantic_index,
 )
 from facut.responses import success_response
+from facut.voice import VoiceProfileStore, synthesize_with_provider
 
 
 semantic_app = typer.Typer(help="Build and query evidence-backed semantic observations.")
 story_app = typer.Typer(help="Generate inspectable travel-story candidates.")
 broll_app = typer.Typer(help="Diagnose B-roll coverage and continuity gaps.")
+narration_app = typer.Typer(help="Suggest evidence-grounded VLOG narration for the timeline.")
 
 
 def _state(ctx: typer.Context):
@@ -127,3 +130,70 @@ def broll_diagnose(
         _emit(ctx, "broll.diagnose", data, warnings=data["limitations"], revision=manager.require_document().revision)
     except Exception as error:
         _fail(ctx, "broll.diagnose", error)
+
+
+@narration_app.command("suggest")
+def narration_suggest(
+    ctx: typer.Context,
+    style: Annotated[str, typer.Option("--style")] = "natural-vlog",
+    language: Annotated[str, typer.Option("--language")] = "zh-CN",
+    max_lines: Annotated[int, typer.Option("--max-lines", min=1, max=100)] = 12,
+    minimum_confidence: Annotated[
+        float, typer.Option("--minimum-confidence", min=0, max=1)
+    ] = 0.55,
+) -> None:
+    """Generate review-first suggestions and draft lines from visual evidence."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        data = build_narration_plan(
+            manager.require_document(),
+            load_semantic_index(manager.project_dir),
+            style=style,
+            language=language,
+            max_lines=max_lines,
+            minimum_confidence=minimum_confidence,
+        )
+        _emit(
+            ctx,
+            "narration.suggest",
+            data,
+            warnings=[*data["warnings"], *data["limitations"]],
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, "narration.suggest", error)
+
+
+@narration_app.command("synthesize")
+def narration_synthesize(
+    ctx: typer.Context,
+    plan_file: Annotated[Path, typer.Argument()],
+    voice_profile: Annotated[str, typer.Option("--voice-profile")],
+    preview_dir: Annotated[Path, typer.Option("--preview-dir")],
+    provider: Annotated[Path | None, typer.Option("--provider")] = None,
+) -> None:
+    """Synthesize reviewed lines through an explicitly configured local provider."""
+
+    try:
+        payload = json.loads(plan_file.expanduser().resolve().read_text(encoding="utf-8"))
+        lines = payload.get("lines") or payload.get("data", {}).get("lines")
+        if not isinstance(lines, list) or not lines:
+            raise ValueError('Narration plan requires a non-empty "lines" list.')
+        store = VoiceProfileStore()
+        profile = store.get(voice_profile)
+        data = synthesize_with_provider(
+            profile,
+            store.profile_directory(profile.id),
+            lines,
+            preview_dir,
+            provider=provider,
+        )
+        _emit(
+            ctx,
+            "narration.synthesize",
+            data,
+            warnings=data.get("warnings", []),
+        )
+    except Exception as error:
+        _fail(ctx, "narration.synthesize", error)

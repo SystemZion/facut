@@ -42,5 +42,8 @@ def test_stdio_json_rpc_reuses_loaded_project(tmp_path) -> None:
     assert lines[2]["result"]["project"]["name"] == "project"
     assert lines[3]["result"]["protocol"] == "facut-agent"
     assert any(action["name"] == "exchange.import" for action in lines[3]["result"]["actions"])
+    assert any(action["name"] == "narration.suggest" for action in lines[3]["result"]["actions"])
+    assert any(action["name"] == "voice.profile.create" for action in lines[3]["result"]["actions"])
+    assert any(action["name"] == "narration.synthesize" for action in lines[3]["result"]["actions"])
     assert lines[4]["result"]["plan_first"] is True
     assert lines[5]["result"]["status"] == "shutdown"
