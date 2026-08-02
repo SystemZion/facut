@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "facut"
-version = "0.4.0"
+version = "0.5.0"
 description = "Fast AI Cut — a deterministic, agent-friendly command-line video editor"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +25,8 @@ dependencies = [
   "rich>=13.7,<15",
   "typer>=0.12,<1",
   "openpyxl>=3.1,<4",
+  "opentimelineio>=0.18,<0.19",
+  "Pillow>=11,<13",
 ]
 
 [project.optional-dependencies]

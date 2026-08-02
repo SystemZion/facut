@@ -17,7 +17,16 @@ def test_stdio_json_rpc_reuses_loaded_project(tmp_path) -> None:
             json.dumps(
                 {"jsonrpc": "2.0", "id": 2, "method": "project.snapshot"}
             ),
-            json.dumps({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+            json.dumps({"jsonrpc": "2.0", "id": 3, "method": "agent.capabilities"}),
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "agent.schema",
+                    "params": {"action": "exchange.import"},
+                }
+            ),
+            json.dumps({"jsonrpc": "2.0", "id": 5, "method": "shutdown"}),
         ]
     )
     result = runner.invoke(
@@ -28,6 +37,10 @@ def test_stdio_json_rpc_reuses_loaded_project(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     lines = [json.loads(line) for line in result.stdout.splitlines()]
     assert lines[0]["method"] == "facut.ready"
+    assert lines[0]["params"]["protocol"] == "facut-agent/1.0"
     assert lines[1]["result"]["status"] == "ok"
     assert lines[2]["result"]["project"]["name"] == "project"
-    assert lines[3]["result"]["status"] == "shutdown"
+    assert lines[3]["result"]["protocol"] == "facut-agent"
+    assert any(action["name"] == "exchange.import" for action in lines[3]["result"]["actions"])
+    assert lines[4]["result"]["plan_first"] is True
+    assert lines[5]["result"]["status"] == "shutdown"

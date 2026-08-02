@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="facut-example" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Example Route</name>
+    <trkseg>
+      <trkpt lat="31.2000" lon="121.5000"><ele>5</ele><time>2026-07-01T08:00:00Z</time></trkpt>
+      <trkpt lat="31.2050" lon="121.5100"><ele>15</ele><time>2026-07-01T08:05:00Z</time></trkpt>
+      <trkpt lat="31.2150" lon="121.5200"><ele>12</ele><time>2026-07-01T08:10:00Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

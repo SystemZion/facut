@@ -218,6 +218,10 @@ from facut.cli.delivery_commands import (  # noqa: E402
     deliver_command,
     delivery_presets_command,
 )
+from facut.cli.exchange_commands import exchange_app  # noqa: E402
+from facut.cli.schema_commands import schema_app  # noqa: E402
+from facut.cli.intelligence_commands import broll_app, semantic_app, story_app  # noqa: E402
+from facut.cli.travel_commands import map_app, reframe_app  # noqa: E402
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -244,6 +248,13 @@ app.add_typer(sequence_app, name="sequence")
 app.command("serve")(serve_command)
 app.command("deliver")(deliver_command)
 app.command("delivery-presets")(delivery_presets_command)
+app.add_typer(exchange_app, name="exchange")
+app.add_typer(schema_app, name="schema")
+app.add_typer(semantic_app, name="semantic")
+app.add_typer(story_app, name="story")
+app.add_typer(broll_app, name="broll")
+app.add_typer(map_app, name="map")
+app.add_typer(reframe_app, name="reframe")
 app.add_typer(effect_app, name="effect")
 
 
