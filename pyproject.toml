@@ -20,6 +20,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  # Click 8.4 currently clips Rich option names in Windows 80-column terminals.
+  "click>=8.1,<8.4",
   "platformdirs>=4.2,<5",
   "pydantic>=2.7,<3",
   "rich>=13.7,<15",
