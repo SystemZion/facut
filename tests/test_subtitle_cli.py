@@ -152,3 +152,28 @@ def test_import_shift_export_text_and_compile(tmp_path) -> None:
     assert compiled["data"]["cue_count"] == 2
     assert compiled["data"]["text_overlay_count"] == 1
     assert "[Events]" in ass.read_text(encoding="utf-8-sig")
+
+
+def test_lingang_template_is_discoverable_and_persisted(tmp_path) -> None:
+    project = tmp_path / "travel"
+    _json(runner.invoke(app, ["--json", "init", str(project), "--width", "3840", "--height", "2160"]))
+    presets = _json(runner.invoke(app, ["--json", "text", "presets"]))
+    template = presets["data"]["lingang-cinematic-panel"]
+    assert template["renderer"] == "lingang-panel"
+    assert template["parameters"]["accent_color"] == "#66E1FF"
+
+    result = _json(
+        runner.invoke(
+            app,
+            [
+                "--project", str(project), "--json", "text", "add",
+                "--text", "再来", "--subtitle", "同一条雪道，重新滑下",
+                "--at", "0", "--duration", "2s",
+                "--template", "lingang-cinematic-mint",
+            ],
+        )
+    )
+    overlay = result["data"]["result"]
+    assert overlay["template"] == "lingang-cinematic-mint"
+    assert overlay["subtitle"] == "同一条雪道，重新滑下"
+    assert overlay["template_parameters"]["accent_color"] == "#74EFCB"

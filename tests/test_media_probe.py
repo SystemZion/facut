@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from facut.media.probe import probe_media
+from facut.media.probe import _parse_probe, probe_media
 
 
 @pytest.fixture()
@@ -61,3 +61,40 @@ def test_probe_extracts_video_and_audio_metadata(sample_video) -> None:
 def test_probe_missing_file() -> None:
     with pytest.raises(FileNotFoundError):
         probe_media("definitely-does-not-exist.mp4")
+
+
+def test_probe_parses_camera_gps_timezone_and_hdr_metadata() -> None:
+    info = _parse_probe(
+        {
+            "format": {
+                "format_name": "mov,mp4",
+                "duration": "2.0",
+                "tags": {
+                    "creation_time": "2026-07-20T18:30:00+08:00",
+                    "com.apple.quicktime.make": "Apple",
+                    "com.apple.quicktime.model": "iPhone 17 Pro",
+                    "com.apple.quicktime.location.ISO6709": "+31.2304+121.4737+004.2/",
+                },
+            },
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "r_frame_rate": "30/1",
+                    "avg_frame_rate": "30/1",
+                    "color_transfer": "smpte2084",
+                    "tags": {"timecode": "10:00:00:00"},
+                }
+            ],
+        }
+    )
+    assert info.camera_make == "Apple"
+    assert info.camera_model == "iPhone 17 Pro"
+    assert info.latitude == pytest.approx(31.2304)
+    assert info.longitude == pytest.approx(121.4737)
+    assert info.altitude == pytest.approx(4.2)
+    assert info.timezone_offset == "+08:00"
+    assert info.dynamic_range == "hdr-pq"
+    assert info.timecode == "10:00:00:00"

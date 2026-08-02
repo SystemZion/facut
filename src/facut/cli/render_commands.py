@@ -14,18 +14,11 @@ from facut.cli.common import manager_for, public_error
 from facut.core.timeline_engine import parse_time
 from facut.render import FFmpegBackend
 from facut.render.incremental import IncrementalRenderer, incremental_eligibility
+from facut.render.presets import RENDER_PRESETS, resolve_render_preset
 from facut.responses import success_response
 
 
 preview_app = typer.Typer(help="Render fast low-resolution timeline previews.")
-
-RENDER_PRESETS: dict[str, dict[str, Any]] = {
-    "youtube-1080p": {"width": 1920, "height": 1080, "fps": 30.0, "bitrate": "12M"},
-    "youtube-4k": {"width": 3840, "height": 2160, "fps": 30.0, "bitrate": "45M"},
-    "bilibili-1080p": {"width": 1920, "height": 1080, "fps": 30.0, "bitrate": "12M"},
-    "tiktok-1080x1920": {"width": 1080, "height": 1920, "fps": 30.0, "bitrate": "12M"},
-}
-
 
 def _state(ctx: typer.Context):
     from facut.cli.main import CliState
@@ -302,7 +295,7 @@ def render_command(
     fps: Annotated[float | None, typer.Option("--fps")] = None,
     bitrate: Annotated[str | None, typer.Option("--bitrate")] = None,
     audio_codec: Annotated[str, typer.Option("--audio-codec")] = "aac",
-    audio_bitrate: Annotated[str, typer.Option("--audio-bitrate")] = "320k",
+    audio_bitrate: Annotated[str | None, typer.Option("--audio-bitrate")] = None,
     hardware: Annotated[str, typer.Option("--hardware")] = "auto",
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     jsonl_progress: Annotated[
@@ -341,11 +334,20 @@ def render_command(
                 raise ValueError(
                     f'Unknown render preset "{preset}". Available: {", ".join(RENDER_PRESETS)}.'
                 )
-            settings = RENDER_PRESETS[preset]
+            settings = resolve_render_preset(
+                preset, source_fps=document.project.fps, requested_fps=fps
+            )
             width = width or settings["width"]
             height = height or settings["height"]
             fps = fps or settings["fps"]
             bitrate = bitrate or settings["bitrate"]
+            audio_bitrate = audio_bitrate or settings["audio_bitrate"]
+            audio_sample_rate = settings["audio_sample_rate"]
+            color_space = settings.get("color_space")
+        else:
+            color_space = None
+            audio_sample_rate = None
+        audio_bitrate = audio_bitrate or "320k"
         backend = FFmpegBackend(state.config.tools.ffmpeg)
         progress = _progress_callback(
             state,
@@ -369,6 +371,8 @@ def render_command(
                 audio_bitrate=audio_bitrate,
                 bitrate=bitrate,
                 hardware=hardware,
+                color_space=color_space,
+                audio_sample_rate=audio_sample_rate,
                 overwrite=overwrite,
                 progress=progress,
             )
@@ -385,6 +389,8 @@ def render_command(
                 audio_bitrate=audio_bitrate,
                 bitrate=bitrate,
                 hardware=hardware,
+                color_space=color_space,
+                audio_sample_rate=audio_sample_rate,
                 overwrite=overwrite,
                 progress=progress,
             )
