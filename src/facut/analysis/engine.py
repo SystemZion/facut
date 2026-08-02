@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from array import array
 import hashlib
+import json
 import math
 import os
 from pathlib import Path
 import re
 import statistics
 import subprocess
+import shutil
+import sys
 from typing import Any
 
 from facut.exceptions import DependencyMissingError, NotImplementedFacutError
@@ -220,6 +223,7 @@ def transcribe_local(
     *,
     model_path: str | Path,
     language: str | None = None,
+    external_python: str | Path | None = None,
 ) -> dict[str, Any]:
     """Transcribe with a user-supplied local faster-whisper model directory."""
 
@@ -228,14 +232,64 @@ def transcribe_local(
         raise FileNotFoundError(
             "A local Whisper model directory is required; facut will not download one implicitly."
         )
+    from facut.media.cuda_runtime import configure_cuda_dll_directories
+
+    cuda_dll_directories = configure_cuda_dll_directories()
     try:
         from faster_whisper import WhisperModel
     except ImportError as error:
-        raise DependencyMissingError(
-            "Local transcription requires the optional faster-whisper package.",
-            suggestion='Install facut with the "analysis" optional dependencies.',
-        ) from error
-    whisper = WhisperModel(str(model), device="auto", compute_type="int8")
+        python = str(external_python) if external_python else shutil.which("python")
+        if not python:
+            raise DependencyMissingError(
+                "The small FACUT EXE needs an external Python ASR runtime.",
+                suggestion=(
+                    "Install faster-whisper in Python and set FACUT_ANALYSIS_PYTHON "
+                    "to that python.exe."
+                ),
+            ) from error
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        worker = (
+            Path(bundle_root) / "facut_worker" / "asr_worker.py"
+            if bundle_root
+            else Path(__file__).with_name("asr_worker.py")
+        )
+        completed = subprocess.run(
+            [
+                python,
+                str(worker),
+                str(Path(path).expanduser().resolve()),
+                str(model),
+                *(["--language", language] if language else []),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed.returncode != 0:
+            raise DependencyMissingError(
+                "The external faster-whisper worker failed.",
+                suggestion=(
+                    "Run `facut doctor --json` and verify FACUT_ANALYSIS_PYTHON, "
+                    "CUDA DLLs, and the linked srt_model."
+                ),
+                details={"stderr": completed.stderr[-4000:], "python": python},
+            ) from error
+        return json.loads(completed.stdout)
+    try:
+        import ctranslate2
+
+        cuda_available = ctranslate2.get_cuda_device_count() > 0
+    except (ImportError, RuntimeError):
+        cuda_available = False
+    device = "cuda" if cuda_available else "cpu"
+    compute_type = "float16" if cuda_available else "int8"
+    whisper = WhisperModel(
+        str(model),
+        device=device,
+        compute_type=compute_type,
+        local_files_only=True,
+    )
     segments, info = whisper.transcribe(str(Path(path).resolve()), language=language)
     items = [
         {
@@ -250,6 +304,10 @@ def transcribe_local(
         "source": str(Path(path).resolve()),
         "language": info.language,
         "language_probability": info.language_probability,
+        "device": device,
+        "compute_type": compute_type,
+        "cuda_dll_directories": [str(item) for item in cuda_dll_directories],
+        "model": model.name,
         "segments": items,
     }
 

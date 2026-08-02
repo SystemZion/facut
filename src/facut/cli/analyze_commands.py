@@ -195,17 +195,27 @@ def beats(
 def transcript(
     ctx: typer.Context,
     target: str,
-    model: Annotated[Path, typer.Option("--model", help="Local Whisper model directory.")],
+    model: Annotated[
+        Path | None,
+        typer.Option("--model", help="Local Whisper model directory; defaults to downloaded srt_model."),
+    ] = None,
     language: Annotated[str | None, typer.Option("--language")] = None,
     save: Annotated[bool, typer.Option("--save")] = False,
 ) -> None:
+    state = _state(ctx)
+    resolved_model = model or state.config.models.resolve("srt_model")
     _emit_analysis(
         ctx,
         "analyze.transcript",
         target,
-        lambda path: transcribe_local(path, model_path=model, language=language),
+        lambda path: transcribe_local(
+            path,
+            model_path=resolved_model,
+            language=language,
+            external_python=state.config.tools.analysis_python,
+        ),
         save=save,
-        cache_parameters={"model": str(model), "language": language},
+        cache_parameters={"model": str(resolved_model), "language": language},
     )
 
 

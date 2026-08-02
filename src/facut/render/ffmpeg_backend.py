@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
+import re
 from typing import Any, Callable
 
 from facut.core.models import ProjectDocument
+from facut.exceptions import NotImplementedFacutError
 from facut.render.graph_builder import FilterGraph, GraphBuilder
 from facut.render.hardware import EncoderChoice, available_encoders, choose_h264_encoder
 from facut.subtitles.compiler import SubtitleCompiler
@@ -23,10 +27,18 @@ class RenderError(RuntimeError):
     code = "RENDER_FAILED"
     exit_code = 6
 
-    def __init__(self, message: str, *, command: list[str], detail: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: list[str],
+        detail: str = "",
+        log_path: str | Path | None = None,
+    ) -> None:
         super().__init__(message)
         self.command = command
         self.detail = detail
+        self.log_path = str(log_path) if log_path else None
 
 
 @dataclass(slots=True)
@@ -100,6 +112,44 @@ def _friendly_failure(detail: str) -> str:
     return "FFmpeg could not render the timeline."
 
 
+def _validate_color_delivery(
+    project: ProjectDocument, color_space: str | None
+) -> None:
+    """Prevent HDR/Log footage from being silently relabelled as BT.709 SDR."""
+
+    if color_space != "bt709":
+        return
+    used_media = {
+        clip.media_id
+        for track in project.tracks
+        if track.enabled
+        for clip in track.clips
+        if clip.enabled
+    }
+    unsafe: list[str] = []
+    for asset in project.media:
+        if asset.id not in used_media:
+            continue
+        technical = asset.technical
+        wide_gamut = str(technical.color_primaries or "").casefold() in {
+            "bt2020",
+            "smpte431",
+            "smpte432",
+        } or str(technical.color_space or "").casefold().startswith("bt2020")
+        if technical.dynamic_range in {"hdr-pq", "hdr-hlg", "log"} or wide_gamut:
+            unsafe.append(f"{asset.id} ({technical.dynamic_range})")
+    if unsafe:
+        raise NotImplementedFacutError(
+            "BT.709 SDR delivery was blocked because HDR/Log or wide-gamut source media "
+            "requires a real tone-map and gamut conversion: " + ", ".join(unsafe),
+            suggestion=(
+                "Convert the source with a reviewed color-managed workflow or render without "
+                "a BT.709 delivery preset. FACUT will not silently relabel HDR as SDR."
+            ),
+            details={"media": unsafe, "requested_color_space": color_space},
+        )
+
+
 class FFmpegBackend:
     """Compile and render projects using FFmpeg filter graphs."""
 
@@ -127,6 +177,10 @@ class FFmpegBackend:
         range_from: float | None = None,
         range_to: float | None = None,
         progress: ProgressCallback | None = None,
+        burn_subtitle: str | Path | None = None,
+        loudness_target: float | None = None,
+        true_peak: float = -1.0,
+        loudness_range: float = 11.0,
     ) -> RenderResult:
         destination = Path(output)
         if destination.exists() and not overwrite:
@@ -137,8 +191,20 @@ class FFmpegBackend:
             raise NotImplementedError(
                 f"NOT_IMPLEMENTED: the current backend renders H.264, not {codec}."
             )
+        _validate_color_delivery(project, color_space)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        subtitle_file = self._compile_subtitles(project)
+        generated_subtitle = None
+        if burn_subtitle is not None:
+            subtitle_file = Path(burn_subtitle).expanduser().resolve()
+            if not subtitle_file.is_file():
+                raise FileNotFoundError(f'Subtitle file "{subtitle_file}" was not found.')
+            if project.subtitle_cues or any(item.enabled for item in project.text_overlays):
+                raise ValueError(
+                    "Use either project subtitles/text or --burn-subtitle, not both."
+                )
+        else:
+            subtitle_file = generated_subtitle = self._compile_subtitles(project)
+        log_directory = Path(project_dir) / "logs"
         try:
             graph = GraphBuilder(project, project_dir).build(
                 width=width,
@@ -149,9 +215,31 @@ class FFmpegBackend:
                 preview=preview,
                 subtitle_file=subtitle_file,
             )
+            if loudness_target is not None:
+                targets = {
+                    "target_lufs": float(loudness_target),
+                    "true_peak_db": float(true_peak),
+                    "loudness_range": float(loudness_range),
+                }
+                measured = self._measure_loudness(
+                    graph,
+                    targets,
+                    log_directory=log_directory,
+                    progress=progress,
+                )
+                graph = GraphBuilder(project, project_dir).build(
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    range_from=range_from,
+                    range_to=range_to,
+                    preview=preview,
+                    subtitle_file=subtitle_file,
+                    master_loudness={**targets, **measured},
+                )
         except Exception:
-            if subtitle_file is not None:
-                subtitle_file.unlink(missing_ok=True)
+            if generated_subtitle is not None:
+                generated_subtitle.unlink(missing_ok=True)
             raise
         choice = choose_h264_encoder(self.ffmpeg, hardware)
         warnings = list(choice.warnings)
@@ -169,6 +257,7 @@ class FFmpegBackend:
                     preview=preview,
                     overwrite=overwrite,
                     progress=progress,
+                    log_directory=log_directory,
                 )
             except RenderError:
                 if choice.hardware == "none":
@@ -192,11 +281,12 @@ class FFmpegBackend:
                     preview=preview,
                     overwrite=True,
                     progress=progress,
+                    log_directory=log_directory,
                 )
                 choice = software
         finally:
-            if subtitle_file is not None:
-                subtitle_file.unlink(missing_ok=True)
+            if generated_subtitle is not None:
+                generated_subtitle.unlink(missing_ok=True)
         return RenderResult(
             output=destination.resolve(),
             duration=graph.duration,
@@ -204,6 +294,104 @@ class FFmpegBackend:
             hardware=choice.hardware,
             warnings=warnings,
         )
+
+    def _measure_loudness(
+        self,
+        graph: FilterGraph,
+        targets: dict[str, float],
+        *,
+        log_directory: Path,
+        progress: ProgressCallback | None,
+    ) -> dict[str, float]:
+        """Run EBU R128 pass one and return measured values for linear pass two."""
+
+        measurement_label = "facut_loudness_measure"
+        loudnorm = (
+            f"loudnorm=I={targets['target_lufs']}:TP={targets['true_peak_db']}:"
+            f"LRA={targets['loudness_range']}:print_format=json"
+        )
+        filter_graph = (
+            graph.filter_complex
+            + f";[{graph.audio_label}]{loudnorm}[{measurement_label}]"
+        )
+        args = [
+            self.ffmpeg,
+            "-hide_banner",
+            "-nostdin",
+            *graph.input_args,
+            "-filter_complex",
+            filter_graph,
+            "-map",
+            f"[{graph.video_label}]",
+            "-map",
+            f"[{measurement_label}]",
+            "-f",
+            "null",
+            "-",
+        ]
+        if progress:
+            progress(
+                {
+                    "event": "progress",
+                    "stage": "loudness_scan",
+                    "progress": 0.0,
+                    "out_time_seconds": 0.0,
+                    "frame": 0,
+                    "fps": 0.0,
+                    "speed": None,
+                    "eta_seconds": None,
+                }
+            )
+        completed = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        log_directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        log_path = log_directory / f"loudness-pass1-{stamp}.log"
+        log_path.write_text(
+            "command_json:\n"
+            + json.dumps(args, ensure_ascii=False, indent=2)
+            + "\nstderr:\n"
+            + completed.stderr,
+            encoding="utf-8",
+        )
+        if completed.returncode != 0:
+            raise RenderError(
+                "FFmpeg could not complete loudness analysis pass one.",
+                command=args,
+                detail=completed.stderr[-8000:],
+                log_path=log_path,
+            )
+        matches = re.findall(r"\{\s*\"input_i\".*?\}", completed.stderr, re.DOTALL)
+        if not matches:
+            raise RenderError(
+                "FFmpeg completed loudness analysis without measured EBU R128 data.",
+                command=args,
+                detail=completed.stderr[-8000:],
+                log_path=log_path,
+            )
+        payload = json.loads(matches[-1])
+        names = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+        measured = {name: float(payload[name]) for name in names}
+        if progress:
+            progress(
+                {
+                    "event": "progress",
+                    "stage": "loudness_scan",
+                    "progress": 1.0,
+                    "out_time_seconds": graph.duration,
+                    "frame": 0,
+                    "fps": 0.0,
+                    "speed": None,
+                    "eta_seconds": 0.0,
+                }
+            )
+        return measured
+
 
     @staticmethod
     def _compile_subtitles(project: ProjectDocument) -> Path | None:
@@ -267,6 +455,7 @@ class FFmpegBackend:
         preview: bool,
         overwrite: bool,
         progress: ProgressCallback | None,
+        log_directory: Path | None = None,
     ) -> None:
         args = [
             self.ffmpeg,
@@ -297,10 +486,13 @@ class FFmpegBackend:
             args.extend(["-b:v", bitrate or ("4M" if preview else "12M")])
         if bitrate and choice.encoder != "h264_videotoolbox":
             args.extend(["-maxrate", bitrate, "-bufsize", bitrate])
+        # Keep every H.264 output broadly playable.  The filter graph also
+        # normalizes to yuv420p, while this encoder option is a second boundary
+        # against hardware/filter-specific pixel-format promotion.
+        args.extend(["-pix_fmt", "yuv420p"])
         if color_space:
             args.extend(
                 [
-                    "-pix_fmt", "yuv420p",
                     "-color_primaries", color_space,
                     "-color_trc", color_space,
                     "-colorspace", color_space,
@@ -391,8 +583,30 @@ class FFmpegBackend:
             ).strip()
         finally:
             stderr_path.unlink(missing_ok=True)
+        log_path = None
+        if log_directory is not None:
+            log_directory.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+            log_path = log_directory / f"render-{stamp}.log"
+            log_path.write_text(
+                "FACUT FFmpeg render log\n"
+                f"status: {'success' if return_code == 0 else 'failed'}\n"
+                f"return_code: {return_code}\n"
+                f"output: {output.resolve()}\n"
+                "command_json:\n"
+                + json.dumps(args, ensure_ascii=False, indent=2)
+                + "\nfiltergraph:\n"
+                + graph.filter_complex
+                + "\nstderr:\n"
+                + detail
+                + "\n",
+                encoding="utf-8",
+            )
         if return_code != 0:
             output.unlink(missing_ok=True)
             raise RenderError(
-                _friendly_failure(detail), command=args, detail=detail[-8000:]
+                _friendly_failure(detail),
+                command=args,
+                detail=detail[-8000:],
+                log_path=log_path,
             )

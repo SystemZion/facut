@@ -103,6 +103,26 @@ def test_frame_accurate_split() -> None:
     assert right.timeline_start == pytest.approx(12.5)
 
 
+def test_append_clamp_and_subframe_snap() -> None:
+    document = project()
+    document.media[0].technical.duration = 4.038
+    engine = TimelineEngine(document)
+    engine.add_track("video", "V1")
+    first = engine.add_clip("media_01", "V1", source_out=4.040)
+    second = engine.add_clip(
+        "media_01", "V1", source_out=1, append=True
+    )
+    assert first.source_out == pytest.approx(4.038)
+    assert second.timeline_start == pytest.approx(first.end)
+    assert first.metadata["timeline_warnings"]
+
+    second.timeline_start = first.end - 0.001
+    changes = engine.snap_subframe_boundaries("V1")
+    assert changes
+    assert second.timeline_start == pytest.approx(first.end)
+    engine.validate()
+
+
 def test_transform_keyframes_and_ripple_freeze() -> None:
     document = project()
     engine = TimelineEngine(document)

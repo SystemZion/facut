@@ -199,6 +199,7 @@ class GraphBuilder:
         range_to: float | None = None,
         preview: bool = False,
         subtitle_file: str | Path | None = None,
+        master_loudness: dict[str, float] | None = None,
     ) -> FilterGraph:
         TimelineEngine(self.project).validate()
         width = width or self.project.project.width
@@ -308,10 +309,6 @@ class GraphBuilder:
             y = _keyframe_expr(clip, "y", transform.y)
             video_chain.extend(
                 [
-                    f"pad=max(iw\\,{width}):max(ih\\,{height}):"
-                    f"(ow-iw)/2+({x}):(oh-ih)/2+({y}):"
-                    f"color={self.project.project.background}:eval=frame",
-                    f"crop={width}:{height}:(iw-{width})/2-({x}):(ih-{height})/2-({y})",
                     f"fps={_fmt(fps)}",
                     "setsar=1",
                 ]
@@ -320,18 +317,21 @@ class GraphBuilder:
                 video_chain.extend(
                     ["format=rgba", f"colorchannelmixer=aa={_fmt(transform.opacity)}"]
                 )
-                filters.append(",".join(video_chain) + f"[vcontent{index}]")
-                filters.append(
-                    f"color=c={self.project.project.background}:s={width}x{height}:"
-                    f"r={_fmt(fps)}:d={_fmt(clip.duration)}[vbase{index}]"
-                )
-                filters.append(
-                    f"[vbase{index}][vcontent{index}]overlay=format=auto,"
-                    f"format=yuv420p[v{index}]"
-                )
             else:
                 video_chain.append("format=yuv420p")
-                filters.append(",".join(video_chain) + f"[v{index}]")
+            filters.append(",".join(video_chain) + f"[vcontent{index}]")
+            filters.append(
+                f"color=c={self.project.project.background}:s={width}x{height}:"
+                f"r={_fmt(fps)}:d={_fmt(clip.duration)}[vbase{index}]"
+            )
+            # Overlay, unlike pad, evaluates x/y once per frame and exposes t.
+            # It also handles contain (content smaller than canvas), cover
+            # (content larger than canvas) and static positioning consistently.
+            filters.append(
+                f"[vbase{index}][vcontent{index}]overlay="
+                f"x=(W-w)/2+({x}):y=(H-h)/2+({y}):"
+                f"eval=frame:eof_action=pass:format=auto,format=yuv420p[v{index}]"
+            )
             video_labels.append(f"v{index}")
             if (
                 asset.technical.audio_codec
@@ -725,6 +725,31 @@ class GraphBuilder:
             )
             current_a = "amixed"
 
+        if master_loudness is not None:
+            options = [
+                f"I={_fmt(master_loudness['target_lufs'])}",
+                f"TP={_fmt(master_loudness['true_peak_db'])}",
+                f"LRA={_fmt(master_loudness['loudness_range'])}",
+            ]
+            measured_names = {
+                "input_i": "measured_I",
+                "input_tp": "measured_TP",
+                "input_lra": "measured_LRA",
+                "input_thresh": "measured_thresh",
+                "target_offset": "offset",
+            }
+            for source_name, filter_name in measured_names.items():
+                if source_name in master_loudness:
+                    options.append(
+                        f"{filter_name}={_fmt(master_loudness[source_name])}"
+                    )
+            if "input_i" in master_loudness:
+                options.extend(["linear=true", "print_format=summary"])
+            filters.append(
+                f"[{current_a}]loudnorm={':'.join(options)}[amaster]"
+            )
+            current_a = "amaster"
+
         if subtitle_file is not None:
             filters.append(
                 f"[{current_v}]subtitles=filename='{_filter_path(subtitle_file)}'[vtext]"
@@ -747,6 +772,11 @@ class GraphBuilder:
             )
             current_v, current_a = "vout", "aout"
             output_duration = end - start
+        # Filters such as xfade, overlay and subtitles may promote the graph to
+        # 4:4:4/RGBA.  Delivery encoders must always receive a predictable
+        # 4:2:0 stream, including when no named delivery preset was selected.
+        filters.append(f"[{current_v}]format=yuv420p[vdelivery]")
+        current_v = "vdelivery"
         return FilterGraph(
             input_args=tuple(inputs),
             filter_complex=";".join(filters),

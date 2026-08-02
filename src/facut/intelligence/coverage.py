@@ -38,7 +38,27 @@ def diagnose_broll(
             asset = document.find_media(clip.media_id)
             travel = asset.metadata.get("analysis", {}).get("travel", {}) if asset else {}
             labels = {str(value.get("label")) for value in travel.get("candidates", [])}
-            is_aroll = "a-roll" in labels or clip.metadata.get("role") == "a-roll"
+            semantic_aroll = [
+                item
+                for item in (semantic_index or {}).get("observations", [])
+                if item.get("media_id") == clip.media_id
+                and float(item.get("start", 0.0)) < clip.source_out
+                and float(item.get("end", clip.source_out)) > clip.source_in
+                and "a-roll"
+                in {
+                    str(value).casefold()
+                    for value in [
+                        *(item.get("tags") or []),
+                        item.get("label", ""),
+                        item.get("category", ""),
+                    ]
+                }
+            ]
+            is_aroll = (
+                "a-roll" in labels
+                or clip.metadata.get("role") == "a-roll"
+                or bool(semantic_aroll)
+            )
             covered = any(
                 other.enabled
                 and other.timeline_start < clip.end
@@ -53,7 +73,13 @@ def diagnose_broll(
                         "severity": "warning",
                         "message": f"A-roll clip {clip.id} remains uncovered for {clip.duration:.2f}s.",
                         "range": {"start": clip.timeline_start, "end": clip.end},
-                        "evidence": {"clip_id": clip.id, "travel_labels": sorted(labels)},
+                        "evidence": {
+                            "clip_id": clip.id,
+                            "travel_labels": sorted(labels),
+                            "semantic_observation_ids": [
+                                item["id"] for item in semantic_aroll
+                            ],
+                        },
                         "suggestion": "Add two or more relevant B-roll shots while preserving useful original speech.",
                     }
                 )

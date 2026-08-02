@@ -37,9 +37,11 @@ def public_error(error: Exception) -> FacutError:
     code = getattr(error, "code", "")
     suggestion = getattr(error, "suggestion", None)
     details: dict[str, Any] = {}
-    stderr = getattr(error, "stderr", None)
+    stderr = getattr(error, "stderr", None) or getattr(error, "detail", None)
     if stderr:
         details["stderr"] = str(stderr)[-4000:]
+    if log_path := getattr(error, "log_path", None):
+        details["log_path"] = str(log_path)
     message = str(error) or error.__class__.__name__
     if isinstance(error, (FileNotFoundError,)):
         return ResourceNotFoundError(message, suggestion=suggestion)

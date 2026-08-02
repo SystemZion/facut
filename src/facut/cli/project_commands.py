@@ -82,12 +82,25 @@ def import_command(
     paths: Annotated[list[Path], typer.Argument(help="Media file(s) or directories.")],
     recursive: Annotated[bool, typer.Option("--recursive", "-r")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    porcelain: Annotated[
+        bool,
+        typer.Option(
+            "--porcelain",
+            help="Print only one stable media ID per line for shell scripts.",
+        ),
+    ] = False,
 ) -> None:
     """Import supported video, audio, image, and subtitle assets."""
 
     try:
         manager = manager_for(_state(ctx))
         assets = manager.import_paths(paths, recursive=recursive, dry_run=dry_run)
+        if porcelain:
+            if _state(ctx).json_output:
+                raise ValueError("Use either --json or --porcelain, not both.")
+            for asset in assets:
+                typer.echo(asset.id)
+            return
         revision = manager.require_document().revision + (1 if dry_run else 0)
         data = [asset.model_dump(mode="json") for asset in assets]
         _emit(

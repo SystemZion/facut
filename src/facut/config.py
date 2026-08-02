@@ -9,7 +9,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from platformdirs import user_cache_path, user_config_path, user_log_path
+from platformdirs import user_cache_path, user_config_path, user_data_path, user_log_path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from facut.exceptions import InvalidArgumentError
@@ -42,6 +42,46 @@ class ToolConfig(BaseModel):
 
     ffmpeg: str = Field(default_factory=lambda: bundled_tool("ffmpeg"))
     ffprobe: str = Field(default_factory=lambda: bundled_tool("ffprobe"))
+    analysis_python: str | None = None
+
+
+class ModelConfig(BaseModel):
+    """Storage settings for optional, separately downloaded AI models."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    directory: Path = Field(
+        default_factory=lambda: user_data_path("facut", appauthor=False) / "models"
+    )
+    voice_model: Path | None = None
+    srt_model: Path | None = None
+
+    def resolve(self, name: str) -> Path:
+        """Resolve an explicit model link, canonical download, or known legacy folder."""
+
+        normalized = name.strip().casefold().replace("-", "_")
+        if normalized not in {"voice_model", "srt_model"}:
+            raise ValueError("Model name must be voice_model or srt_model.")
+        explicit = getattr(self, normalized)
+        if explicit is not None:
+            return Path(explicit).expanduser().resolve()
+        canonical = {
+            "voice_model": "Fun-CosyVoice3-0.5B-2512",
+            "srt_model": "faster-whisper-large-v3-turbo",
+        }[normalized]
+        aliases = {
+            "voice_model": (),
+            "srt_model": ("whisper-turbo", ".whisper_turbo"),
+        }[normalized]
+        root = Path(self.directory).expanduser().resolve()
+        preferred = root / canonical
+        if preferred.is_dir():
+            return preferred
+        for alias in aliases:
+            candidate = root / alias
+            if candidate.is_dir():
+                return candidate
+        return preferred
 
 
 class AppConfig(BaseModel):
@@ -53,6 +93,7 @@ class AppConfig(BaseModel):
     preview: PreviewConfig = Field(default_factory=PreviewConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
+    models: ModelConfig = Field(default_factory=ModelConfig)
     log_level: str = "INFO"
     temporary_directory: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()) / "facut")
 
@@ -78,6 +119,9 @@ def bundled_tool(name: str) -> str:
         candidates.append(Path(bundle_root) / "facut_bin" / executable)
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).resolve().parent / "facut_bin" / executable)
+    # Source checkouts carry the same reviewed FFmpeg build used by the EXE;
+    # prefer it over an obsolete executable found earlier on system PATH.
+    candidates.append(Path(__file__).resolve().parents[2] / "vendor" / "ffmpeg" / executable)
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
@@ -103,10 +147,19 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     # Environment variables intentionally override persisted configuration.
     values = config.model_dump()
+    for key in ("ffmpeg", "ffprobe"):
+        configured = str(values["tools"].get(key, "")).strip().lower()
+        executable = f"{key}.exe" if os.name == "nt" else key
+        if configured in {"auto", key, executable}:
+            values["tools"][key] = bundled_tool(key)
     if ffmpeg := os.environ.get("FACUT_FFMPEG"):
         values["tools"]["ffmpeg"] = ffmpeg
     if ffprobe := os.environ.get("FACUT_FFPROBE"):
         values["tools"]["ffprobe"] = ffprobe
+    if analysis_python := os.environ.get("FACUT_ANALYSIS_PYTHON"):
+        values["tools"]["analysis_python"] = analysis_python
+    if model_home := os.environ.get("FACUT_MODEL_HOME"):
+        values["models"]["directory"] = model_home
     return AppConfig.model_validate(values)
 
 
@@ -123,11 +176,22 @@ def serialize_config(config: AppConfig) -> str:
     """Serialize the intentionally shallow configuration model to TOML."""
 
     raw = config.model_dump(mode="json")
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        resolved_bundle = Path(bundle_root).resolve()
+        for key in ("ffmpeg", "ffprobe"):
+            candidate = Path(str(raw["tools"][key])).resolve()
+            if candidate == resolved_bundle or resolved_bundle in candidate.parents:
+                raw["tools"][key] = "auto"
     lines = [f'log_level = {_toml_scalar(raw["log_level"])}']
     lines.append(f'temporary_directory = {_toml_scalar(raw["temporary_directory"])}')
-    for section in ("render", "preview", "cache", "tools"):
+    for section in ("render", "preview", "cache", "tools", "models"):
         lines.extend(("", f"[{section}]"))
-        lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in raw[section].items())
+        lines.extend(
+            f"{key} = {_toml_scalar(value)}"
+            for key, value in raw[section].items()
+            if value is not None
+        )
     return "\n".join(lines) + "\n"
 
 

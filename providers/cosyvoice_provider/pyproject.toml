@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=80,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facut-cosyvoice-provider"
+version = "0.1.0"
+description = "Offline CosyVoice3 provider for FACUT"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+facut-cosyvoice-provider = "facut_cosyvoice_provider.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

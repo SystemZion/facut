@@ -40,7 +40,11 @@ class Response(BaseModel, Generic[T]):
 
         return json.dumps(
             self.model_dump(mode="json"),
-            ensure_ascii=False,
+            # ASCII escaping keeps structured output valid even when a frozen
+            # Windows console is still using GBK and paths contain characters
+            # unavailable in that code page. JSON parsers recover the original
+            # Unicode values without loss.
+            ensure_ascii=True,
             indent=2 if pretty else None,
             separators=None if pretty else (",", ":"),
         )

@@ -5,11 +5,28 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.5.0` 增加面向 Agent 的能力发现/逐动作 JSON Schema、计划优先的 OTIO/FCPXML 交换、可导入视觉观察的语义检索、旅拍故事候选、B-roll 覆盖诊断、离线 GPX 路线视频和主体轨迹自动重构图。所有智能结果保留置信度、证据和提供方；不确定内容不会被包装成事实。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前版本 `0.6.0` 补齐可复用安装/更新链路、独立模型库与 CUDA 自动发现，并增加无损顺序拼接快路径、两遍式母带响度、外部 ASS 烧录、亚帧吸附、轨道追加及持久渲染诊断日志。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python，也不会误用系统中 2013 年的旧版 FFmpeg。
 
 ## 安装
 
 Windows 普通用户可从 [GitHub Releases](https://github.com/SystemZion/facut/releases/latest) 下载单文件 `facut.exe`。源码开发需要 Python 3.11 或更高版本，以及可在 `PATH` 中找到的 FFmpeg/FFprobe。
+
+首次下载 EXE 后可让 FACUT 安装自身、替换旧版并写入当前用户 PATH：
+
+```powershell
+.\facut.exe install --exclude model
+# 或同时下载语音与字幕模型：
+.\facut.exe install --model-directory D:\FACUT\models
+```
+
+之后更新不需要手工覆盖文件：
+
+```powershell
+facut update --check
+facut update
+```
+
+更新从 `SystemZion/facut` 最新 GitHub Release 断点续传 `facut.exe`；若正在运行的正是已安装 EXE，FACUT 会在当前进程退出后完成替换。
 
 ```bash
 python -m venv .venv
@@ -35,12 +52,42 @@ facut doctor
 
 如果工具不在 `PATH` 中，可以设置 `FACUT_FFMPEG`、`FACUT_FFPROBE` 环境变量。`FACUT_CONFIG` 可覆盖全局配置文件位置。
 
+### 可选本地 AI 模型
+
+大模型权重不会提交到 GitHub，也不会捆绑进 `facut.exe`。FACUT 会把模型单独下载到本机，校验固定的文件大小和 SHA-256；中断的传输保留为可续传的 `.part` 文件：
+
+```powershell
+facut download voice_model
+facut download srt_model
+facut models status
+```
+
+默认 `--source auto` 会先对官方源及镜像做小流量测速，拒绝 0 字节响应，并优先选择支持 HTTP Range 续传的最快来源。`--jsonl` 输出结构化测速/进度事件，`--directory D:\FACUT\models` 可把模型放到其他磁盘；网络中断后再次运行原命令即可继续。完整校验后会写入快速收据，日常检查无需再次哈希数 GB 权重；`--verify` 可强制重跑完整 SHA-256 审计。
+
+已有模型无需移动或复制，可直接链接任意目录：
+
+```powershell
+facut models link srt_model D:\工具\mediakit\models\whisper-turbo
+facut models link voice_model D:\FACUT\models\Fun-CosyVoice3-0.5B-2512
+facut models path D:\FACUT\models
+```
+
+字幕识别会在导入 `faster-whisper` 前自动发现 pip 安装的 cuDNN/cuBLAS DLL，并在结果和 `doctor --json` 中报告实际 CUDA 设备数。模型始终使用本地目录和 `local_files_only=True`，不会因 Hugging Face 校验或项目目录清理而失效。
+
+单文件 EXE 为控制安装体积不会内嵌 Python、CTranslate2、cuDNN 和模型权重；执行 ASR 时会自动桥接已经安装 `faster-whisper` 的外部 Python。可用 `FACUT_ANALYSIS_PYTHON=D:\工具\Python\python.exe` 或配置文件 `tools.analysis_python` 固定解释器，避免命中错误的 Python 环境。
+
+安装 `srt_model` 后，字幕识别默认自动使用它：
+
+```powershell
+facut analyze transcript video.mp4 --language zh --save
+```
+
 ## 命令概览
 
 当前可执行的公共接口：
 
 ```text
-facut init/import/ingest/inspect/help
+facut init/import/ingest/inspect/install/update/download/models/help
 facut timeline/clip/transition/effect/audio
 facut proxy/analyze/qc/marker
 facut subtitle/text
@@ -105,6 +152,19 @@ facut doctor --sample-render
 ```
 
 输出同时提供秒、时间码和帧编号。`proxy create/link/relink/status` 在同一个工程内维护原片/代理关系；预览自动使用在线代理，最终渲染自动回到原片。`proxy relink <MEDIA_ID> --search <DIR>` 可识别同名 `_LRF` 与 `_proxy` 文件。
+
+顺序组装可使用 `timeline add <MEDIA_ID> --track V1 --append`，无需每次查询总时长；显式 `--out` 超过探测时长不满一帧时会钳制，亚帧缝隙/重叠会自动吸附并写入片段警告。脚本只需素材 ID 时可用 `facut import ... --porcelain`。
+
+纯单轨、硬切、全文件、编码参数一致且无任何画面/声音处理的时间线，`render --fast-path auto` 会使用 FFmpeg concat stream-copy，零重编码、零画质损失；`--fast-path off` 可禁用。强制剪裁流复制必须显式使用 `--fast-path force`，结果会警告关键帧误差。
+
+平台母带可直接闭环两遍响度和外部字幕烧录：
+
+```powershell
+facut render -o final.mp4 --loudness -14 --true-peak -1 --lra 11
+facut render -o final.mp4 --burn-subtitle lyrics.ass
+```
+
+ASS 文件原样交给 libass，支持 `\\kf` 卡拉 OK 标签和系统用户字体。每次常规渲染都会把命令参数、滤镜图和 FFmpeg stderr 写到工程 `logs/render-*.log`；失败时终端显示末 20 行并返回日志路径。
 
 ## 转场、效果与插件
 
@@ -196,6 +256,42 @@ facut map animate route.gpx --output route.mp4 --duration 8 --width 3840 --heigh
 facut --project demo reframe plan <CLIP_ID> subject-track.json --width 1080 --height 1920 --json
 facut --project demo reframe plan <CLIP_ID> subject-track.json --width 1080 --height 1920 --apply --json
 ```
+
+## 根据画面的口播建议
+
+视觉观察完成索引后，FACUT 可以把画面证据映射到当前时间线，生成口播角度和可审阅初稿：
+
+```bash
+facut --json --project demo narration suggest --style natural-vlog --language zh-CN
+```
+
+每一句都返回时间范围、素材 ID、视觉摘要、建议角度、初稿、置信度、提供方和证据。当前版本不直接调用在线大模型，也不合成或模仿个人声音；Agent 可依据 `agent_generation_brief` 改写，但不得加入证据中没有的人物、地点、日期或价格。授权的多数字人声音档案、本人声音录入和逐句试听合成安排见 [VOICE_PROFILES.md](VOICE_PROFILES.md)。
+
+## 多数字人声音档案
+
+```powershell
+facut --json voice profile create "我的自然口播" --speaker self --consent self --consent-statement "这是我的本人声音，我授权在本机用于 FACUT 口播合成。"
+facut --json voice record-plan <VOICE_ID> --target-minutes 10 --output record-plan.json
+facut voice record <VOICE_ID> --target-minutes 10
+facut --json voice profile import <VOICE_ID> take-001.wav take-002.wav
+facut --json voice profile validate <VOICE_ID>
+facut --json voice profile list
+facut --json voice provider configure D:\FACUT\voice-runtime\.venv\Scripts\facut-cosyvoice-provider.exe
+facut --json voice provider status
+facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --output narration.wav
+facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --delivery natural-vlog --takes 3 --output narration.wav
+facut --json voice styles
+facut voice record <VOICE_ID> --script vlog-style-capsules-v1
+facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,comedy,excited --output narration.wav
+```
+
+`voice record` 在 `127.0.0.1` 打开 FACUT 自带录音页，可选择麦克风、逐条朗读、试听、重录并在保存时执行 QC。浏览器把音频转换为 48 kHz、16-bit、单声道 PCM WAV，只发送给本机临时服务；完成后服务自动关闭。已有 PCM WAV 仍可通过 `voice profile import` 由 AI/CLI 批量导入。
+
+本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（聊天版）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
+
+原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 只增加 5 条、约 2 分钟风格参考；新样本会保存明确的风格标签，生成时优先匹配。未补录时五种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
+
+0.5.3 支持多个独立授权档案、PCM WAV 样本复制和哈希去重、48k/单声道/削波/电平/静音 QC、可恢复删除和录音提示计划。Windows 默认声音库位于 `%LOCALAPPDATA%\facut\voices`；旧版重复目录会非破坏复制迁移并保留原文件。完整授权声明保存在本机私有档案中，普通 JSON 只返回声明哈希。声音合成使用显式配置的本地 `facut-voice-provider/1.0`；官方 CosyVoice3 提供器可离线调用已下载模型，未配置时返回 `NOT_IMPLEMENTED`，不会静默上传录音或伪造成功。
 
 GPX 动画完全离线生成，不抓取或捆绑在线地图瓦片，输出真实可播放的视频。主体轨迹使用局部片段时间与归一化中心点 `cx/cy`；FACUT 对低置信度点过滤、平滑、限制裁切边界，并编译为确定性的 x/y 关键帧。主体检测和跟踪推理由外部视觉提供方完成，核心 EXE 负责验证和可重复执行。
 
@@ -334,6 +430,7 @@ YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧
 - 画面关键帧当前为线性 x/y/scale/rotation；光流补帧和高级稳定模型尚未实现。
 - ASR 需要用户提供本地模型；歌曲识别需要本地指纹数据库插件。
 - FACUT 核心可验证和检索视觉观察，但当前不捆绑通用视觉模型；主体检测、人物识别和跟踪推理需要外部本地模型或 Agent 提供观察文件。
+- HDR/PQ/HLG/Log 与 BT.2020 素材尚未实现自动 HDR→SDR tone-map；BT.709 交付预设会明确阻止这类素材，避免只改标签而产生错误颜色。
 - GPX 已实现；KML、带在线地图瓦片或自动地名解析的地图样式尚未实现。
 - OTIO 原生 JSON 支持高保真 FACUT 元数据往返；FCPXML 当前是明确标注损失的 1.9 保守子集。
 - 增量缓存会对复杂工程安全降级为整片渲染；跨转场区间复用是后续优化。

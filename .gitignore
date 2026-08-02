@@ -28,6 +28,8 @@ venv/
 /renders/
 /history/
 /artifacts/
+/.playwright-cli/
+/output/
 
 # Editors and operating systems
 .idea/

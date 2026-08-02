@@ -112,6 +112,12 @@ def fail(state: CliState, command: str, error: FacutError) -> None:
         typer.echo(f"Error: {error.message}", err=True)
         if error.suggestion:
             typer.echo(f"Suggestion: {error.suggestion}", err=True)
+        if stderr := error.details.get("stderr"):
+            lines = str(stderr).splitlines()[-20:]
+            typer.echo("FFmpeg details (last 20 lines):", err=True)
+            typer.echo("\n".join(lines), err=True)
+        if log_path := error.details.get("log_path"):
+            typer.echo(f"Render log: {log_path}", err=True)
     raise typer.Exit(error.exit_code)
 
 
@@ -220,8 +226,20 @@ from facut.cli.delivery_commands import (  # noqa: E402
 )
 from facut.cli.exchange_commands import exchange_app  # noqa: E402
 from facut.cli.schema_commands import schema_app  # noqa: E402
-from facut.cli.intelligence_commands import broll_app, semantic_app, story_app  # noqa: E402
+from facut.cli.intelligence_commands import (  # noqa: E402
+    broll_app,
+    narration_app,
+    semantic_app,
+    story_app,
+)
 from facut.cli.travel_commands import map_app, reframe_app  # noqa: E402
+from facut.cli.voice_commands import voice_app  # noqa: E402
+from facut.cli.download_commands import download_command  # noqa: E402
+from facut.cli.install_commands import (  # noqa: E402
+    install_command,
+    models_app,
+    update_command,
+)
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -253,9 +271,15 @@ app.add_typer(schema_app, name="schema")
 app.add_typer(semantic_app, name="semantic")
 app.add_typer(story_app, name="story")
 app.add_typer(broll_app, name="broll")
+app.add_typer(narration_app, name="narration")
 app.add_typer(map_app, name="map")
 app.add_typer(reframe_app, name="reframe")
+app.add_typer(voice_app, name="voice")
 app.add_typer(effect_app, name="effect")
+app.command("download")(download_command)
+app.command("install")(install_command)
+app.command("update")(update_command)
+app.add_typer(models_app, name="models")
 
 
 if __name__ == "__main__":
