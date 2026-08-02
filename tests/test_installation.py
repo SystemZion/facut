@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from facut.exceptions import InvalidArgumentError
 from facut.installation import install_facut, update_facut
+
+
+def _installed_executable(directory: Path) -> Path:
+    return directory / ("facut.exe" if os.name == "nt" else "facut")
 
 
 def _fake_executable(path: Path, marker: bytes = b"A") -> Path:
@@ -39,7 +44,7 @@ def test_install_replaces_executable_without_downloading_models(tmp_path: Path) 
         add_path=False,
     )
     assert second["replaced_old_version"] is True
-    assert (install_dir / "facut.exe").read_bytes() == replacement.read_bytes()
+    assert _installed_executable(install_dir).read_bytes() == replacement.read_bytes()
 
 
 def test_install_rejects_unknown_exclusion(tmp_path: Path) -> None:
@@ -55,7 +60,7 @@ def test_install_rejects_unknown_exclusion(tmp_path: Path) -> None:
 
 def test_offline_update_replaces_isolated_install(tmp_path: Path) -> None:
     install_dir = tmp_path / "installed"
-    old = _fake_executable(install_dir / "facut.exe", b"O")
+    old = _fake_executable(_installed_executable(install_dir), b"O")
     update = _fake_executable(tmp_path / "new-facut.exe", b"N")
     assert old.read_bytes() != update.read_bytes()
 
@@ -67,5 +72,5 @@ def test_offline_update_replaces_isolated_install(tmp_path: Path) -> None:
 
     assert result["updated"] is True
     assert result["mode"] == "replaced"
-    assert (install_dir / "facut.exe").read_bytes() == update.read_bytes()
+    assert _installed_executable(install_dir).read_bytes() == update.read_bytes()
 
