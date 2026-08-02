@@ -4,6 +4,7 @@ import hashlib
 import io
 from pathlib import Path
 
+from rich.text import Text
 from typer.testing import CliRunner
 
 from facut.cli.main import app
@@ -169,6 +170,9 @@ def test_verified_receipt_skips_network_and_rehash(monkeypatch, tmp_path: Path) 
 def test_download_command_is_listed_in_help() -> None:
     result = CliRunner().invoke(app, ["download", "--help"])
     assert result.exit_code == 0
-    assert "voice_model" in result.stdout
-    assert "srt_model" in result.stdout
-    assert "--jsonl" in result.stdout
+    # GitHub Actions forces ANSI colors on Windows. Strip styling before
+    # validating option names so the test checks visible help text.
+    help_text = Text.from_ansi(result.stdout).plain
+    assert "voice_model" in help_text
+    assert "srt_model" in help_text
+    assert "--jsonl" in help_text
