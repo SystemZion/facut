@@ -41,7 +41,7 @@ def _ffmpeg_with_xfade() -> tuple[str, str, str] | None:
             encoding="utf-8",
             errors="replace",
         )
-        if " xfade " not in result.stdout:
+        if " xfade " not in result.stdout or " subtitles " not in result.stdout:
             continue
         encoders_result = subprocess.run(
             [candidate, "-hide_banner", "-encoders"],
@@ -166,6 +166,19 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
             check=True,
         )
     document = _document(tmp_path)
+    timeline = TimelineEngine(document)
+    timeline.add_track("video", "V2")
+    overlay = timeline.add_clip(
+        "blue", "V2", at=0.2, source_in=0, source_out=0.8
+    )
+    timeline.transform_clip(
+        overlay.id,
+        x=100,
+        y=50,
+        scale=0.25,
+        opacity=0.7,
+        autorotate=False,
+    )
     TimelineEngine(document).add_track("subtitle", "S1")
     document.subtitle_cues.append(
         SubtitleCue(
@@ -187,11 +200,13 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
         )
     )
     backend = FFmpegBackend(ffmpeg)
+    progress_events: list[dict[str, object]] = []
     final = backend.render(
         document,
         tmp_path,
         tmp_path / "final.mp4",
         hardware="none" if encoder == "libx264" else "qsv",
+        progress=progress_events.append,
     )
     preview = backend.preview_range(
         document,
@@ -204,6 +219,9 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
     )
     assert final.output.is_file()
     assert preview.output.is_file()
+    assert progress_events
+    assert progress_events[-1]["progress"] == pytest.approx(1.0)
+    assert "eta_seconds" in progress_events[-1]
     for path, expected in ((final.output, 3.5), (preview.output, 1.5)):
         probe = subprocess.run(
             [
@@ -221,7 +239,7 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
             check=True,
         )
         duration = float(json.loads(probe.stdout)["format"]["duration"])
-        assert duration == pytest.approx(expected, abs=0.12)
+        assert duration == pytest.approx(expected, abs=0.06)
     title_frame = subprocess.run(
         [
             ffmpeg,

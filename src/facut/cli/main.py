@@ -20,7 +20,7 @@ from facut.responses import Response, error_response, success_response
 
 app = typer.Typer(
     name="facut",
-    help="Fast AI Cut — deterministic command-line video editing for agents and humans.",
+    help="Fast AI Cut - deterministic command-line video editing for agents and humans.",
     no_args_is_help=True,
     add_completion=False,
     rich_markup_mode="markdown",
@@ -115,6 +115,14 @@ def fail(state: CliState, command: str, error: FacutError) -> None:
     raise typer.Exit(error.exit_code)
 
 
+@app.command("help")
+def help_command(ctx: typer.Context) -> None:
+    """Show the root command help."""
+
+    if ctx.parent is not None:
+        typer.echo(ctx.parent.get_help())
+
+
 @app.command("doctor")
 def doctor(
     ctx: typer.Context,
@@ -152,8 +160,17 @@ def doctor(
     table.add_row("Python", data["python"]["version"])
     table.add_row("FFmpeg", data["ffmpeg"]["version"] or "[red]not found[/red]")
     table.add_row("FFprobe", data["ffprobe"]["version"] or "[red]not found[/red]")
-    hardware = [name for name, available in data["encoders"]["hardware"].items() if available]
-    table.add_row("Hardware encoders", ", ".join(hardware) if hardware else "none detected")
+    hardware = data["encoders"]["hardware"]
+    usable_hardware = [name for name, diagnostic in hardware.items() if diagnostic["usable"]]
+    detected_only = [
+        name
+        for name, diagnostic in hardware.items()
+        if diagnostic["detected"] and not diagnostic["usable"]
+    ]
+    hardware_summary = ", ".join(usable_hardware) if usable_hardware else "none usable"
+    if detected_only:
+        hardware_summary += f" (detected but unusable: {', '.join(detected_only)})"
+    table.add_row("Hardware encoders", hardware_summary)
     table.add_row("Cache writable", "yes" if data["directories"]["cache_writable"] else "[red]no[/red]")
     table.add_row("Temporary writable", "yes" if data["directories"]["temporary_writable"] else "[red]no[/red]")
     table.add_row("Fonts discoverable", "yes" if data["fonts"]["available"] else "[yellow]no[/yellow]")
@@ -189,6 +206,13 @@ from facut.cli.timeline_commands import (  # noqa: E402
 from facut.cli.render_commands import preview_app, render_command  # noqa: E402
 from facut.cli.audio_commands import audio_app  # noqa: E402
 from facut.cli.subtitle_commands import subtitle_app, text_app  # noqa: E402
+from facut.cli.proxy_commands import proxy_app  # noqa: E402
+from facut.cli.marker_commands import marker_app  # noqa: E402
+from facut.cli.qc_commands import qc_command  # noqa: E402
+from facut.cli.analyze_commands import analyze_app  # noqa: E402
+from facut.cli.sequence_commands import sequence_app  # noqa: E402
+from facut.cli.serve_commands import serve_command  # noqa: E402
+from facut.cli.effect_commands import effect_app  # noqa: E402
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -205,7 +229,14 @@ app.add_typer(preview_app, name="preview")
 app.add_typer(audio_app, name="audio")
 app.add_typer(subtitle_app, name="subtitle")
 app.add_typer(text_app, name="text")
+app.add_typer(proxy_app, name="proxy")
+app.add_typer(marker_app, name="marker")
 app.command("render")(render_command)
+app.command("qc")(qc_command)
+app.add_typer(analyze_app, name="analyze")
+app.add_typer(sequence_app, name="sequence")
+app.command("serve")(serve_command)
+app.add_typer(effect_app, name="effect")
 
 
 if __name__ == "__main__":

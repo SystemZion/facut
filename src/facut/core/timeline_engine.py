@@ -9,15 +9,23 @@ import re
 from typing import Any
 
 from facut.core.models import (
+    AudioCompressorSettings,
+    AudioLimiterSettings,
+    AudioLoudnessSettings,
+    AudioProcessing,
     Clip,
+    Effect,
+    Keyframe,
     MediaKind,
     ProjectDocument,
     Track,
     TrackType,
+    Transform,
     Transition,
     new_id,
 )
 from facut.transitions import registry as transition_registry
+from facut.effects import registry as effect_registry
 
 
 _TIMECODE = re.compile(
@@ -221,8 +229,16 @@ class TimelineEngine:
         source_out: str | float | None = None,
         *,
         volume_db: float = 0.0,
+        muted: bool = False,
         fade_in: str | float = 0,
         fade_out: str | float = 0,
+        highpass_hz: float | None = None,
+        denoise_strength: float | None = None,
+        compressor: bool = False,
+        limiter_db: float | None = None,
+        loudnorm_lufs: float | None = None,
+        channel_mode: str = "original",
+        pan: float | None = None,
         loop: bool = False,
         duration: str | float | None = None,
         clip_id: str | None = None,
@@ -258,7 +274,6 @@ class TimelineEngine:
         fade_out_seconds = seconds(fade_out, self.fps)
         if fade_in_seconds < 0 or fade_out_seconds < 0:
             raise TimelineError("Audio fade durations cannot be negative.")
-        clip.volume_db = float(volume_db)
         clip.loop = loop
         if duration is not None:
             if not loop:
@@ -278,21 +293,45 @@ class TimelineEngine:
             clip.timeline_duration = max(
                 1 / self.fps, video_end - clip.timeline_start
             )
-        clip.audio_fade_in = fade_in_seconds
-        clip.audio_fade_out = fade_out_seconds
+        clip.audio = AudioProcessing(
+            gain_db=float(volume_db),
+            muted=muted,
+            fade_in=fade_in_seconds,
+            fade_out=fade_out_seconds,
+            highpass_hz=highpass_hz,
+            denoise_strength=denoise_strength,
+            compressor=AudioCompressorSettings() if compressor else None,
+            limiter=AudioLimiterSettings(ceiling_db=limiter_db)
+            if limiter_db is not None
+            else None,
+            loudness=AudioLoudnessSettings(target_lufs=loudnorm_lufs)
+            if loudnorm_lufs is not None
+            else None,
+            channel_mode=channel_mode,
+            pan=pan,
+        )
         Clip.model_validate(clip.model_dump())
         self.project.recompute_duration()
         return clip
 
     def set_audio_volume(self, clip_id: str, db: float) -> Clip:
-        """Set clip gain in decibels for an audio-track clip."""
+        """Set clip gain in decibels for native or independent audio."""
 
-        clip, track = self._clip_and_track(clip_id)
-        if track.type != TrackType.AUDIO:
-            raise TimelineError(f'Clip "{clip_id}" is not on an audio track.')
+        clip = self._audio_clip(clip_id)
         if not -96.0 <= float(db) <= 24.0:
             raise TimelineError("Audio volume must be between -96 dB and +24 dB.")
-        clip.volume_db = float(db)
+        clip.audio = AudioProcessing.model_validate(
+            {**clip.audio.model_dump(), "gain_db": float(db)}
+        )
+        return clip
+
+    def set_audio_mute(self, clip_id: str, muted: bool = True) -> Clip:
+        """Mute or unmute native or independent clip audio."""
+
+        clip = self._audio_clip(clip_id)
+        clip.audio = AudioProcessing.model_validate(
+            {**clip.audio.model_dump(), "muted": muted}
+        )
         return clip
 
     def set_audio_fades(
@@ -304,16 +343,108 @@ class TimelineEngine:
     ) -> Clip:
         """Set non-destructive fade-in and fade-out durations."""
 
-        clip, track = self._clip_and_track(clip_id)
-        if track.type != TrackType.AUDIO:
-            raise TimelineError(f'Clip "{clip_id}" is not on an audio track.')
+        clip = self._audio_clip(clip_id)
         if fade_in is None and fade_out is None:
             raise TimelineError("Specify fade_in, fade_out, or both.")
+        values = clip.audio.model_dump()
         if fade_in is not None:
-            clip.audio_fade_in = seconds(fade_in, self.fps)
+            values["fade_in"] = seconds(fade_in, self.fps)
         if fade_out is not None:
-            clip.audio_fade_out = seconds(fade_out, self.fps)
+            values["fade_out"] = seconds(fade_out, self.fps)
+        clip.audio = AudioProcessing.model_validate(values)
         Clip.model_validate(clip.model_dump())
+        return clip
+
+    def configure_audio(
+        self,
+        clip_id: str,
+        *,
+        highpass_hz: float | None = None,
+        denoise_strength: float | None = None,
+        compressor: bool | None = None,
+        compressor_threshold_db: float | None = None,
+        compressor_ratio: float | None = None,
+        limiter_db: float | None = None,
+        loudnorm_lufs: float | None = None,
+        channel_mode: str | None = None,
+        pan: float | None = None,
+        clear_pan: bool = False,
+    ) -> Clip:
+        """Update non-destructive cleanup, dynamics, and channel settings."""
+
+        clip = self._audio_clip(clip_id)
+        values = clip.audio.model_dump()
+        if highpass_hz is not None:
+            values["highpass_hz"] = None if highpass_hz == 0 else highpass_hz
+        if denoise_strength is not None:
+            values["denoise_strength"] = (
+                None if denoise_strength == 0 else denoise_strength
+            )
+        if compressor is False:
+            values["compressor"] = None
+        elif compressor or compressor_threshold_db is not None or compressor_ratio is not None:
+            compressor_values = values.get("compressor") or {}
+            if compressor_threshold_db is not None:
+                compressor_values["threshold_db"] = compressor_threshold_db
+            if compressor_ratio is not None:
+                compressor_values["ratio"] = compressor_ratio
+            values["compressor"] = compressor_values
+        if limiter_db is not None:
+            values["limiter"] = (
+                None if limiter_db == 0 else {"ceiling_db": limiter_db}
+            )
+        if loudnorm_lufs is not None:
+            values["loudness"] = (
+                None if loudnorm_lufs == 0 else {"target_lufs": loudnorm_lufs}
+            )
+        if channel_mode is not None:
+            if channel_mode not in {"original", "mono", "stereo"}:
+                raise TimelineError(
+                    "NOT_IMPLEMENTED: channel mode must be original, mono, or stereo."
+                )
+            values["channel_mode"] = channel_mode
+        if clear_pan:
+            values["pan"] = None
+        elif pan is not None:
+            values["pan"] = pan
+        clip.audio = AudioProcessing.model_validate(values)
+        return clip
+
+    def crossfade_audio(
+        self, from_clip_id: str, to_clip_id: str, duration: str | float
+    ) -> tuple[Clip, Clip]:
+        """Create a basic equal-gain crossfade between overlapping audio clips."""
+
+        source, source_track = self._clip_and_track(from_clip_id)
+        target, target_track = self._clip_and_track(to_clip_id)
+        if source_track.type != TrackType.AUDIO or target_track.type != TrackType.AUDIO:
+            raise TimelineError(
+                "NOT_IMPLEMENTED: audio crossfade currently supports independent "
+                "audio-track clips; use a video transition for native clip audio."
+            )
+        self._audio_clip(from_clip_id)
+        self._audio_clip(to_clip_id)
+        fade_duration = seconds(duration, self.fps)
+        overlap = min(source.end, target.end) - max(
+            source.timeline_start, target.timeline_start
+        )
+        if fade_duration <= 0 or overlap + 1e-9 < fade_duration:
+            raise TimelineError(
+                "Audio crossfade duration must fit inside the clips' timeline overlap."
+            )
+        source_values = source.audio.model_dump()
+        target_values = target.audio.model_dump()
+        source_values["fade_out"] = fade_duration
+        target_values["fade_in"] = fade_duration
+        source.audio = AudioProcessing.model_validate(source_values)
+        target.audio = AudioProcessing.model_validate(target_values)
+        return source, target
+
+    def _audio_clip(self, clip_id: str) -> Clip:
+        clip, _ = self._clip_and_track(clip_id)
+        asset = self.project.find_media(clip.media_id)
+        if asset is None or not asset.technical.audio_codec:
+            raise TimelineError(f'Clip "{clip_id}" has no audio stream.')
         return clip
 
     def move_clip(
@@ -360,6 +491,194 @@ class TimelineEngine:
         destination.clips.sort(key=lambda item: (item.timeline_start, item.id))
         self.project.recompute_duration()
         return clone
+
+    def transform_clip(
+        self,
+        clip_id: str,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        scale: float | None = None,
+        scale_x: float | None = None,
+        scale_y: float | None = None,
+        rotation: float | None = None,
+        opacity: float | None = None,
+        crop_left: float | None = None,
+        crop_top: float | None = None,
+        crop_right: float | None = None,
+        crop_bottom: float | None = None,
+        fit: str | None = None,
+        flip_x: bool | None = None,
+        flip_y: bool | None = None,
+        autorotate: bool | None = None,
+        stabilize: bool | None = None,
+        keyframes: list[dict[str, Any]] | None = None,
+    ) -> Clip:
+        """Apply static or linear-keyframed non-destructive picture transforms."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            raise TimelineError("Picture transforms require a video or image clip.")
+        values = clip.transform.model_dump()
+        supplied = {
+            "x": x,
+            "y": y,
+            "scale_x": scale_x if scale_x is not None else scale,
+            "scale_y": scale_y if scale_y is not None else scale,
+            "rotation": rotation,
+            "opacity": opacity,
+            "crop_left": crop_left,
+            "crop_top": crop_top,
+            "crop_right": crop_right,
+            "crop_bottom": crop_bottom,
+            "fit": fit,
+            "flip_x": flip_x,
+            "flip_y": flip_y,
+            "autorotate": autorotate,
+            "stabilize": stabilize,
+        }
+        values.update({name: value for name, value in supplied.items() if value is not None})
+        clip.transform = Transform.model_validate(values)
+        if keyframes is not None:
+            allowed = {"x", "y", "scale_x", "scale_y", "rotation"}
+            parsed = [Keyframe.model_validate(item) for item in keyframes]
+            for keyframe in parsed:
+                if keyframe.property not in allowed:
+                    raise TimelineError(
+                        "NOT_IMPLEMENTED: transform keyframes currently support "
+                        "x, y, scale_x, scale_y, and rotation."
+                    )
+                if keyframe.time > clip.duration:
+                    raise TimelineError("Transform keyframe exceeds clip duration.")
+                if keyframe.easing != "linear":
+                    raise TimelineError(
+                        "NOT_IMPLEMENTED: rendered transform keyframes currently use linear easing."
+                    )
+                if not isinstance(keyframe.value, (int, float)):
+                    raise TimelineError("Transform keyframe values must be numeric.")
+            clip.keyframes = parsed
+        return clip
+
+    def freeze_clip(
+        self,
+        clip_id: str,
+        *,
+        at: str | float,
+        duration: str | float,
+        to: str | float | None = None,
+        ripple: bool = True,
+    ) -> Clip:
+        """Insert a frame hold, defaulting to the end of the source clip."""
+
+        original, track = self._clip_and_track(clip_id)
+        if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            raise TimelineError("Freeze frame requires a video or image clip.")
+        relative = seconds(at, self.fps)
+        hold_duration = seconds(duration, self.fps)
+        if relative < 0 or relative > original.duration:
+            raise TimelineError("Freeze position must fall within the clip duration.")
+        if hold_duration <= 0:
+            raise TimelineError("Freeze duration must be positive.")
+        source_frame = min(
+            original.source_out - 1 / self.fps,
+            original.source_in + relative * abs(original.speed),
+        )
+        insertion = original.end if to is None else seconds(to, self.fps)
+        if ripple:
+            for following in track.clips:
+                if following.id != original.id and following.timeline_start >= insertion - 1e-9:
+                    following.timeline_start += hold_duration
+        hold = original.model_copy(deep=True)
+        hold.id = new_id("clip")
+        hold.timeline_start = insertion
+        hold.source_in = source_frame
+        hold.source_out = source_frame + 1 / self.fps
+        hold.speed = 1.0
+        hold.loop = False
+        hold.freeze_frame = source_frame
+        hold.timeline_duration = hold_duration
+        hold.audio = AudioProcessing(muted=True)
+        hold.muted = True
+        track.clips.append(hold)
+        track.clips.sort(key=lambda item: (item.timeline_start, item.id))
+        self.project.recompute_duration()
+        return hold
+
+    def add_effect(
+        self, clip_id: str, effect_type: str, parameters: dict[str, Any] | None = None
+    ) -> Effect:
+        """Attach one validated non-destructive video effect to a clip."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            raise TimelineError("Video effects require a video or image clip.")
+        definition = effect_registry.get(effect_type)
+        definition.compile(parameters or {})
+        effect = Effect(type=definition.name, parameters=parameters or {})
+        clip.effects.append(effect)
+        return effect
+
+    def remove_effect(self, effect_id: str) -> Effect:
+        for track in self.project.tracks:
+            for clip in track.clips:
+                for effect in clip.effects:
+                    if effect.id == effect_id:
+                        clip.effects.remove(effect)
+                        return effect
+        raise TimelineItemNotFound(f'Effect "{effect_id}" was not found.')
+
+    def configure_composite(
+        self,
+        clip_id: str,
+        *,
+        blend_mode: str = "normal",
+        mask_path: str | None = None,
+    ) -> Clip:
+        """Configure overlay blending and an optional grayscale mask."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            raise TimelineError("Composite settings require a video or image clip.")
+        allowed = {"normal", "screen", "multiply", "overlay", "addition", "difference"}
+        if blend_mode not in allowed:
+            raise TimelineError(
+                f"Blend mode must be one of: {', '.join(sorted(allowed))}."
+            )
+        clip.metadata["blend_mode"] = blend_mode
+        if mask_path is not None:
+            clip.metadata["mask_path"] = mask_path
+        return clip
+
+    def add_adjustment(
+        self,
+        track_id: str,
+        *,
+        effect_type: str,
+        at: str | float,
+        duration: str | float,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add a timed effect entry to an adjustment track."""
+
+        track = self._track(track_id)
+        if track.type != TrackType.ADJUSTMENT:
+            raise TimelineError(f'Track "{track_id}" is not an adjustment track.')
+        definition = effect_registry.get(effect_type)
+        definition.compile(parameters or {})
+        start = seconds(at, self.fps)
+        length = seconds(duration, self.fps)
+        if length <= 0:
+            raise TimelineError("Adjustment duration must be positive.")
+        entry = {
+            "id": new_id("adjustment"),
+            "type": definition.name,
+            "at": start,
+            "duration": length,
+            "parameters": parameters or {},
+            "enabled": True,
+        }
+        track.metadata.setdefault("adjustments", []).append(entry)
+        return entry
 
     def split_clip(
         self, clip_id: str, at: str | float, *, timeline_position: bool = False

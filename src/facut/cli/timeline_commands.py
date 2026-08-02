@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -135,6 +136,133 @@ def clip_move(
 ) -> None:
     params = {"clip_id": clip_id, "to": to, "delta": delta, "track_id": track}
     _execute(ctx, "clip.move", {key: value for key, value in params.items() if value is not None}, dry_run)
+
+
+@clip_app.command("duplicate")
+def clip_duplicate(
+    ctx: typer.Context,
+    clip_id: str,
+    to: Annotated[str, typer.Option("--to")],
+    track: Annotated[str | None, typer.Option("--track")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Duplicate a clip at a new timeline position, optionally on another track."""
+
+    params = {"clip_id": clip_id, "to": to, "track_id": track}
+    _execute(
+        ctx,
+        "clip.duplicate",
+        {key: value for key, value in params.items() if value is not None},
+        dry_run,
+    )
+
+
+@clip_app.command("transform")
+def clip_transform(
+    ctx: typer.Context,
+    clip_id: str,
+    x: Annotated[float | None, typer.Option("--x")] = None,
+    y: Annotated[float | None, typer.Option("--y")] = None,
+    scale: Annotated[float | None, typer.Option("--scale")] = None,
+    scale_x: Annotated[float | None, typer.Option("--scale-x")] = None,
+    scale_y: Annotated[float | None, typer.Option("--scale-y")] = None,
+    rotation: Annotated[float | None, typer.Option("--rotation")] = None,
+    opacity: Annotated[float | None, typer.Option("--opacity")] = None,
+    crop_left: Annotated[float | None, typer.Option("--crop-left")] = None,
+    crop_top: Annotated[float | None, typer.Option("--crop-top")] = None,
+    crop_right: Annotated[float | None, typer.Option("--crop-right")] = None,
+    crop_bottom: Annotated[float | None, typer.Option("--crop-bottom")] = None,
+    fit: Annotated[str | None, typer.Option("--fit")] = None,
+    flip_x: Annotated[bool | None, typer.Option("--flip-x/--no-flip-x")] = None,
+    flip_y: Annotated[bool | None, typer.Option("--flip-y/--no-flip-y")] = None,
+    autorotate: Annotated[
+        bool | None, typer.Option("--autorotate/--no-autorotate")
+    ] = None,
+    stabilize: Annotated[
+        bool | None, typer.Option("--stabilize/--no-stabilize")
+    ] = None,
+    keyframes: Annotated[
+        Path | None,
+        typer.Option("--keyframes", help="JSON array or keyframe document."),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Set crop, placement, scale, opacity, rotation, stability, and keyframes."""
+
+    params = {
+        "clip_id": clip_id,
+        "x": x,
+        "y": y,
+        "scale": scale,
+        "scale_x": scale_x,
+        "scale_y": scale_y,
+        "rotation": rotation,
+        "opacity": opacity,
+        "crop_left": crop_left,
+        "crop_top": crop_top,
+        "crop_right": crop_right,
+        "crop_bottom": crop_bottom,
+        "fit": fit,
+        "flip_x": flip_x,
+        "flip_y": flip_y,
+        "autorotate": autorotate,
+        "stabilize": stabilize,
+    }
+    if keyframes is not None:
+        payload = json.loads(keyframes.read_text(encoding="utf-8-sig"))
+        params["keyframes"] = payload.get("keyframes", payload) if isinstance(payload, dict) else payload
+    _execute(
+        ctx,
+        "clip.transform",
+        {name: value for name, value in params.items() if value is not None},
+        dry_run,
+    )
+
+
+@clip_app.command("freeze")
+def clip_freeze(
+    ctx: typer.Context,
+    clip_id: str,
+    at: Annotated[str, typer.Option("--at")],
+    duration: Annotated[str, typer.Option("--duration")],
+    to: Annotated[str | None, typer.Option("--to")] = None,
+    ripple: Annotated[bool, typer.Option("--ripple/--leave-gap")] = True,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Insert a silent frame hold and optionally ripple following clips."""
+
+    params = {
+        "clip_id": clip_id,
+        "at": at,
+        "duration": duration,
+        "to": to,
+        "ripple": ripple,
+    }
+    _execute(
+        ctx,
+        "clip.freeze",
+        {name: value for name, value in params.items() if value is not None},
+        dry_run,
+    )
+
+
+@clip_app.command("composite")
+def clip_composite(
+    ctx: typer.Context,
+    clip_id: str,
+    blend_mode: Annotated[str, typer.Option("--blend-mode")] = "normal",
+    mask: Annotated[str | None, typer.Option("--mask")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Set overlay blend mode and an optional grayscale image/video mask."""
+
+    params = {"clip_id": clip_id, "blend_mode": blend_mode, "mask_path": mask}
+    _execute(
+        ctx,
+        "clip.composite",
+        {name: value for name, value in params.items() if value is not None},
+        dry_run,
+    )
 
 
 @clip_app.command("split")

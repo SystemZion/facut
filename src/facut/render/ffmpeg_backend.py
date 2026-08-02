@@ -8,11 +8,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any, Callable
 
 from facut.core.models import ProjectDocument
 from facut.render.graph_builder import FilterGraph, GraphBuilder
-from facut.render.hardware import EncoderChoice, choose_h264_encoder
+from facut.render.hardware import EncoderChoice, available_encoders, choose_h264_encoder
 from facut.subtitles.compiler import SubtitleCompiler
 
 
@@ -50,6 +51,17 @@ class RenderResult:
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _progress_number(value: str | None, default: float = 0.0) -> float:
+    """Parse FFmpeg progress values, including startup-time N/A markers."""
+
+    if value is None or value.strip().upper() in {"", "N/A"}:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def find_ffmpeg(explicit: str | Path | None = None) -> str:
@@ -121,7 +133,7 @@ class FFmpegBackend:
             )
         if codec not in {"h264", "libx264"}:
             raise NotImplementedError(
-                f"NOT_IMPLEMENTED: the v1 backend currently renders H.264, not {codec}."
+                f"NOT_IMPLEMENTED: the current backend renders H.264, not {codec}."
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
         subtitle_file = self._compile_subtitles(project)
@@ -156,6 +168,8 @@ class FFmpegBackend:
                 )
             except RenderError:
                 if choice.hardware == "none":
+                    raise
+                if "libx264" not in available_encoders(self.ffmpeg):
                     raise
                 warnings.append(
                     f"{choice.encoder} was detected but failed to initialize; "
@@ -281,6 +295,9 @@ class FFmpegBackend:
                 audio_codec,
                 "-b:a",
                 audio_bitrate,
+                "-t",
+                f"{graph.duration:.9f}",
+                "-shortest",
                 "-movflags",
                 "+faststart",
                 "-progress",
@@ -304,6 +321,7 @@ class FFmpegBackend:
             )
             assert process.stdout is not None
             event: dict[str, str] = {}
+            started_at = time.monotonic()
             for raw_line in process.stdout:
                 line = raw_line.strip()
                 if "=" not in line:
@@ -311,18 +329,32 @@ class FFmpegBackend:
                 key, value = line.split("=", 1)
                 event[key] = value
                 if key == "progress" and progress:
-                    out_time_us = int(event.get("out_time_us", "0") or 0)
-                    elapsed = out_time_us / 1_000_000
+                    finished = value == "end"
+                    out_time_us = _progress_number(event.get("out_time_us"))
+                    elapsed = graph.duration if finished else out_time_us / 1_000_000
+                    ratio = (
+                        1.0
+                        if finished
+                        else min(1.0, elapsed / graph.duration)
+                        if graph.duration
+                        else 1.0
+                    )
+                    wall_seconds = max(0.0, time.monotonic() - started_at)
+                    eta_seconds = (
+                        max(0.0, wall_seconds / ratio - wall_seconds)
+                        if ratio > 0
+                        else None
+                    )
                     progress(
                         {
                             "event": "progress",
                             "stage": "render",
-                            "progress": min(1.0, elapsed / graph.duration)
-                            if graph.duration
-                            else 1.0,
-                            "frame": int(event.get("frame", "0") or 0),
-                            "fps": float(event.get("fps", "0") or 0),
-                            "eta_seconds": None,
+                            "progress": ratio,
+                            "out_time_seconds": elapsed,
+                            "frame": int(_progress_number(event.get("frame"))),
+                            "fps": _progress_number(event.get("fps")),
+                            "speed": event.get("speed", "").strip() or None,
+                            "eta_seconds": eta_seconds,
                         }
                     )
                     event = {}

@@ -13,6 +13,7 @@ import typer
 from facut.cli.common import manager_for, public_error
 from facut.core.timeline_engine import parse_time
 from facut.render import FFmpegBackend
+from facut.render.incremental import IncrementalRenderer, incremental_eligibility
 from facut.responses import success_response
 
 
@@ -51,6 +52,66 @@ def _preview_key(document: Any, parameters: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _progress_callback(
+    state: Any,
+    document: Any,
+    command: str,
+    *,
+    jsonl: bool,
+):
+    """Create a human or JSON Lines progress sink without corrupting JSON mode."""
+
+    if state.json_output and not jsonl:
+        return None
+    if state.quiet and not jsonl:
+        return None
+    video_clips = sorted(
+        (
+            clip
+            for track in document.tracks
+            if track.enabled and track.type.value in {"video", "image"}
+            for clip in track.clips
+            if clip.enabled
+        ),
+        key=lambda clip: clip.timeline_start,
+    )
+    last_percent = -1
+
+    def callback(event: dict[str, Any]) -> None:
+        nonlocal last_percent
+        elapsed = float(event.get("out_time_seconds", 0.0) or 0.0)
+        current = next(
+            (
+                clip
+                for clip in video_clips
+                if clip.timeline_start <= elapsed < clip.end
+            ),
+            video_clips[-1] if video_clips else None,
+        )
+        payload = {
+            **event,
+            "command": command,
+            "current_clip_id": current.id if current is not None else None,
+        }
+        percent = round(float(payload.get("progress", 0.0)) * 100)
+        if jsonl:
+            typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            return
+        if percent == last_percent and event.get("progress") != 1:
+            return
+        last_percent = percent
+        fps = float(payload.get("fps", 0.0) or 0.0)
+        eta = payload.get("eta_seconds")
+        eta_text = "--" if eta is None else f"{float(eta):.1f}s"
+        typer.echo(
+            f"{command}: {percent:3d}%  {fps:6.1f} fps  ETA {eta_text}"
+            f"  clip {payload['current_clip_id'] or '-'}",
+            err=True,
+        )
+
+    return callback
+
+
 @preview_app.command("range")
 def preview_range(
     ctx: typer.Context,
@@ -61,6 +122,13 @@ def preview_range(
     fps: Annotated[float, typer.Option("--fps")] = 24.0,
     hardware: Annotated[str, typer.Option("--hardware")] = "auto",
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    jsonl_progress: Annotated[
+        bool,
+        typer.Option(
+            "--jsonl-progress",
+            help="Emit newline-delimited JSON progress events.",
+        ),
+    ] = False,
 ) -> None:
     """Render a bounded, cached low-resolution preview."""
 
@@ -110,6 +178,12 @@ def preview_range(
                 fps=fps,
                 hardware=hardware,
                 overwrite=False,
+                progress=_progress_callback(
+                    state,
+                    document,
+                    "preview.range",
+                    jsonl=jsonl_progress,
+                ),
             )
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.resolve() != cache_path.resolve():
@@ -136,6 +210,88 @@ def preview_range(
         _abort(ctx, "preview.range", error)
 
 
+@preview_app.command("timeline")
+def preview_timeline(
+    ctx: typer.Context,
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    height: Annotated[int, typer.Option("--height")] = 540,
+    fps: Annotated[float, typer.Option("--fps")] = 24.0,
+    hardware: Annotated[str, typer.Option("--hardware")] = "auto",
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    jsonl_progress: Annotated[
+        bool,
+        typer.Option("--jsonl-progress", help="Emit newline-delimited JSON progress events."),
+    ] = False,
+) -> None:
+    """Render and cache a low-resolution preview of the complete timeline."""
+
+    from facut.cli.main import emit
+
+    command = "preview.timeline"
+    try:
+        state = _state(ctx)
+        manager = manager_for(state)
+        document = manager.require_document()
+        if document.project.duration <= 0:
+            raise ValueError("The timeline is empty.")
+        destination = output or manager.project_dir / "previews" / "preview-timeline.mp4"
+        parameters = {
+            "start": 0.0,
+            "end": document.project.duration,
+            "height": height,
+            "fps": fps,
+            "hardware": hardware,
+        }
+        key = _preview_key(document, parameters)
+        cache_path = manager.project_dir / "cache" / "previews" / f"{key}.mp4"
+        cached = cache_path.is_file()
+        warnings: list[str] = []
+        if not cached:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            result = FFmpegBackend(state.config.tools.ffmpeg).preview_range(
+                document,
+                manager.project_dir,
+                cache_path,
+                start=0.0,
+                end=document.project.duration,
+                height=height,
+                fps=fps,
+                hardware=hardware,
+                overwrite=False,
+                progress=_progress_callback(
+                    state, document, command, jsonl=jsonl_progress
+                ),
+            )
+            warnings = result.warnings
+        if destination.exists() and destination.resolve() != cache_path.resolve():
+            if not overwrite:
+                raise FileExistsError(
+                    f'Output "{destination}" already exists; use --overwrite.'
+                )
+            destination.unlink()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.resolve() != cache_path.resolve():
+            shutil.copy2(cache_path, destination)
+        data = {
+            "status": "success",
+            "output": str(destination.resolve()),
+            "duration": document.project.duration,
+            "cached": cached,
+        }
+        emit(
+            state,
+            success_response(
+                command,
+                data,
+                warnings=warnings,
+                project_revision=document.revision,
+            ),
+            human=f"[green]Timeline preview rendered:[/green] {destination.resolve()}",
+        )
+    except Exception as error:
+        _abort(ctx, command, error)
+
+
 def render_command(
     ctx: typer.Context,
     output: Annotated[Path, typer.Option("--output", "-o")],
@@ -149,6 +305,24 @@ def render_command(
     audio_bitrate: Annotated[str, typer.Option("--audio-bitrate")] = "320k",
     hardware: Annotated[str, typer.Option("--hardware")] = "auto",
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    jsonl_progress: Annotated[
+        bool,
+        typer.Option(
+            "--jsonl-progress",
+            help="Emit newline-delimited JSON progress events.",
+        ),
+    ] = False,
+    incremental: Annotated[
+        bool,
+        typer.Option(
+            "--incremental/--no-incremental",
+            help="Reuse unchanged clip renders when the timeline is eligible.",
+        ),
+    ] = True,
+    sequence: Annotated[
+        str | None,
+        typer.Option("--sequence", help="Render a saved named sequence."),
+    ] = None,
 ) -> None:
     """Render the full timeline to a playable video."""
 
@@ -158,6 +332,10 @@ def render_command(
         state = _state(ctx)
         manager = manager_for(state)
         document = manager.require_document()
+        if sequence is not None:
+            from facut.core.sequences import materialize_sequence
+
+            document = materialize_sequence(document, sequence)
         if preset:
             if preset not in RENDER_PRESETS:
                 raise ValueError(
@@ -168,20 +346,52 @@ def render_command(
             height = height or settings["height"]
             fps = fps or settings["fps"]
             bitrate = bitrate or settings["bitrate"]
-        result = FFmpegBackend(state.config.tools.ffmpeg).render(
+        backend = FFmpegBackend(state.config.tools.ffmpeg)
+        progress = _progress_callback(
+            state,
             document,
-            manager.project_dir,
-            output,
-            width=width,
-            height=height,
-            fps=fps,
-            codec=codec,
-            audio_codec=audio_codec,
-            audio_bitrate=audio_bitrate,
-            bitrate=bitrate,
-            hardware=hardware,
-            overwrite=overwrite,
+            "render",
+            jsonl=jsonl_progress,
         )
+        eligible, fallback_reason = incremental_eligibility(document)
+        if incremental and eligible:
+            result = IncrementalRenderer(
+                backend, manager.project_dir / "cache" / "render"
+            ).render(
+                document,
+                manager.project_dir,
+                output,
+                width=width,
+                height=height,
+                fps=fps,
+                codec=codec,
+                audio_codec=audio_codec,
+                audio_bitrate=audio_bitrate,
+                bitrate=bitrate,
+                hardware=hardware,
+                overwrite=overwrite,
+                progress=progress,
+            )
+        else:
+            result = backend.render(
+                document,
+                manager.project_dir,
+                output,
+                width=width,
+                height=height,
+                fps=fps,
+                codec=codec,
+                audio_codec=audio_codec,
+                audio_bitrate=audio_bitrate,
+                bitrate=bitrate,
+                hardware=hardware,
+                overwrite=overwrite,
+                progress=progress,
+            )
+            if incremental and fallback_reason:
+                result.warnings.append(
+                    f"Incremental cache fallback: {fallback_reason}."
+                )
         emit(
             state,
             success_response(

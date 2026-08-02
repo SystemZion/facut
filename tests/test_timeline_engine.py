@@ -103,6 +103,34 @@ def test_frame_accurate_split() -> None:
     assert right.timeline_start == pytest.approx(12.5)
 
 
+def test_transform_keyframes_and_ripple_freeze() -> None:
+    document = project()
+    engine = TimelineEngine(document)
+    engine.add_track("video", "V1")
+    first = engine.add_clip("media_01", "V1", source_in=0, source_out=5)
+    following = engine.add_clip("media_01", "V1", at=5, source_in=5, source_out=10)
+    transformed = engine.transform_clip(
+        first.id,
+        x=120,
+        scale=0.5,
+        opacity=0.8,
+        autorotate=False,
+        stabilize=True,
+        keyframes=[
+            {"property": "x", "time": 0, "value": 0},
+            {"property": "x", "time": 5, "value": 120},
+        ],
+    )
+    assert transformed.transform.scale_x == 0.5
+    assert transformed.transform.autorotate is False
+    assert transformed.keyframes[-1].value == 120
+    hold = engine.freeze_clip(first.id, at="4.5s", duration="2s")
+    assert hold.freeze_frame == pytest.approx(4.5)
+    assert hold.duration == 2
+    assert hold.audio.muted is True
+    assert following.timeline_start == 7
+
+
 def test_atomic_batch_and_dry_run(tmp_path: Path) -> None:
     manager = ProjectManager.create(tmp_path / "batch-project")
     manager.document.media.extend(project().media)

@@ -69,6 +69,8 @@ class Transform(StrictModel):
     fit: Literal["contain", "cover", "stretch", "none"] = "contain"
     flip_x: bool = False
     flip_y: bool = False
+    autorotate: bool = True
+    stabilize: bool = False
 
 
 class Keyframe(StrictModel):
@@ -124,6 +126,54 @@ class MediaAsset(StrictModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class AudioCompressorSettings(StrictModel):
+    """Non-destructive dynamic-range compressor parameters."""
+
+    threshold_db: float = Field(default=-18.0, ge=-60.0, le=0.0)
+    ratio: float = Field(default=4.0, ge=1.0, le=20.0)
+    attack_ms: float = Field(default=20.0, ge=0.01, le=2000.0)
+    release_ms: float = Field(default=250.0, ge=1.0, le=9000.0)
+    makeup_db: float = Field(default=0.0, ge=0.0, le=24.0)
+
+
+class AudioLimiterSettings(StrictModel):
+    """True peak guard compiled to FFmpeg's alimiter filter."""
+
+    ceiling_db: float = Field(default=-1.0, ge=-20.0, le=0.0)
+    attack_ms: float = Field(default=5.0, ge=0.1, le=80.0)
+    release_ms: float = Field(default=50.0, ge=1.0, le=8000.0)
+
+
+class AudioLoudnessSettings(StrictModel):
+    """Single-pass EBU R128 loudness normalization targets."""
+
+    target_lufs: float = Field(default=-14.0, ge=-70.0, le=-5.0)
+    true_peak_db: float = Field(default=-1.0, ge=-9.0, le=0.0)
+    loudness_range: float = Field(default=11.0, ge=1.0, le=50.0)
+
+
+class AudioProcessing(StrictModel):
+    """Unified audio settings shared by native and independent audio clips."""
+
+    gain_db: float = Field(default=0.0, ge=-96.0, le=24.0)
+    muted: bool = False
+    fade_in: float = Field(default=0.0, ge=0.0)
+    fade_out: float = Field(default=0.0, ge=0.0)
+    highpass_hz: float | None = Field(default=None, ge=20.0, le=20000.0)
+    denoise_strength: float | None = Field(default=None, ge=0.01, le=1.0)
+    compressor: AudioCompressorSettings | None = None
+    limiter: AudioLimiterSettings | None = None
+    loudness: AudioLoudnessSettings | None = None
+    channel_mode: Literal["original", "mono", "stereo"] = "original"
+    pan: float | None = Field(default=None, ge=-1.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_channel_processing(self) -> "AudioProcessing":
+        if self.channel_mode == "mono" and self.pan is not None:
+            raise ValueError("pan is unavailable when channel_mode is mono")
+        return self
+
+
 class Clip(StrictModel):
     id: str = Field(default_factory=lambda: new_id("clip"))
     media_id: str
@@ -136,9 +186,11 @@ class Clip(StrictModel):
     muted: bool = False
     volume_db: float = 0.0
     timeline_duration: float | None = Field(default=None, gt=0.0)
+    freeze_frame: float | None = Field(default=None, ge=0.0)
     loop: bool = False
     audio_fade_in: float = Field(default=0.0, ge=0.0)
     audio_fade_out: float = Field(default=0.0, ge=0.0)
+    audio: AudioProcessing = Field(default_factory=AudioProcessing)
     transform: Transform = Field(default_factory=Transform)
     effects: list[Effect] = Field(default_factory=list)
     keyframes: list[Keyframe] = Field(default_factory=list)
@@ -151,10 +203,21 @@ class Clip(StrictModel):
         if self.speed == 0:
             raise ValueError("speed cannot be zero")
         natural_duration = (self.source_out - self.source_in) / abs(self.speed)
-        if self.timeline_duration is not None and not self.loop:
-            raise ValueError("timeline_duration requires loop to be enabled")
+        if (
+            self.timeline_duration is not None
+            and not self.loop
+            and self.freeze_frame is None
+        ):
+            raise ValueError(
+                "timeline_duration requires loop or freeze_frame to be enabled"
+            )
         duration = self.timeline_duration or natural_duration
-        if self.audio_fade_in > duration or self.audio_fade_out > duration:
+        if (
+            self.audio_fade_in > duration
+            or self.audio_fade_out > duration
+            or self.audio.fade_in > duration
+            or self.audio.fade_out > duration
+        ):
             raise ValueError("audio fade duration cannot exceed clip duration")
         return self
 
@@ -242,6 +305,8 @@ class TextStyle(StrictModel):
     alignment: Literal["left", "center", "right"] = "center"
     line_spacing: float = 1.0
     letter_spacing: float = 0.0
+    safe_area: bool = False
+    safe_margin_percent: float = Field(default=5.0, ge=0.0, le=25.0)
 
 
 class SubtitleCue(StrictModel):

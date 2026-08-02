@@ -2,6 +2,35 @@
 
 All notable changes to `facut` are documented here.
 
+## 0.3.0 — 2026-08-02
+
+### Added
+
+- Native proxy create/link/relink/status workflow with preview/original switching.
+- Safe clip-hash incremental rendering cache and exact timeline-end muxing.
+- Transform, crop, fit, rotation metadata control, stabilization, opacity,
+  freeze-frame insertion, linear transform keyframes, PIP, masks, blend modes,
+  clip effects, and timed adjustment layers.
+- Native and independent audio gain, mute, fades, high-pass, denoise,
+  compressor, limiter, loudness normalization, channel repair, pan, and
+  crossfades.
+- `facut qc` full-decode, black, silence, loudness, Markdown, JSON, and contact
+  sheet reports.
+- Quality, scene, beat, optional local ASR, and song-fingerprint analysis
+  interfaces.
+- Markers with labels, categories, ratings, recommended ranges, CSV, and XLSX.
+- Named sequences, batch sequence rendering, title templates, CSV title import,
+  and safe-area text styling.
+- Persistent newline JSON-RPC `facut serve` mode.
+- JSONL render progress with stage, percent, speed, FPS, ETA, and current clip.
+
+### Fixed
+
+- Added `facut help` and the documented `clip duplicate` command.
+- Doctor now reports absolute tool paths and separately measures detected,
+  usable, and implemented hardware encoders.
+- Rendering now trims both streams to the exact timeline duration.
+
 ## 0.2.0 — 2026-07-31
 
 ### Added

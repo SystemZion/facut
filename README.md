@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.2.0` 已形成完整的基础制作链路：工程、素材探测、单视频轨时间线、帧级时间表示、原子批处理、基础转场、快速预览、H.264/AAC 渲染、撤销/重做、独立背景音乐、原声混合、字幕和文字烧录均可实际执行。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前版本 `0.3.0` 已打通代理—精剪—声音—QC—多版本交付链路：原片/代理自动切换、片段级增量缓存、多视频轨合成、画面变换与停帧、完整音频处理、JSONL 渲染进度、自动 QC、素材分析、标记、命名序列、字幕模板及常驻 JSON-RPC 会话。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
 
 ## 安装
 
@@ -40,12 +40,13 @@ facut doctor
 当前可执行的公共接口：
 
 ```text
-facut init/import/inspect
-facut timeline/clip/transition/audio
+facut init/import/inspect/help
+facut timeline/clip/transition/effect/audio
+facut proxy/analyze/qc/marker
 facut subtitle/text
-facut preview/render
+facut preview/render/sequence
 facut project/history
-facut undo/redo/run/doctor
+facut undo/redo/run/serve/doctor
 ```
 
 全局参数：
@@ -65,7 +66,7 @@ facut doctor --json
 facut doctor --sample-render
 ```
 
-`--sample-render` 会使用 FFmpeg 的生成源创建一个临时的一秒小视频，不读取用户素材。
+`--sample-render` 会使用 FFmpeg 的生成源创建一个临时的一秒小视频，不读取用户素材。诊断结果会返回 FFmpeg/FFprobe 绝对路径，并把硬件编码器分别标记为 `detected`、`usable`、`implemented`；NVENC、QSV、AMF、VideoToolbox 均进行短片实测，而非只检查名称。
 
 ## JSON 协议
 
@@ -102,11 +103,21 @@ facut doctor --sample-render
 450f
 ```
 
-输出同时提供秒、时间码和帧编号。最终渲染使用原始素材，代理只服务于快速预览。
+输出同时提供秒、时间码和帧编号。`proxy create/link/relink/status` 在同一个工程内维护原片/代理关系；预览自动使用在线代理，最终渲染自动回到原片。`proxy relink <MEDIA_ID> --search <DIR>` 可识别同名 `_LRF` 与 `_proxy` 文件。
 
 ## 转场、效果与插件
 
-转场和效果采用注册表：每个实现声明唯一名称、别名、分类、参数模型、默认时长、渲染实现、预览能力及降级策略。首批转场为 `fade-in`、`fade-out`、`dissolve`、`fade-black`、`fade-white`、`slide`、`wipe`、`zoom` 和 `blur`。首批效果覆盖 transform、透明度、基础调色、LUT、文字和字幕。
+转场和效果采用注册表：每个实现声明唯一名称、分类、参数模型与渲染实现。转场包含 `fade-in`、`fade-out`、`dissolve`、`fade-black`、`fade-white`、`slide`、`wipe`、`zoom` 和 `blur`。效果包含亮度、对比度、饱和度、Gamma、模糊、锐化、黑白、暗角、像素化和 LUT。
+
+```bash
+facut --project demo clip transform <CLIP_ID> --x 120 --y 60 --scale 0.5 --opacity 0.8 --no-autorotate
+facut --project demo clip freeze <CLIP_ID> --at 2s --duration 1.5s --ripple
+facut --project demo effect add <CLIP_ID> --type brightness --param value=0.1
+facut --project demo clip composite <CLIP_ID> --blend-mode screen
+facut --project demo effect adjustment-add --track ADJ1 --type vignette --at 3s --duration 5s
+```
+
+高层视频轨会作为真实画中画叠加，支持位置、缩放、旋转、透明度、灰度遮罩以及 normal/screen/multiply/overlay/addition/difference 混合模式。调整层可按时间范围作用于合成结果。
 
 插件代码不应直接拼接 shell 字符串。渲染后端接收参数列表和经过验证的滤镜图节点。
 
@@ -130,6 +141,14 @@ facut --project demo run ai-edit-plan.json --json
 ```powershell
 Get-Content -Raw ai-edit-plan.json | facut --project demo run - --json
 ```
+
+高频 Agent 操作可使用常驻会话，避免每条细粒度命令都支付 EXE 冷启动成本：
+
+```powershell
+facut --project demo serve
+```
+
+它通过 stdin/stdout 交换逐行 JSON-RPC，支持 `ping`、`project.snapshot`、`timeline.show`、原子 `run` 和 `shutdown`，同一进程复用已载入工程。
 
 ## 完整可运行示例
 
@@ -180,14 +199,58 @@ facut --project demo render --output mixed.mp4
 
 独立音频轨会与视频素材自带的相机原声混合；`--loop` 默认循环到视频时间线末尾，也可配合 `--duration` 指定长度。
 
+原视频音轨与独立音轨共用一套非破坏音频链：增益/静音、淡入淡出、高通、FFT 降噪、压缩、限制器、响度统一、单声道修复、声像和交叉淡化。
+
+```bash
+facut --project demo audio process <CLIP_ID> --highpass-hz 80 --denoise-strength 0.35 --compressor --limiter-db -1 --loudnorm-lufs -14
+facut --project demo audio mute <CLIP_ID>
+facut --project demo audio crossfade --from <LEFT_ID> --to <RIGHT_ID> --duration 700ms
+```
+
+## 代理、增量渲染和进度
+
+```bash
+facut --project demo proxy create <MEDIA_ID> --height 540
+facut --project demo proxy status --json
+facut --project demo preview timeline
+facut --project demo render --output final.mp4 --incremental --jsonl-progress
+```
+
+增量渲染以素材状态和片段参数哈希缓存中间段。当前安全优化范围是单个连续主视频轨、无转场/字幕/文字/额外音频；复杂工程会明确警告并降级为完整渲染，不会给出虚假的缓存命中。渲染器强制以时间线终点封装并裁掉音视频尾巴。JSONL 进度包含阶段、百分比、输出时间、帧率、速度、ETA 与当前片段。
+
+## QC、分析和标记
+
+```bash
+facut --json --project demo qc --report reports/qc.md --contact-sheet reports/contact.jpg
+facut --project demo analyze quality <MEDIA_ID> --save
+facut --project demo analyze scenes <MEDIA_ID> --save
+facut --project demo analyze beats <MUSIC_ID> --save
+facut --project demo marker add --at 32.5s --label "副歌" --category music --rating 5 --recommended
+facut --project demo marker export --format xlsx --output markers.xlsx
+```
+
+`qc` 执行完整解码、黑帧、静音、EBU R128 响度与审片联系表检查，可同时输出 JSON/Markdown。`analyze quality/scenes/beats` 为本地实现；转录要求显式提供本地 faster-whisper 模型，绝不静默联网下载。歌曲识别在没有本地指纹库时明确返回插件需求。
+
+## 多序列与标题模板
+
+```bash
+facut --project demo sequence save main
+facut --project demo sequence duplicate main highlight
+facut --project demo sequence render-all --preset youtube-4k --output-dir renders/sequences
+facut text presets
+facut --project demo text import-csv titles.csv --template documentary-lower-third
+```
+
+命名 sequence 保存时间线快照并共享素材/代理池，可在一个工程维护主片、精华版等交付版本。文字内置纪录片下三分之一、章节、歌曲标题和字幕底板模板，并支持阴影、半透明底、安全区、对齐和字距。
+
 ### 当前明确限制
 
-- 渲染器当前支持一个启用的视频/图片轨；多视频轨叠加不会伪造成功，而会明确返回 `NOT_IMPLEMENTED`。
-- 首版最终编码为 H.264/AAC；H.265、AV1、ProRes 等已保留后端扩展边界，但尚未开放。
-- 音频首版支持独立轨混音、增益、淡入淡出和循环；自动闪避、降噪与响度标准化尚未开放。
-- 字幕/文字支持工程编辑、SRT/VTT 往返、ASS 编译，并会自动烧录到预览和最终视频。
-- 关键帧 CLI、高级分析和自动剪辑属于后续版本。
-- `fade-in`/`fade-out` 已注册，首版成对片段间的稳定转场重点为 `dissolve`、`fade-black`、`fade-white`、`slide`、`wipe`、`zoom`、`blur`。
+- 最终编码主路径为 H.264/AAC；H.265、AV1、ProRes 等后端仍未开放。
+- 叠加轨间转场、带位置偏移的非 normal 混合、混合模式与自定义 mask 同时使用会明确返回 `NOT_IMPLEMENTED`。
+- 调整层当前接受单 FFmpeg 节点效果；像素化这种多节点效果暂不接受。
+- 画面关键帧当前为线性 x/y/scale/rotation；光流补帧和高级稳定模型尚未实现。
+- ASR 需要用户提供本地模型；歌曲识别需要本地指纹数据库插件。
+- 增量缓存会对复杂工程安全降级为整片渲染；跨转场区间复用是后续优化。
 
 ## 开发与测试
 
@@ -205,7 +268,9 @@ src/facut/
 ├── cli/              Typer 命令和输出适配
 ├── core/             工程、时间线、命令及历史
 ├── media/            探测、代理、缩略图和波形
-├── render/           滤镜图、缓存、硬件和 FFmpeg 后端
+├── analysis/         质量、场景、节拍和可选本地 ASR
+├── qc/               解码、黑帧、静音、响度及审片板
+├── render/           滤镜图、片段缓存、硬件和 FFmpeg 后端
 ├── transitions/      插件式转场
 ├── effects/          插件式视频/音频效果
 ├── subtitles/        SRT/VTT 解析、编辑与 ASS 编译
@@ -215,4 +280,4 @@ src/facut/
 └── responses.py      JSON 响应协议
 ```
 
-Windows 发行物通过 PyInstaller 打包为单文件 `facut.exe`，并内置 FFmpeg/FFprobe 8.1.2；源码安装方式用于开发和测试。
+Windows 发行物通过 PyInstaller 打包为单文件 `facut.exe`，并内置 FFmpeg/FFprobe；源码安装方式用于开发和测试。
