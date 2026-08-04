@@ -50,3 +50,21 @@ def project(ctx: typer.Context) -> None:
 
     data = json.loads(schema_path("project").read_text(encoding="utf-8"))
     _emit(ctx, "schema.project", data)
+
+
+@schema_app.command("narration")
+def narration(ctx: typer.Context) -> None:
+    """Return the strict review-first narration plan schema."""
+
+    from facut.intelligence import narration_plan_json_schema
+
+    _emit(ctx, "schema.narration", narration_plan_json_schema())
+
+
+@schema_app.command("recipe")
+def recipe(ctx: typer.Context) -> None:
+    """Return the declarative FACUT recipe schema."""
+
+    from facut.recipe import recipe_json_schema
+
+    _emit(ctx, "schema.recipe", recipe_json_schema())

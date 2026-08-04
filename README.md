@@ -265,7 +265,23 @@ facut --project demo reframe plan <CLIP_ID> subject-track.json --width 1080 --he
 facut --json --project demo narration suggest --style natural-vlog --language zh-CN
 ```
 
-每一句都返回时间范围、素材 ID、视觉摘要、建议角度、初稿、置信度、提供方和证据。当前版本不直接调用在线大模型，也不合成或模仿个人声音；Agent 可依据 `agent_generation_brief` 改写，但不得加入证据中没有的人物、地点、日期或价格。授权的多数字人声音档案、本人声音录入和逐句试听合成安排见 [VOICE_PROFILES.md](VOICE_PROFILES.md)。
+每一句都返回时间范围、素材 ID、视觉摘要、建议角度、初稿、置信度、提供方和证据。0.6.1 可以把这些证据生成严格计划、通过授权的本地声音逐句合成候选，并在人工批准后写入时间线；不得加入证据中没有的人物、地点、日期或价格。未配置本地文本模型时只生成确定性的 evidence-grounded 草稿，其他 provider 返回 `PROVIDER_NOT_CONFIGURED`。完整说明见 [VOICE_PROFILES.md](VOICE_PROFILES.md)。
+
+完整口播流程：
+
+```powershell
+facut voice studio --mode recommended
+facut --project vlog voice alias set "Zion" zion
+facut --project vlog voice default set zion --scope project
+facut voice serve start --device cuda --require-cuda
+
+facut --project vlog narration generate --style weekend-vlog --output narration.plan.json
+facut --project vlog narration synthesize narration.plan.json --voice zion --style auto --takes 2 --preview-dir previews\narration
+facut narration review narration.plan.json --line line_001 --status approved
+facut --project vlog narration apply narration.plan.json --approved-only --duck-music --preserve-original
+```
+
+`narration apply` 在一个工程修订内增加独立口播轨。标记为 `role=music` 的音频轨会按口播区间编译带 attack/release 的音量闪避；相机原声不会被自动静音。整个工程修改可以用 `facut undo` 撤回。
 
 ## 多数字人声音档案
 
@@ -283,6 +299,12 @@ facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --deliver
 facut --json voice styles
 facut voice record <VOICE_ID> --script vlog-style-capsules-v1
 facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,comedy,excited --output narration.wav
+facut voice studio
+facut voice studio --voice Zion --mode styles
+facut voice alias set Zion zion
+facut voice default set zion --scope project
+facut voice say "今天我们出去走走。" --voice zion --style auto --takes 2 --output narration.wav
+facut voice serve status --json
 ```
 
 `voice record` 在 `127.0.0.1` 打开 FACUT 自带录音页，可选择麦克风、逐条朗读、试听、重录并在保存时执行 QC。浏览器把音频转换为 48 kHz、16-bit、单声道 PCM WAV，只发送给本机临时服务；完成后服务自动关闭。已有 PCM WAV 仍可通过 `voice profile import` 由 AI/CLI 批量导入。
@@ -290,6 +312,22 @@ facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style n
 本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（聊天版）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
 
 原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 只增加 5 条、约 2 分钟风格参考；新样本会保存明确的风格标签，生成时优先匹配。未补录时五种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
+
+`voice studio` 不要求预先创建声音 ID。首次打开可直接输入任意名称并确认本人/已授权关系；`quick` 为 3 条快速试录，`recommended` 为 8 条常见 VLOG 句型，`styles` 为 5 条风格胶囊。档案内部继续使用稳定 ID，命令可使用唯一 alias 或唯一显示名称；重名时返回 `VOICE_AMBIGUOUS`，不会猜测。
+
+`voice serve` 只绑定 `127.0.0.1`，使用随机令牌和本机状态文件。新版 CosyVoice provider 的 `--facut-voice-jsonl` 模式会在同一进程中保留模型；`--require-cuda` 下无法验证 CUDA 时直接失败，不静默回到 CPU。模型目录继续通过 `facut models link voice_model <path>` 独立配置，不进入 EXE 或 GitHub。
+
+## 声明式 Recipe
+
+```powershell
+facut --project vlog recipe validate vlog.json
+facut --project vlog recipe plan vlog.json --output build-plan.json
+facut --project vlog recipe build vlog.json --output final.mp4
+```
+
+Recipe 支持轨道及角色、素材区间、变换、效果、转场、口播计划、渲染和 QC 请求。`validate` 与 `plan` 不修改工程；`build` 把所有时间线命令作为一次原子修订执行，输出先写入同目录临时文件，渲染成功后才替换最终文件。机器契约可通过 `facut schema recipe`、`facut schema narration` 和 `facut schema action <name>` 查询。
+
+`facut run` 同样可以调用上述 Agent action。纯时间线命令仍可使用 `atomic: true` 完整回滚；声音档案、试听文件和 Recipe 等跨域操作可能写入工程外部资源，因此批处理必须明确写 `atomic: false`。FACUT 会在一个常驻 JSON-RPC 子进程内依次执行，且不会把这些外部副作用伪装成可原子回滚。
 
 0.5.3 支持多个独立授权档案、PCM WAV 样本复制和哈希去重、48k/单声道/削波/电平/静音 QC、可恢复删除和录音提示计划。Windows 默认声音库位于 `%LOCALAPPDATA%\facut\voices`；旧版重复目录会非破坏复制迁移并保留原文件。完整授权声明保存在本机私有档案中，普通 JSON 只返回声明哈希。声音合成使用显式配置的本地 `facut-voice-provider/1.0`；官方 CosyVoice3 提供器可离线调用已下载模型，未配置时返回 `NOT_IMPLEMENTED`，不会静默上传录音或伪造成功。
 

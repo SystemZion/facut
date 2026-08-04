@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from facut.voice import VoiceProfileStore
 from facut.voice import store as voice_store
+from facut.voice.store import VoiceAliasConflictError, VoiceProfileAmbiguousError
 
 
 def _wav(path: Path, *, seconds: float = 1.0, rate: int = 48000) -> Path:
@@ -197,3 +198,75 @@ def test_voice_home_override_skips_platform_migration(
     store = VoiceProfileStore()
 
     assert store.root == override.resolve()
+
+
+def test_selector_alias_rename_and_ambiguous_display_name(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    first = store.create(
+        "旅行旁白",
+        speaker_id="zion",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    second = store.create(
+        "旅行旁白",
+        speaker_id="family",
+        consent_relationship="authorized",
+        consent_statement="The speaker explicitly authorizes local FACUT voice synthesis.",
+    )
+    with pytest.raises(VoiceProfileAmbiguousError) as ambiguous:
+        store.resolve("旅行旁白")
+    assert ambiguous.value.code == "VOICE_AMBIGUOUS"
+
+    aliased = store.set_alias(first.id, "zion")
+    assert store.resolve("ZION").id == first.id
+    renamed = store.rename("zion", "Zion 自然口播")
+    assert renamed.id == first.id
+    assert store.resolve("Zion 自然口播").id == first.id
+    assert store.get(first.id).aliases == ["zion"]
+    with pytest.raises(VoiceAliasConflictError):
+        store.set_alias(second.id, "ZION")
+
+
+def test_defaults_are_stable_ids_and_project_default_wins(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    global_profile = store.create(
+        "默认声音",
+        speaker_id="self",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    project_profile = store.create(
+        "项目声音",
+        speaker_id="self-project",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    project = tmp_path / "demo"
+    project.mkdir()
+    store.set_default(global_profile.id)
+    store.set_default(project_profile.id, scope="project", project=project)
+
+    assert store.get_default().id == global_profile.id
+    assert store.get_default(project=project).id == project_profile.id
+    payload = json.loads((project / ".facut" / "voice-default.json").read_text("utf-8"))
+    assert payload["profile_id"] == project_profile.id
+    assert "display_name" not in payload
+
+
+def test_profile_metadata_updates_do_not_modify_raw_samples(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    profile = store.create(
+        "原始声音",
+        speaker_id="self",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    imported = store.import_samples(profile.id, [_wav(tmp_path / "raw.wav")])
+    sample_path = store.sample_paths(imported)[0]
+    before = sample_path.read_bytes()
+    store.set_alias(profile.id, "raw-voice")
+    store.rename("raw-voice", "改名后声音")
+    store.set_default("raw-voice")
+
+    assert sample_path.read_bytes() == before

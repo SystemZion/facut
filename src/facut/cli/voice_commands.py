@@ -24,13 +24,26 @@ from facut.voice import (
     validate_voice_samples,
     voice_style_catalog,
 )
+from facut.voice.say import synthesize_voice_say
+from facut.voice.service import (
+    start_voice_service,
+    stop_voice_service,
+    synthesize_with_voice_service,
+    voice_service_status,
+)
 
 
 voice_app = typer.Typer(help="Manage authorized local digital voice profiles.")
 profile_app = typer.Typer(help="Create, import, inspect, validate and remove voice profiles.")
 provider_app = typer.Typer(help="Inspect the configured local voice synthesis provider.")
+alias_app = typer.Typer(help="Manage stable human-readable voice aliases.")
+default_app = typer.Typer(help="Manage the default narration voice.")
+serve_app = typer.Typer(help="Keep the local voice model warm for fast synthesis.")
 voice_app.add_typer(profile_app, name="profile")
 voice_app.add_typer(provider_app, name="provider")
+voice_app.add_typer(alias_app, name="alias")
+voice_app.add_typer(default_app, name="default")
+voice_app.add_typer(serve_app, name="serve")
 
 
 def _state(ctx: typer.Context):
@@ -110,9 +123,24 @@ def profile_list(ctx: typer.Context) -> None:
 @profile_app.command("show")
 def profile_show(ctx: typer.Context, profile_id: Annotated[str, typer.Argument()]) -> None:
     try:
-        _emit(ctx, "voice.profile.show", VoiceProfileStore().get(profile_id).public_dict())
+        _emit(ctx, "voice.profile.show", VoiceProfileStore().resolve(profile_id).public_dict())
     except Exception as error:
         _fail(ctx, "voice.profile.show", error)
+
+
+@profile_app.command("rename")
+def profile_rename(
+    ctx: typer.Context,
+    profile: Annotated[str, typer.Argument(help="Voice ID, alias, or unique display name.")],
+    name: Annotated[str, typer.Argument(help="New display name.")],
+) -> None:
+    """Rename a voice without changing its stable ID or recordings."""
+
+    try:
+        updated = VoiceProfileStore().rename(profile, name)
+        _emit(ctx, "voice.profile.rename", updated.public_dict())
+    except Exception as error:
+        _fail(ctx, "voice.profile.rename", error)
 
 
 @profile_app.command("import")
@@ -127,8 +155,9 @@ def profile_import(
     """Copy PCM WAV samples into the selected local profile."""
 
     try:
-        profile = VoiceProfileStore().import_samples(
-            profile_id,
+        store = VoiceProfileStore()
+        profile = store.import_samples(
+            store.resolve(profile_id).id,
             samples,
             transcript=transcript,
             category=category,
@@ -151,7 +180,7 @@ def profile_validate(
 
     try:
         store = VoiceProfileStore()
-        profile = store.get(profile_id)
+        profile = store.resolve(profile_id)
         report = validate_voice_samples(
             store.sample_paths(profile),
             recommended_total_seconds=recommended_seconds,
@@ -181,11 +210,13 @@ def profile_delete(
     try:
         if not confirm:
             raise ValueError("Voice profile deletion requires --confirm.")
-        destination = VoiceProfileStore().delete(profile_id)
+        store = VoiceProfileStore()
+        resolved = store.resolve(profile_id)
+        destination = store.delete(resolved.id)
         _emit(
             ctx,
             "voice.profile.delete",
-            {"profile_id": profile_id, "recoverable": True, "trash_name": destination.name},
+            {"profile_id": resolved.id, "recoverable": True, "trash_name": destination.name},
         )
     except Exception as error:
         _fail(ctx, "voice.profile.delete", error)
@@ -215,7 +246,7 @@ def record_plan(
     """Build a deterministic prompt plan for recording one voice profile."""
 
     try:
-        profile = VoiceProfileStore().get(profile_id)
+        profile = VoiceProfileStore().resolve(profile_id)
         plan = build_recording_plan(
             profile, target_minutes=target_minutes, script=script
         )
@@ -267,6 +298,107 @@ def record_voice(
         _fail(ctx, "voice.record", error)
 
 
+@voice_app.command("studio")
+def voice_studio(
+    ctx: typer.Context,
+    voice: Annotated[
+        str | None,
+        typer.Option("--voice", help="Voice ID, alias, or unique display name."),
+    ] = None,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Recording mode: quick, recommended, or styles."),
+    ] = "recommended",
+    port: Annotated[int, typer.Option("--port", min=0, max=65535)] = 0,
+    no_open: Annotated[
+        bool, typer.Option("--no-open", help="Do not open the local studio automatically.")
+    ] = False,
+) -> None:
+    """Open the complete local studio; no pre-created voice ID is required."""
+
+    try:
+        if mode not in {"quick", "recommended", "styles"}:
+            raise ValueError("Voice studio mode must be quick, recommended, or styles.")
+        studio = RecordingStudioServer(voice, mode=mode, port=port)
+        state = _state(ctx)
+        if not state.json_output and not state.quiet:
+            typer.echo(f"FACUT voice studio: {studio.url}")
+            typer.echo("Recordings stay on this computer. Press Ctrl+C to cancel.")
+        result = studio.serve(open_browser=not no_open)
+        _emit(ctx, "voice.studio", result)
+    except KeyboardInterrupt:
+        _emit(
+            ctx,
+            "voice.studio",
+            {"finished": False, "cancelled": True, "voice": voice, "mode": mode},
+            warnings=["The recording session was cancelled; saved takes remain available."],
+        )
+    except Exception as error:
+        _fail(ctx, "voice.studio", error)
+
+
+@alias_app.command("set")
+def voice_alias_set(
+    ctx: typer.Context,
+    profile: Annotated[str, typer.Argument(help="Voice ID, alias, or unique display name.")],
+    alias: Annotated[str, typer.Argument(help="New globally unique alias.")],
+) -> None:
+    """Add a stable alias without changing the voice ID."""
+
+    try:
+        updated = VoiceProfileStore().set_alias(profile, alias)
+        _emit(ctx, "voice.alias.set", updated.public_dict())
+    except Exception as error:
+        _fail(ctx, "voice.alias.set", error)
+
+
+@default_app.command("set")
+def voice_default_set(
+    ctx: typer.Context,
+    profile: Annotated[str, typer.Argument(help="Voice ID, alias, or unique display name.")],
+    scope: Annotated[str, typer.Option("--scope")] = "project",
+) -> None:
+    """Set the project or global default narration voice."""
+
+    try:
+        project = None
+        if scope == "project":
+            from facut.cli.common import manager_for
+
+            project = manager_for(_state(ctx)).project_dir
+        updated = VoiceProfileStore().set_default(profile, scope=scope, project=project)
+        _emit(
+            ctx,
+            "voice.default.set",
+            {"scope": scope, "profile": updated.public_dict()},
+        )
+    except Exception as error:
+        _fail(ctx, "voice.default.set", error)
+
+
+@default_app.command("show")
+def voice_default_show(ctx: typer.Context) -> None:
+    """Show the effective project-first default voice."""
+
+    try:
+        project = None
+        try:
+            from facut.cli.common import manager_for
+
+            project = manager_for(_state(ctx)).project_dir
+        except Exception:
+            project = None
+        profile = VoiceProfileStore().get_default(project=project)
+        _emit(
+            ctx,
+            "voice.default.show",
+            {"profile": profile.public_dict() if profile else None},
+            warnings=[] if profile else ["No default voice is configured."],
+        )
+    except Exception as error:
+        _fail(ctx, "voice.default.show", error)
+
+
 @provider_app.command("status")
 def voice_provider_status(
     ctx: typer.Context,
@@ -293,6 +425,137 @@ def voice_provider_configure(
         _fail(ctx, "voice.provider.configure", error)
 
 
+@serve_app.command("start")
+def voice_serve_start(
+    ctx: typer.Context,
+    device: Annotated[str, typer.Option("--device")] = "auto",
+    require_cuda: Annotated[bool, typer.Option("--require-cuda")] = False,
+    idle_timeout: Annotated[
+        float, typer.Option("--idle-timeout", min=0, help="Idle shutdown in seconds; 0 disables it.")
+    ] = 600.0,
+    port: Annotated[int, typer.Option("--port", min=0, max=65535)] = 0,
+    provider: Annotated[Path | None, typer.Option("--provider")] = None,
+) -> None:
+    """Start an authenticated loopback service and preload the voice model."""
+
+    try:
+        data = start_voice_service(
+            provider=provider,
+            device=device,
+            require_cuda=require_cuda,
+            idle_timeout=idle_timeout,
+            port=port,
+        )
+        _emit(ctx, "voice.serve.start", data, warnings=data.get("warnings"))
+    except Exception as error:
+        _fail(ctx, "voice.serve.start", error)
+
+
+@serve_app.command("status")
+def voice_serve_status(ctx: typer.Context) -> None:
+    """Report device, CUDA, model, process, timing and warm-service state."""
+
+    try:
+        data = voice_service_status()
+        warnings = [] if data.get("running") else ["The local voice service is not running."]
+        _emit(ctx, "voice.serve.status", data, warnings=warnings)
+    except Exception as error:
+        _fail(ctx, "voice.serve.status", error)
+
+
+@serve_app.command("stop")
+def voice_serve_stop(ctx: typer.Context) -> None:
+    """Stop the local warm voice service and remove its state file."""
+
+    try:
+        _emit(ctx, "voice.serve.stop", stop_voice_service())
+    except Exception as error:
+        _fail(ctx, "voice.serve.stop", error)
+
+
+@voice_app.command("say")
+def voice_say(
+    ctx: typer.Context,
+    text: Annotated[str, typer.Argument()],
+    output: Annotated[Path, typer.Option("--output", "-o")],
+    voice: Annotated[
+        str | None, typer.Option("--voice", help="Voice ID, alias, or unique display name.")
+    ] = None,
+    style: Annotated[str, typer.Option("--style")] = "auto",
+    takes: Annotated[int, typer.Option("--takes", min=1, max=10)] = 1,
+    speed: Annotated[float, typer.Option("--speed", min=0.5, max=2.0)] = 1.0,
+    intensity: Annotated[float, typer.Option("--intensity", min=0.0, max=1.0)] = 0.5,
+    instruction: Annotated[str | None, typer.Option("--instruction")] = None,
+    purpose: Annotated[str | None, typer.Option("--purpose")] = None,
+    device: Annotated[str, typer.Option("--device")] = "auto",
+    require_cuda: Annotated[bool, typer.Option("--require-cuda")] = False,
+    use_service: Annotated[
+        bool, typer.Option("--service/--no-service", help="Use the warm local model service.")
+    ] = True,
+    provider: Annotated[Path | None, typer.Option("--provider")] = None,
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+) -> None:
+    """Generate audition-first narration candidates without editing a timeline."""
+
+    try:
+        destination = output.expanduser().resolve()
+        if destination.suffix.casefold() != ".wav":
+            raise ValueError("Voice output must use the .wav extension.")
+        destinations = [
+            destination
+            if takes == 1
+            else destination.with_name(f"{destination.stem}-take-{index + 1}{destination.suffix}")
+            for index in range(takes)
+        ]
+        existing = [item for item in destinations if item.exists()]
+        if existing and not overwrite:
+            raise FileExistsError(f'Output "{existing[0]}" already exists; use --overwrite.')
+
+        store = VoiceProfileStore()
+        project = None
+        try:
+            from facut.cli.common import manager_for
+
+            project = manager_for(_state(ctx)).project_dir
+        except Exception:
+            project = None
+        profile = store.resolve(voice) if voice else store.get_default(project=project)
+        if profile is None:
+            raise ValueError(
+                "No voice was selected and no default voice is configured. "
+                "Use --voice or run `facut voice default set`."
+            )
+        result = synthesize_voice_say(
+            profile,
+            store.profile_directory(profile.id),
+            text,
+            destination.parent / ".facut-voice-cache",
+            style=style,
+            takes=takes,
+            speed=speed,
+            intensity=intensity,
+            instruction=instruction,
+            purpose=purpose,
+            provider=provider,
+            use_service=use_service,
+            service_options={"device": device, "require_cuda": require_cuda},
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        for item, final_path in zip(result["outputs"], destinations, strict=True):
+            generated = Path(str(item["output"])).expanduser().resolve()
+            with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False, suffix=".wav") as stream:
+                temporary = Path(stream.name)
+            try:
+                shutil.copy2(generated, temporary)
+                os.replace(temporary, final_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            item["output"] = str(final_path)
+        _emit(ctx, "voice.say", result, warnings=result.get("warnings"))
+    except Exception as error:
+        _fail(ctx, "voice.say", error)
+
+
 @voice_app.command("synthesize")
 def voice_synthesize(
     ctx: typer.Context,
@@ -314,6 +577,9 @@ def voice_synthesize(
         typer.Option("--instruction", help="Optional additional delivery guidance."),
     ] = None,
     takes: Annotated[int, typer.Option("--takes", min=1, max=3)] = 1,
+    use_service: Annotated[bool, typer.Option("--service/--no-service")] = True,
+    device: Annotated[str, typer.Option("--device")] = "auto",
+    require_cuda: Annotated[bool, typer.Option("--require-cuda")] = False,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
 ) -> None:
     """Synthesize one or more expressive takes with an authorized voice profile."""
@@ -344,10 +610,14 @@ def voice_synthesize(
         if existing and not overwrite:
             raise FileExistsError(f'Output "{existing[0]}" already exists; use --overwrite.')
         store = VoiceProfileStore()
-        profile = store.get(profile_id)
-        result = synthesize_with_provider(
+        profile = store.resolve(profile_id)
+        synthesize = synthesize_with_voice_service if use_service else synthesize_with_provider
+        options = {"device": device, "require_cuda": require_cuda} if use_service else {}
+        if provider is not None:
+            options["provider"] = provider
+        result = synthesize(
             profile,
-            store.profile_directory(profile_id),
+            store.profile_directory(profile.id),
             [
                 {
                     "text": text,
@@ -360,7 +630,7 @@ def voice_synthesize(
                 for style, take_index in line_specs
             ],
             destination.parent / ".facut-voice-cache",
-            provider=provider,
+            **options,
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         for item, final_path in zip(result["outputs"], destinations, strict=True):

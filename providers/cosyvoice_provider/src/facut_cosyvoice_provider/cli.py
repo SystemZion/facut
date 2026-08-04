@@ -13,6 +13,11 @@ import time
 import traceback
 from typing import Any
 
+# Respect an explicit CPU service before importing torch.  The normal default
+# remains CUDA when available.
+if os.environ.get("FACUT_VOICE_DEVICE", "auto").casefold() == "cpu":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 import numpy as np
 import soundfile
 from scipy.signal import butter, sosfilt
@@ -23,6 +28,8 @@ import torchaudio
 PROTOCOL = "facut-voice-provider/1.0"
 MODEL_VERSION = "Fun-CosyVoice3-0.5B-2512"
 REFERENCE_PROCESSING_VERSION = "v2"
+STREAM_PROTOCOL = "facut-voice-provider-jsonl/1.0"
+_MODEL_CONTEXT: dict[str, Any] | None = None
 
 DELIVERY_INSTRUCTIONS = {
     "natural": (
@@ -253,6 +260,58 @@ def _output_path(
     return directory / f"line-{index + 1:03d}-{digest}.wav"
 
 
+def _load_model_context() -> dict[str, Any]:
+    """Load CosyVoice once per provider process and expose honest device state."""
+
+    global _MODEL_CONTEXT
+    if _MODEL_CONTEXT is not None:
+        return _MODEL_CONTEXT
+    started = time.perf_counter()
+    runtime, model_path, wetext_path = _paths()
+    requested_device = os.environ.get("FACUT_VOICE_DEVICE", "auto").casefold()
+    if requested_device not in {"auto", "cuda", "cpu"}:
+        raise ValueError("FACUT_VOICE_DEVICE must be auto, cuda, or cpu.")
+    cuda_available = torch.cuda.is_available()
+    require_cuda = os.environ.get("FACUT_VOICE_REQUIRE_CUDA") == "1"
+    if require_cuda and not cuda_available:
+        raise RuntimeError("CUDA was required, but PyTorch cannot access a CUDA device.")
+    if requested_device == "cuda" and not cuda_available:
+        raise RuntimeError("CUDA was requested, but PyTorch cannot access a CUDA device.")
+    device = "cuda" if cuda_available and requested_device != "cpu" else "cpu"
+    matcha = runtime / "third_party" / "Matcha-TTS"
+    sys.path.insert(0, str(runtime))
+    sys.path.insert(0, str(matcha))
+    if wetext_path is not None:
+        import wetext.wetext as wetext_module
+
+        wetext_module.snapshot_download = lambda *args, **kwargs: str(wetext_path)
+
+    import cosyvoice.cli.frontend as frontend_module
+    from cosyvoice.cli.cosyvoice import CosyVoice3
+
+    frontend_module.load_wav = _soundfile_load_wav
+    with redirect_stdout(sys.stderr):
+        model = CosyVoice3(str(model_path), fp16=device == "cuda")
+    gpu = torch.cuda.get_device_name(0) if device == "cuda" else None
+    vram = None
+    if device == "cuda":
+        vram = {
+            "allocated_mib": round(torch.cuda.memory_allocated(0) / 1024 / 1024, 1),
+            "reserved_mib": round(torch.cuda.memory_reserved(0) / 1024 / 1024, 1),
+        }
+    _MODEL_CONTEXT = {
+        "model": model,
+        "model_path": model_path,
+        "device": device,
+        "compute_type": "float16" if device == "cuda" else "float32",
+        "cuda": device == "cuda",
+        "gpu": gpu,
+        "vram": vram,
+        "load_seconds": round(time.perf_counter() - started, 3),
+    }
+    return _MODEL_CONTEXT
+
+
 def synthesize(request: dict[str, Any]) -> dict[str, Any]:
     if request.get("protocol") != PROTOCOL or request.get("action") != "synthesize":
         raise ValueError("Unsupported FACUT voice provider request.")
@@ -266,24 +325,11 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(lines, list) or not lines:
         raise ValueError("At least one narration line is required.")
 
-    runtime, model_path, wetext_path = _paths()
-    matcha = runtime / "third_party" / "Matcha-TTS"
-    sys.path.insert(0, str(runtime))
-    sys.path.insert(0, str(matcha))
-    if wetext_path is not None:
-        import wetext.wetext as wetext_module
-
-        wetext_module.snapshot_download = lambda *args, **kwargs: str(wetext_path)
-
-    import cosyvoice.cli.frontend as frontend_module
-    from cosyvoice.cli.cosyvoice import CosyVoice3
-
-    frontend_module.load_wav = _soundfile_load_wav
+    context = _load_model_context()
+    model = context["model"]
     profile_directory = Path(str(request["profile_directory"])).resolve()
     output_directory = Path(str(request["output_directory"])).resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
-    with redirect_stdout(sys.stderr):
-        model = CosyVoice3(str(model_path), fp16=torch.cuda.is_available())
     outputs: list[dict[str, Any]] = []
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
@@ -362,12 +408,64 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
         "status": "success",
         "provider": "facut-cosyvoice3-local",
         "model_version": MODEL_VERSION,
+        "device": context["device"],
+        "compute_type": context["compute_type"],
         "outputs": outputs,
         "warnings": [],
     }
 
 
+def _stream_ready() -> dict[str, Any]:
+    context = _load_model_context()
+    return {
+        "status": "ready",
+        "protocol": STREAM_PROTOCOL,
+        "provider": "facut-cosyvoice3-local",
+        "model_version": MODEL_VERSION,
+        "model_path": str(context["model_path"]),
+        "device": context["device"],
+        "compute_type": context["compute_type"],
+        "cuda": context["cuda"],
+        "gpu": context["gpu"],
+        "vram": context["vram"],
+        "model_load_seconds": context["load_seconds"],
+        "persistent": True,
+    }
+
+
+def _run_jsonl() -> None:
+    print(json.dumps(_stream_ready(), ensure_ascii=True, separators=(",", ":")), flush=True)
+    for raw in sys.stdin:
+        try:
+            request = json.loads(raw)
+            if request.get("action") == "shutdown":
+                return
+            response = synthesize(request)
+        except Exception as error:
+            print(
+                f"{error.__class__.__name__}: {error}\n"
+                + traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii"),
+                file=sys.stderr,
+            )
+            response = {
+                "status": "error",
+                "error": {"code": "VOICE_PROVIDER_FAILED", "message": str(error)},
+            }
+        print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
+
+
 def main() -> None:
+    if "--facut-voice-jsonl" in sys.argv:
+        try:
+            _run_jsonl()
+        except Exception as error:
+            print(f"{error.__class__.__name__}: {error}", file=sys.stderr)
+            print(
+                traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii"),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from error
+        return
     if "--facut-voice-json" not in sys.argv:
         print("facut-cosyvoice-provider requires --facut-voice-json", file=sys.stderr)
         raise SystemExit(2)

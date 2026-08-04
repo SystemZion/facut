@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 import wave
 
 from facut.voice import RecordingStudioServer, VoiceProfileStore
+from facut.voice.scripts import build_recording_plan
 
 
 def _wav_bytes(seconds: float = 1.0) -> bytes:
@@ -164,3 +165,62 @@ def test_recording_server_rejects_unauthorized_and_invalid_audio(tmp_path) -> No
             raise AssertionError("Invalid WAV was accepted")
     finally:
         studio.close()
+
+
+def test_studio_can_start_empty_and_create_first_named_profile(tmp_path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    studio = RecordingStudioServer(store=store, mode="quick", port=0)
+    thread = studio.start_background()
+    try:
+        with urlopen(studio.url, timeout=5) as response:
+            page = response.read().decode("utf-8")
+        assert "尚未创建" in page
+        assert "+ 新建声音" in page
+        assert "if(!HAS_PROFILE)" in page
+        token = studio.session.token
+        status, session = _json(
+            Request(studio.url + "api/session", headers={"X-Facut-Token": token})
+        )
+        assert status == 200
+        assert session["data"]["profile"] is None
+        assert session["data"]["requires_profile_creation"] is True
+        assert session["data"]["plan"]["mode"] == "quick"
+
+        created_status, created = _json(
+            Request(
+                studio.url + "api/profiles",
+                data=json.dumps(
+                    {
+                        "name": "Zion",
+                        "consent": "self",
+                        "consent_statement": "I confirm this is my own voice and authorize local synthesis.",
+                        "mode": "recommended",
+                    }
+                ).encode("utf-8"),
+                method="POST",
+                headers={"X-Facut-Token": token, "Content-Type": "application/json"},
+            )
+        )
+        assert created_status == 201
+        assert created["data"]["profile"]["display_name"] == "Zion"
+        assert created["data"]["profile"]["speaker_id"] == "Zion"
+        assert created["data"]["plan"]["mode"] == "recommended"
+        assert len(created["data"]["plan"]["prompts"]) == 8
+    finally:
+        studio.close()
+        thread.join(timeout=5)
+
+
+def test_recording_modes_have_expected_varied_prompt_counts(tmp_path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    profile = store.get(_profile(store))
+    quick = build_recording_plan(profile, script="quick")
+    recommended = build_recording_plan(profile, script="recommended")
+    styles = build_recording_plan(profile, script="styles")
+
+    assert len(quick["prompts"]) == 3
+    assert len(recommended["prompts"]) == 8
+    assert len(styles["prompts"]) == 5
+    assert {item["delivery"] for item in recommended["prompts"]} >= {
+        "natural", "broadcast", "chat", "comedy", "excited"
+    }

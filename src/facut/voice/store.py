@@ -21,6 +21,20 @@ from .models import ConsentRecord, VoiceProfile, VoiceSample
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+class VoiceProfileAmbiguousError(ValueError):
+    """Raised when a human-readable selector matches multiple profiles."""
+
+    code = "VOICE_AMBIGUOUS"
+    exit_code = 2
+
+
+class VoiceAliasConflictError(ValueError):
+    """Raised when an alias is already owned by another profile."""
+
+    code = "VOICE_ALIAS_CONFLICT"
+    exit_code = 2
+
+
 def _platform_voice_homes() -> tuple[Path, Path]:
     """Return the canonical and pre-0.5.3 platform voice directories.
 
@@ -197,6 +211,130 @@ class VoiceProfileStore:
         for path in sorted(self.profiles_dir.glob("voice_*/profile.json")):
             profiles.append(VoiceProfile.model_validate_json(path.read_text(encoding="utf-8")))
         return sorted(profiles, key=lambda item: (item.display_name.casefold(), item.id))
+
+    def resolve(self, selector: str) -> VoiceProfile:
+        """Resolve a profile by stable ID, unique alias, or unique display name.
+
+        IDs have highest priority, followed by aliases. Display names are
+        intentionally allowed to repeat, but a repeated name is never guessed.
+        Matching for human-readable selectors is case-insensitive.
+        """
+
+        value = selector.strip()
+        if not value:
+            raise ValueError("Voice profile selector cannot be empty.")
+        if re.fullmatch(r"voice_[A-Z0-9_]{4,64}", value):
+            return self.get(value)
+        profiles = self.list()
+        key = value.casefold()
+        alias_matches = [
+            profile
+            for profile in profiles
+            if any(alias.casefold() == key for alias in profile.aliases)
+        ]
+        if len(alias_matches) == 1:
+            return alias_matches[0]
+        if len(alias_matches) > 1:
+            raise VoiceProfileAmbiguousError(
+                f'Voice selector "{selector}" matches multiple aliases: '
+                + ", ".join(item.id for item in alias_matches)
+                + ". Use the stable voice ID."
+            )
+        name_matches = [
+            profile for profile in profiles if profile.display_name.casefold() == key
+        ]
+        if len(name_matches) == 1:
+            return name_matches[0]
+        if len(name_matches) > 1:
+            raise VoiceProfileAmbiguousError(
+                f'Voice selector "{selector}" matches multiple display names: '
+                + ", ".join(item.id for item in name_matches)
+                + ". Assign a unique alias or use the stable voice ID."
+            )
+        raise FileNotFoundError(f'Voice profile "{selector}" was not found.')
+
+    def rename(self, selector: str, display_name: str) -> VoiceProfile:
+        """Rename a profile without changing its stable identity or samples."""
+
+        name = display_name.strip()
+        if not name:
+            raise ValueError("Voice profile display name cannot be empty.")
+        profile = self.resolve(selector)
+        profile.display_name = name
+        self._save(profile)
+        return profile
+
+    def set_alias(self, selector: str, alias: str) -> VoiceProfile:
+        """Add a globally unique command-line alias to one profile."""
+
+        value = alias.strip()
+        profile = self.resolve(selector)
+        # Let the model validator enforce whitespace and length constraints.
+        profile.aliases = [*profile.aliases, value]
+        key = value.casefold()
+        for other in self.list():
+            if other.id == profile.id:
+                continue
+            if other.id.casefold() == key or any(
+                existing.casefold() == key for existing in other.aliases
+            ) or other.display_name.casefold() == key:
+                raise VoiceAliasConflictError(
+                    f'Voice alias "{alias}" conflicts with {other.id}.'
+                )
+        self._save(profile)
+        return profile
+
+    @staticmethod
+    def _project_default_path(project: str | Path) -> Path:
+        target = Path(project).expanduser().resolve()
+        project_dir = target.parent if target.is_file() or target.name == "facut.json" else target
+        return project_dir / ".facut" / "voice-default.json"
+
+    def set_default(
+        self,
+        selector: str,
+        *,
+        scope: str = "global",
+        project: str | Path | None = None,
+    ) -> VoiceProfile:
+        """Persist a stable default profile ID globally or for one project."""
+
+        profile = self.resolve(selector)
+        if scope == "global":
+            destination = self.root / "default.json"
+        elif scope == "project":
+            if project is None:
+                raise ValueError("A project path is required for a project-scoped default voice.")
+            destination = self._project_default_path(project)
+        else:
+            raise ValueError('Voice default scope must be "global" or "project".')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": "1.0", "profile_id": profile.id, "scope": scope}
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination.parent, delete=False, suffix=".tmp"
+        ) as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            temporary = Path(stream.name)
+        os.replace(temporary, destination)
+        return profile
+
+    def get_default(self, *, project: str | Path | None = None) -> VoiceProfile | None:
+        """Return a project default, then the global default, if still present."""
+
+        candidates: list[Path] = []
+        if project is not None:
+            candidates.append(self._project_default_path(project))
+        candidates.append(self.root / "default.json")
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                return self.get(str(payload["profile_id"]))
+            except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return None
 
     def import_samples(
         self,

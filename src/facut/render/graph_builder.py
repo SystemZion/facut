@@ -649,7 +649,7 @@ class GraphBuilder:
         # while allowing music and effects to overlap freely.
         mix_labels = [current_a]
         audio_clips = [
-            clip
+            (audio_track, clip)
             for audio_track in self.project.tracks
             if audio_track.enabled
             and not audio_track.muted
@@ -663,7 +663,8 @@ class GraphBuilder:
                 key=lambda item: (item.timeline_start, item.id),
             )
         ]
-        for audio_index, clip in enumerate(audio_clips):
+        ducking_regions = list(self.project.settings.get("audio_ducking") or [])
+        for audio_index, (audio_track, clip) in enumerate(audio_clips):
             asset = self.project.find_media(clip.media_id)
             if asset is None:
                 raise ValueError(
@@ -708,6 +709,26 @@ class GraphBuilder:
             if clip.timeline_start:
                 delay_ms = max(0, round(clip.timeline_start * 1000))
                 audio_chain.append(f"adelay={delay_ms}:all=1")
+            for duck in ducking_regions:
+                if audio_track.id not in set(duck.get("target_tracks") or []):
+                    continue
+                start = max(0.0, float(duck["start"]))
+                end = min(current_duration, float(duck["end"]))
+                if end <= start:
+                    continue
+                reduction_db = min(0.0, float(duck.get("reduction_db", -12.0)))
+                gain = 10 ** (reduction_db / 20.0)
+                attack = max(0.001, float(duck.get("attack_ms", 100.0)) / 1000.0)
+                release = max(0.001, float(duck.get("release_ms", 500.0)) / 1000.0)
+                expression = (
+                    f"if(lt(t\\,{_fmt(max(0.0, start - attack))})\\,1\\,"
+                    f"if(lt(t\\,{_fmt(start)})\\,"
+                    f"1-(1-{_fmt(gain)})*(t-{_fmt(max(0.0, start - attack))})/{_fmt(attack)}\\,"
+                    f"if(lte(t\\,{_fmt(end)})\\,{_fmt(gain)}\\,"
+                    f"if(lt(t\\,{_fmt(end + release)})\\,"
+                    f"{_fmt(gain)}+(1-{_fmt(gain)})*(t-{_fmt(end)})/{_fmt(release)}\\,1))))"
+                )
+                audio_chain.append(f"volume='{expression}':eval=frame")
             audio_chain.extend(
                 [
                     f"apad=whole_dur={_fmt(current_duration)}",

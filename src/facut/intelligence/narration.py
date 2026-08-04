@@ -175,3 +175,49 @@ def build_narration_plan(
             "This command does not call an online language model; an Agent may rewrite only from the supplied evidence.",
         ],
     }
+
+
+def generate_narration_plan(
+    document: ProjectDocument,
+    semantic_index: dict[str, Any],
+    *,
+    style: str = "natural-vlog",
+    language: str = "zh-CN",
+    max_lines: int = 12,
+    minimum_confidence: float = 0.55,
+    provider: str = "deterministic",
+) -> "NarrationPlan":
+    """Build a validated plan without pretending that a text model was called.
+
+    ``deterministic`` is always available and preserves the existing evidence-grounded
+    draft behavior.  Other provider names are rejected until an actual local provider
+    adapter has been configured by the caller.
+    """
+
+    from .narration_plan import (
+        NarrationPlan,
+        NarrationProviderNotConfigured,
+        narration_plan_from_suggestions,
+    )
+
+    if provider != "deterministic":
+        raise NarrationProviderNotConfigured(
+            f'Narration text provider "{provider}" is not configured.',
+            suggestion=(
+                "Use provider=deterministic for an evidence-grounded review draft, "
+                "or configure a real local text provider before requesting it."
+            ),
+            details={"requested_provider": provider, "fallback_used": False},
+        )
+    normalized_style = "natural-vlog" if style == "weekend-vlog" else style
+    suggestions = build_narration_plan(
+        document,
+        semantic_index,
+        style=normalized_style,
+        language=language,
+        max_lines=max_lines,
+        minimum_confidence=minimum_confidence,
+    )
+    if style == "weekend-vlog":
+        suggestions["style"] = style
+    return narration_plan_from_suggestions(document, suggestions, provider=provider)

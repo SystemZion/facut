@@ -36,7 +36,8 @@ class CommandEngine:
     def execute(
         self, action: str, parameters: dict[str, Any], *, dry_run: bool = False
     ) -> dict[str, Any]:
-        command = {"action": action, **parameters}
+        public_command = {"action": action, **parameters}
+        command = self.prepare_command(public_command)
 
         def operation(document: ProjectDocument) -> Any:
             return self.apply(document, command)
@@ -45,7 +46,7 @@ class CommandEngine:
             action,
             self.summary(action, parameters),
             operation,
-            command=command,
+            command=public_command,
             dry_run=dry_run,
         )
         return {
@@ -82,12 +83,16 @@ class CommandEngine:
                 "dry_run": dry_run,
             }
 
+        prepared_commands: list[dict[str, Any]] = []
+        for command in commands:
+            if not isinstance(command, dict) or "action" not in command:
+                raise CommandEngineError("Every command requires an action.")
+            prepared_commands.append(self.prepare_command(command))
+
         results: list[Any] = []
 
         def operation(document: ProjectDocument) -> list[Any]:
-            for command in commands:
-                if not isinstance(command, dict) or "action" not in command:
-                    raise CommandEngineError("Every command requires an action.")
+            for command in prepared_commands:
                 results.append(self.apply(document, command))
             return results
 
@@ -107,6 +112,21 @@ class CommandEngine:
             "project_revision": state.revision,
             "dry_run": dry_run,
         }
+
+    def prepare_command(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Resolve file-backed actions before entering a project transaction.
+
+        Prepared commands contain only validated, serializable inputs and can be
+        applied alongside normal timeline commands in one atomic batch.
+        """
+
+        action = command.get("action")
+        if action == "narration.apply":
+            from facut.intelligence.narration_plan import prepare_narration_apply
+
+            parameters = {key: value for key, value in command.items() if key != "action"}
+            return prepare_narration_apply(self.manager, **parameters)
+        return deepcopy(command)
 
     @staticmethod
     def apply(document: ProjectDocument, command: dict[str, Any]) -> Any:
@@ -157,6 +177,10 @@ class CommandEngine:
             "transition.add": timeline.add_transition,
             "transition.remove": timeline.remove_transition,
         }
+        if action == "narration.apply.prepared":
+            from facut.intelligence.narration_plan import apply_prepared_narration
+
+            return apply_prepared_narration(document, command)
         handler = handlers.get(action)
         if handler is None:
             raise CommandEngineError(f"Unsupported action: {action}")
