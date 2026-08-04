@@ -60,21 +60,64 @@ _STYLE_CAPSULES = [
     ),
 ]
 
+_QUICK_PROMPTS = [
+    ("natural-vlog", "natural", "今天没有安排特别赶的行程，我们就沿着这条路慢慢走，看到喜欢的地方再停下来。"),
+    ("friendly-chat", "chat", "你看前面那个位置，刚才从外面还没觉得有什么，走近以后视野一下子就打开了。"),
+    ("real-excitement", "excited", "快看，真的到了！转过这个弯以后整个景色都出来了，比照片里看到的还要壮观。"),
+]
+
+_RECOMMENDED_PROMPTS = [
+    _QUICK_PROMPTS[0],
+    ("clear-information", "broadcast", "现在是下午四点二十分，我们已经到达今天的第二个目的地，接下来先参观主展厅。"),
+    _QUICK_PROMPTS[1],
+    ("numbers", "natural", "今天是八月四日，三个人一共花了一百二十八元，晚上七点半准备返程。"),
+    ("question", "chat", "如果只留一个小时，你会先去看展览，还是沿着河边慢慢走一段？"),
+    ("reflection", "natural", "有些瞬间其实不需要太多解释，保留脚步声和风声，反而会显得更真实。"),
+    ("light-comedy", "comedy", "出发前大家都说自己认识路，十分钟以后，三部手机非常坚定地指出了三个方向。"),
+    _QUICK_PROMPTS[2],
+]
+
+_SCRIPT_ALIASES = {
+    "quick": "vlog-quick-v1",
+    "recommended": "vlog-recommended-v1",
+    "styles": "vlog-style-capsules-v1",
+}
+
 
 def build_recording_plan(
-    profile: VoiceProfile, *, target_minutes: int = 10, script: str = "mandarin-balanced-v1"
+    profile: VoiceProfile | None,
+    *,
+    target_minutes: int = 10,
+    script: str = "mandarin-balanced-v1",
 ) -> dict[str, Any]:
-    if script not in {"mandarin-balanced-v1", "vlog-style-capsules-v1"}:
+    script = _SCRIPT_ALIASES.get(script, script)
+    if script not in {
+        "mandarin-balanced-v1",
+        "vlog-quick-v1",
+        "vlog-recommended-v1",
+        "vlog-style-capsules-v1",
+    }:
         raise ValueError(f'Unknown recording script "{script}".')
     if target_minutes < 1 or target_minutes > 60:
         raise ValueError("target_minutes must be between 1 and 60.")
     prompts = []
-    if script == "vlog-style-capsules-v1":
+    if script == "vlog-quick-v1":
+        target_minutes = 1
+        source_prompts = _QUICK_PROMPTS
+    elif script == "vlog-recommended-v1":
         target_minutes = 2
-        for index, (category, delivery, prompt_text) in enumerate(_STYLE_CAPSULES):
+        source_prompts = _RECOMMENDED_PROMPTS
+    elif script == "vlog-style-capsules-v1":
+        target_minutes = 2
+        source_prompts = _STYLE_CAPSULES
+    else:
+        source_prompts = []
+    if source_prompts:
+        prefix = "style" if script == "vlog-style-capsules-v1" else "prompt"
+        for index, (category, delivery, prompt_text) in enumerate(source_prompts):
             prompts.append(
                 {
-                    "id": f"style_{delivery}",
+                    "id": f"{prefix}_{index + 1:03d}_{delivery}",
                     "text": prompt_text,
                     "category": category,
                     "delivery": delivery,
@@ -96,9 +139,14 @@ def build_recording_plan(
             )
     return {
         "version": "1.0",
-        "profile_id": profile.id,
-        "language": profile.language,
-        "style": profile.style,
+        "profile_id": profile.id if profile is not None else None,
+        "language": profile.language if profile is not None else "zh-CN",
+        "style": profile.style if profile is not None else "natural-vlog",
+        "mode": {
+            "vlog-quick-v1": "quick",
+            "vlog-recommended-v1": "recommended",
+            "vlog-style-capsules-v1": "styles",
+        }.get(script, "balanced"),
         "script": script,
         "target_minutes": target_minutes,
         "recording": {
@@ -112,6 +160,8 @@ def build_recording_plan(
             "delivery_modes": list(dict.fromkeys(item["delivery"] for item in prompts)),
             "balanced_short_plan": script == "mandarin-balanced-v1" and len(prompts) == 10,
             "style_capsules": script == "vlog-style-capsules-v1",
+            "quick_trial": script == "vlog-quick-v1",
+            "recommended_vlog": script == "vlog-recommended-v1",
         },
         "prompts": prompts,
         "instructions": [

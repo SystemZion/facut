@@ -136,6 +136,42 @@ def test_graph_contains_real_xfade(tmp_path: Path) -> None:
     assert graph.duration == pytest.approx(3.5)
 
 
+def test_graph_compiles_narration_music_ducking_with_ramps(tmp_path: Path) -> None:
+    for name in ("red.mp4", "blue.mp4", "music.wav"):
+        (tmp_path / name).write_bytes(b"placeholder")
+    document = _document(tmp_path)
+    document.media.append(
+        MediaAsset(
+            id="music",
+            kind=MediaKind.AUDIO,
+            path="music.wav",
+            original_name="music.wav",
+            size=11,
+            sha256="3" * 64,
+            technical=MediaTechnicalInfo(duration=3.5, audio_codec="pcm_s16le"),
+        )
+    )
+    timeline = TimelineEngine(document)
+    track = timeline.add_track("audio", "Music", "A_MUSIC")
+    track.metadata["role"] = "music"
+    timeline.add_audio_clip("music", "A_MUSIC", source_out=3.5)
+    document.settings["audio_ducking"] = [
+        {
+            "source_track": "A_NARRATION",
+            "target_tracks": ["A_MUSIC"],
+            "start": 1.0,
+            "end": 2.0,
+            "reduction_db": -12.0,
+            "attack_ms": 100,
+            "release_ms": 500,
+        }
+    ]
+    graph = GraphBuilder(document, tmp_path).build()
+    assert "volume='if(lt(t\\,0.9)" in graph.filter_complex
+    assert "1-(1-0.251" in graph.filter_complex
+    assert "eval=frame" in graph.filter_complex
+
+
 def test_keyframed_position_is_evaluated_by_overlay_not_pad(tmp_path: Path) -> None:
     for name in ("red.mp4", "blue.mp4"):
         (tmp_path / name).write_bytes(b"placeholder")

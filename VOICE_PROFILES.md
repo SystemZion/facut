@@ -2,7 +2,7 @@
 
 ## 当前实现状态
 
-0.5.3 已实现多档案、独立授权、PCM WAV 导入、哈希去重、本机浏览器录音室、录音计划、录音 QC、可恢复删除/恢复、Agent Schema 与本地 Provider 协议。CosyVoice3 本地提供器已经完成真实本人声音合成验证；大模型通过 `facut download voice_model` 单独下载，不捆绑进 GitHub 或主 EXE。档案静态加密仍未实现。
+0.6.1 已实现多档案、任意命名、ID/alias/唯一显示名解析、工程默认声音、三种短录制模式、断点续录、五种语气、多候选试听、常驻 GPU 服务及审核后时间线应用。CosyVoice3 模型通过 `facut download voice_model` 单独下载，不捆绑进 GitHub 或主 EXE。档案静态加密仍未实现。
 
 ## 目标
 
@@ -51,13 +51,18 @@ facut voice synthesize <VOICE_ID> "今天我们出去走走。" --delivery refle
 facut voice styles --json
 facut voice record <VOICE_ID> --script vlog-style-capsules-v1
 facut voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,comedy,excited --output narration.wav
+facut voice studio --mode recommended
+facut voice alias set <VOICE_ID> zion
+facut voice default set zion --scope project
+facut voice serve start --device cuda --require-cuda
+facut voice say "今天我们出去走走。" --voice zion --style auto --takes 2 --output narration.wav
 ```
 
 `voice synthesize` 会根据语气选择匹配度更高的参考片段，去除参考音频首尾近静音，按语义切分长文并插入不同长度的句间停顿。默认 `natural-vlog` 使用 CosyVoice3 的自然语言指令控制；`--delivery reference` 可用于与旧式纯零样本生成进行 A/B 对比。
 
 `vlog-style-capsules-v1` 是可选增量录音，不替换已有原始样本。它包含自然、播音、聊天、搞笑、激动五条自由度较高的长句，总目标约 2 分钟；录音导入时同时保存 `category` 与 `delivery`，供后续确定性参考选择使用。
 
-`voice record` 启动仅绑定 `127.0.0.1` 的本地录音页，提供麦克风选择、实时电平、逐句提示、试听、重录和保存时 QC；完成后临时服务自动退出。基础档案建议录制 10–20 分钟干净语音；高质量档案建议 30–45 分钟。每种额外风格再录 3–5 分钟，避免用强行提示词模拟不存在的情绪。
+`voice studio` 启动仅绑定 `127.0.0.1` 的本地录音页，提供麦克风选择、实时电平、逐句提示、试听、重录和保存时 QC。默认 `recommended` 只需约 90–120 秒；`quick` 为 3 条试用，`styles` 为 5 条风格增强。更多录音仍能提高稳定性，但不是使用 0.6.1 的前置条件，现有样本不会被要求重录。
 
 录音规格：
 

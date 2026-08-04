@@ -153,7 +153,11 @@ class TimelineEngine:
         raise TimelineItemNotFound(f'Clip "{clip_id}" was not found.')
 
     def add_track(
-        self, track_type: str | TrackType, name: str, track_id: str | None = None
+        self,
+        track_type: str | TrackType,
+        name: str,
+        track_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> Track:
         parsed_type = TrackType(track_type)
         candidate = track_id or name
@@ -175,6 +179,7 @@ class TimelineEngine:
             type=parsed_type,
             name=name,
             order=len(self.project.tracks),
+            metadata=dict(metadata or {}),
         )
         self.project.tracks.append(track)
         return track

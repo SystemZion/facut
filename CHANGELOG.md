@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.1 — 2026-08-04
+
+- Added `voice studio` with no-ID startup, arbitrary profile names, profile
+  switching, resumable progress, and quick/recommended/style-capsule modes.
+- Added stable ID/alias/unique-display-name voice selection, recoverable profile
+  rename, and project/global default voices without changing existing WAV files.
+- Added the authenticated loopback `voice serve` daemon and persistent CosyVoice
+  JSONL protocol so CUDA models can remain loaded between synthesis requests.
+- Added audition-first `voice say`, deterministic `auto` style selection,
+  intensity/speed controls, multi-take outputs, and explicit CUDA enforcement.
+- Added strict narration plans and `narration generate/review/synthesize/apply`;
+  only reviewed previews enter a dedicated narration track in one undoable
+  revision, with hash, project and revision preflight checks.
+- Added real render-graph music ducking ramps for narration regions while
+  preserving camera/original audio.
+- Added declarative `recipe validate/plan/build`, JSON Schemas and Agent actions.
+  CLI builds render to a temporary file and only publish a completed output.
+- Added the hidden frozen-EXE daemon entry point and synchronized package/runtime
+  version metadata at `0.6.1`.
+
+Known limitation: deterministic narration drafting is built in; requesting an
+unconfigured local text model returns `PROVIDER_NOT_CONFIGURED` rather than
+pretending that AI text generation occurred.
+
 ## 0.6.0 — 2026-08-02
 
 - Added `facut install`, `facut update`, user-PATH registration, atomic EXE

@@ -53,6 +53,10 @@ def public_error(error: Exception) -> FacutError:
         return TimelineConflictError(message, suggestion=suggestion, details=details)
     if code in {"PROJECT_NOT_FOUND", "FILE_NOT_FOUND"}:
         return ResourceNotFoundError(message, suggestion=suggestion)
+    if code in {"VOICE_AMBIGUOUS", "VOICE_ALIAS_CONFLICT", "INVALID_COMMAND"}:
+        public = InvalidArgumentError(message, suggestion=suggestion, details=details)
+        public.code = code
+        return public
     return InvalidArgumentError(message, suggestion=suggestion, details=details)
 
 

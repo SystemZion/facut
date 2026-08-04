@@ -196,17 +196,57 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "narration.synthesize": {
-        "summary": "Synthesize reviewed narration with an explicitly configured local voice provider.",
-        "mutates": False,
+        "summary": "Synthesize audition candidates and attach them to a narration plan.",
+        "mutates": True,
         "rpc": True,
         "parameters": _object(
             {
                 "plan": {"type": "string", "minLength": 1},
-                "voice_profile": {"type": "string", "minLength": 1},
+                "voice": {"type": "string", "minLength": 1},
                 "preview_dir": {"type": "string", "minLength": 1},
+                "style": {"enum": ["auto", "natural", "broadcast", "chat", "comedy", "excited"], "default": "auto"},
+                "takes": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1},
+                "speed": {"type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0},
+                "intensity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5},
+                "require_cuda": {"type": "boolean", "default": False},
                 "provider": {"type": ["string", "null"]},
             },
-            ["plan", "voice_profile", "preview_dir"],
+            ["plan", "voice", "preview_dir"],
+        ),
+    },
+    "narration.generate": {
+        "summary": "Generate a strict evidence-grounded narration plan without inventing facts.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "output": {"type": "string", "minLength": 1},
+                "style": {"type": "string", "default": "weekend-vlog"},
+                "language": {"type": "string", "default": "zh-CN"},
+                "provider": {"type": "string", "default": "deterministic"},
+                "max_lines": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+                "minimum_confidence": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.55},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["output"],
+        ),
+    },
+    "narration.apply": {
+        "summary": "Apply approved narration previews in one undoable project revision.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "string", "minLength": 1},
+                "approved_only": {"type": "boolean", "default": True},
+                "duck_music": {"type": "boolean", "default": False},
+                "preserve_original": {"const": True},
+                "track": {"type": "string", "default": "A_NARRATION"},
+                "allow_stale": {"type": "boolean", "default": False},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["plan"],
         ),
     },
     "voice.profile.create": {
@@ -230,6 +270,74 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "mutates": False,
         "rpc": True,
         "parameters": _object({}),
+    },
+    "voice.profile.rename": {
+        "summary": "Rename a voice profile without changing its stable ID or recordings.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"profile": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}},
+            ["profile", "name"],
+        ),
+    },
+    "voice.alias.set": {
+        "summary": "Add a globally unique human-readable alias to a voice profile.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"profile": {"type": "string", "minLength": 1}, "alias": {"type": "string", "minLength": 1}},
+            ["profile", "alias"],
+        ),
+    },
+    "voice.default.set": {
+        "summary": "Set the project or global default narration voice.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile": {"type": "string", "minLength": 1},
+                "scope": {"enum": ["project", "global"], "default": "project"},
+            },
+            ["profile"],
+        ),
+    },
+    "voice.say": {
+        "summary": "Generate audition-first voice candidates with deterministic style selection.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "text": {"type": "string", "minLength": 1},
+                "voice": {"type": ["string", "null"]},
+                "output": {"type": "string", "minLength": 1},
+                "style": {"enum": ["auto", "natural", "broadcast", "chat", "comedy", "excited"], "default": "auto"},
+                "takes": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1},
+                "speed": {"type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0},
+                "intensity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5},
+                "require_cuda": {"type": "boolean", "default": False},
+            },
+            ["text", "output"],
+        ),
+    },
+    "voice.serve.status": {
+        "summary": "Inspect the authenticated loopback warm voice service.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "voice.studio": {
+        "summary": "Open the local multi-profile microphone studio.",
+        "mutates": True,
+        "rpc": False,
+        "requires_user_interaction": True,
+        "cli": "facut voice studio",
+        "parameters": _object(
+            {
+                "voice": {"type": ["string", "null"]},
+                "mode": {"enum": ["quick", "recommended", "styles"], "default": "recommended"},
+                "port": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0},
+            }
+        ),
     },
     "voice.profile.import": {
         "summary": "Copy authorized PCM WAV samples into a voice profile with hash deduplication.",
@@ -350,6 +458,37 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "apply": {"type": "boolean", "default": False},
             },
             ["clip_id", "trajectory"],
+        ),
+    },
+    "recipe.validate": {
+        "summary": "Validate a declarative recipe and its complete edit plan.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({"source": {"type": "string", "minLength": 1}}, ["source"]),
+    },
+    "recipe.plan": {
+        "summary": "Compile a recipe into a reviewable atomic command plan.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"source": {"type": "string", "minLength": 1}, "output": {"type": "string", "minLength": 1}},
+            ["source", "output"],
+        ),
+    },
+    "recipe.build": {
+        "summary": "Apply a recipe atomically and execute its render/QC delivery request.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": "string", "minLength": 1},
+                "output": {"type": ["string", "null"]},
+                "dry_run": {"type": "boolean", "default": False},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["source"],
         ),
     },
     "run": {

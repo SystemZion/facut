@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+import subprocess
 from typing import Annotated
 
 import typer
@@ -258,8 +260,115 @@ def run_command(
         raw = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8-sig")
         payload = json.loads(raw)
         manager = manager_for(_state(ctx))
-        result = CommandEngine(manager).run_batch(payload, dry_run=dry_run)
+        commands = payload.get("commands")
+        if not isinstance(commands, list):
+            raise ValueError('Batch payload requires a "commands" list.')
+        project_actions = {
+            "timeline.track.add", "timeline.add", "audio.add", "audio.volume",
+            "audio.fade", "clip.move", "clip.duplicate", "clip.transform",
+            "clip.freeze", "clip.composite", "effect.add", "effect.remove",
+            "adjustment.add", "clip.split", "clip.trim", "clip.delete",
+            "clip.speed", "transition.add", "transition.remove", "narration.apply",
+        }
+        has_agent_actions = any(
+            isinstance(command, dict) and command.get("action") not in project_actions
+            for command in commands
+        )
+        result = (
+            _run_agent_batch(manager, payload, dry_run=dry_run)
+            if has_agent_actions
+            else CommandEngine(manager).run_batch(payload, dry_run=dry_run)
+        )
         document = manager.require_document()
         _emit(ctx, "run", result["data"], f"[green]Applied {len(payload.get('commands', []))} command(s).[/green]", revision=result["project_revision"])
     except Exception as error:
         _abort(ctx, "run", error)
+
+
+def _run_agent_batch(manager, payload: dict[str, object], *, dry_run: bool) -> dict[str, object]:
+    """Route non-timeline actions through the persistent JSON-RPC dispatcher.
+
+    Cross-domain actions may create files or mutate the global voice store, so
+    they require an explicit non-atomic batch. Timeline-only batches retain the
+    CommandEngine single-transaction guarantee.
+    """
+
+    from facut.agent import action_schema
+    from facut.core.command_engine import CommandEngineError
+
+    commands = payload.get("commands")
+    assert isinstance(commands, list)
+    if dry_run:
+        raise CommandEngineError(
+            "Extended Agent actions do not support batch --dry-run; use each action's plan or dry-run command."
+        )
+    if bool(payload.get("atomic", True)):
+        raise CommandEngineError(
+            "Batches containing voice, narration-generation, or recipe actions must set atomic=false. "
+            "Project-only edit batches remain fully atomic."
+        )
+    requests: list[str] = []
+    for index, item in enumerate(commands, start=1):
+        if not isinstance(item, dict) or not isinstance(item.get("action"), str):
+            raise CommandEngineError("Every command requires an action.")
+        action = str(item["action"])
+        schema = action_schema(action)
+        if schema.get("rpc") is not True:
+            raise CommandEngineError(f"Action {action} is not available through facut run.")
+        params = {key: value for key, value in item.items() if key != "action"}
+        requests.append(json.dumps(
+            {"jsonrpc": "2.0", "id": index, "method": action, "params": params},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ))
+    requests.append('{"jsonrpc":"2.0","id":"shutdown","method":"shutdown","params":{}}')
+    command_line = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "facut"]
+    command_line.extend(
+        ["--project", str(manager.project_file.resolve()), "serve", "--no-handshake"]
+    )
+    environment = os.environ.copy()
+    if not getattr(sys, "frozen", False):
+        source_paths = [item for item in sys.path if item and Path(item).exists()]
+        environment["PYTHONPATH"] = os.pathsep.join(source_paths)
+    completed = subprocess.run(
+        command_line,
+        input="\n".join(requests) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        timeout=3600,
+        check=False,
+    )
+    responses: list[object] = []
+    for raw_line in completed.stdout.splitlines():
+        try:
+            response = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if response.get("id") == "shutdown":
+            continue
+        if "error" in response:
+            rpc_error = response.get("error") or {}
+            raise CommandEngineError(
+                f"Agent action failed: {rpc_error.get('message', 'unknown JSON-RPC error')}"
+            )
+        responses.append(response.get("result"))
+    if completed.returncode != 0:
+        tail = " | ".join(completed.stderr.splitlines()[-8:])
+        raise CommandEngineError(
+            f"Agent batch process failed with exit code {completed.returncode}: {tail}"
+        )
+    if len(responses) != len(commands):
+        raise CommandEngineError("Agent batch returned an incomplete response set.")
+    document = manager.load()
+    return {
+        "status": "success",
+        "command": "run",
+        "data": {"results": responses, "atomic": False},
+        "warnings": [],
+        "errors": [],
+        "project_revision": document.revision,
+        "dry_run": False,
+    }

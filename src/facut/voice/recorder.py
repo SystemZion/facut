@@ -58,7 +58,7 @@ class RecordingSession:
     """State shared by one short-lived local recording server."""
 
     store: VoiceProfileStore
-    profile: VoiceProfile
+    profile: VoiceProfile | None
     plan: dict[str, Any]
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     accepted_prompt_ids: set[str] = field(default_factory=set)
@@ -70,6 +70,9 @@ class RecordingSession:
         self._restore_prompt_progress()
 
     def _restore_prompt_progress(self) -> None:
+        if self.profile is None:
+            self.accepted_prompt_ids = set()
+            return
         recorded = {sample.transcript for sample in self.profile.samples if sample.transcript}
         self.accepted_prompt_ids = {
             item["id"] for item in self.plan["prompts"] if item["text"] in recorded
@@ -82,12 +85,15 @@ class RecordingSession:
     def public_payload(self) -> dict[str, Any]:
         return {
             "version": "1.0",
-            "profile": self.profile.public_dict(),
+            "profile": self.profile.public_dict() if self.profile is not None else None,
             "plan": self.plan,
             "accepted_prompt_ids": sorted(self.accepted_prompt_ids),
+            "profiles": self.profile_options(),
+            "requires_profile_creation": self.profile is None,
         }
 
     def profile_options(self) -> list[dict[str, Any]]:
+        styles = {"natural", "broadcast", "chat", "comedy", "excited"}
         return [
             {
                 "id": item.id,
@@ -97,13 +103,22 @@ class RecordingSession:
                 "status": item.status,
                 "sample_count": len(item.samples),
                 "duration_seconds": round(sum(sample.duration for sample in item.samples), 3),
+                "aliases": list(item.aliases),
+                "style_coverage": {
+                    "recorded": sorted(
+                        styles.intersection(
+                            sample.delivery for sample in item.samples if sample.delivery
+                        )
+                    ),
+                    "total": len(styles),
+                },
             }
             for item in self.store.list()
         ]
 
     def switch_profile(self, profile_id: str) -> dict[str, Any]:
         with self.lock:
-            profile = self.store.get(profile_id)
+            profile = self.store.resolve(profile_id)
             self.profile = profile
             self.plan = build_recording_plan(
                 profile,
@@ -114,21 +129,30 @@ class RecordingSession:
         return self.public_payload()
 
     def create_and_switch_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
-        required = ("name", "speaker", "consent", "consent_statement")
+        required = ("name", "consent", "consent_statement")
         missing = [key for key in required if not str(payload.get(key, "")).strip()]
         if missing:
             raise ValueError(f"Missing voice profile fields: {', '.join(missing)}.")
         profile = self.store.create(
             str(payload["name"]).strip(),
-            speaker_id=str(payload["speaker"]).strip(),
+            speaker_id=str(payload.get("speaker") or payload["name"]).strip(),
             language=str(payload.get("language") or "zh-CN").strip(),
             style=str(payload.get("style") or "natural-vlog").strip(),
             consent_relationship=str(payload["consent"]).strip(),
             consent_statement=str(payload["consent_statement"]).strip(),
         )
-        return self.switch_profile(profile.id)
+        result = self.switch_profile(profile.id)
+        mode = str(payload.get("mode") or "").strip()
+        if mode:
+            with self.lock:
+                self.plan = build_recording_plan(profile, script=mode)
+                self._restore_prompt_progress()
+            result = self.public_payload()
+        return result
 
     def accept_recording(self, prompt_id: str, content: bytes) -> dict[str, Any]:
+        if self.profile is None:
+            raise ValueError("Create or select a voice profile before recording.")
         prompt = self.prompts.get(prompt_id)
         if prompt is None:
             raise ValueError(f'Unknown recording prompt "{prompt_id}".')
@@ -169,6 +193,8 @@ class RecordingSession:
 
     def finish(self) -> dict[str, Any]:
         with self.lock:
+            if self.profile is None:
+                raise ValueError("Create or select a voice profile before finishing.")
             self.profile = self.store.get(self.profile.id)
             report = validate_voice_samples(
                 self.store.sample_paths(self.profile),
@@ -192,20 +218,28 @@ class RecordingStudioServer:
 
     def __init__(
         self,
-        profile_id: str,
+        profile_id: str | None = None,
         *,
         store: VoiceProfileStore | None = None,
         target_minutes: int = 10,
         script: str = "mandarin-balanced-v1",
+        mode: str | None = None,
         port: int = 0,
     ) -> None:
         voice_store = store or VoiceProfileStore()
-        profile = voice_store.get(profile_id)
+        selected_script = mode or script
+        if profile_id is not None:
+            profile = voice_store.resolve(profile_id)
+        else:
+            profile = voice_store.get_default()
+            if profile is None:
+                profiles = voice_store.list()
+                profile = profiles[0] if profiles else None
         self.session = RecordingSession(
             store=voice_store,
             profile=profile,
             plan=build_recording_plan(
-                profile, target_minutes=target_minutes, script=script
+                profile, target_minutes=target_minutes, script=selected_script
             ),
         )
         self._httpd = ThreadingHTTPServer(
@@ -371,10 +405,12 @@ class RecordingStudioServer:
         finally:
             self._httpd.server_close()
         return {
-            "profile_id": self.session.profile.id,
+            "profile_id": self.session.profile.id if self.session.profile is not None else None,
             "finished": self.session.finished,
             "accepted_prompts": len(self.session.accepted_prompt_ids),
-            "profile_sample_count": len(self.session.profile.samples),
+            "profile_sample_count": (
+                len(self.session.profile.samples) if self.session.profile is not None else 0
+            ),
             "report": self.session.final_report,
         }
 
@@ -391,18 +427,24 @@ class RecordingStudioServer:
 
 
 def _recording_page(session: RecordingSession) -> str:
-    profile_name = html.escape(session.profile.display_name)
+    profile_name = html.escape(
+        session.profile.display_name if session.profile is not None else "尚未创建"
+    )
+    active_profile_id = session.profile.id if session.profile is not None else None
     token = json.dumps(session.token)
     prompts = json.dumps(session.plan["prompts"], ensure_ascii=False)
     accepted = json.dumps(sorted(session.accepted_prompt_ids))
     profiles = session.profile_options()
     profile_options = "".join(
         f'<option value="{html.escape(item["id"])}"'
-        f'{" selected" if item["id"] == session.profile.id else ""}>'
+        f'{" selected" if item["id"] == active_profile_id else ""}>'
         f'{html.escape(item["display_name"])} · {html.escape(item["style"])}'
         f' · {item["sample_count"]}条</option>'
         for item in profiles
     )
+    if not profile_options:
+        profile_options = '<option value="">尚无声音档案</option>'
+    has_profile = "true" if session.profile is not None else "false"
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FACUT 人声采集</title>
@@ -419,15 +461,15 @@ dialog{{max-width:620px;width:calc(100% - 32px);background:var(--panel);color:va
 @media(max-width:620px){{header,.row{{align-items:stretch;flex-direction:column}}}}
 </style></head><body><main>
 <header><div><div class="tag">FACUT LOCAL VOICE STUDIO</div><h1>人声采集</h1><div class="muted">当前档案：{profile_name} · 数据仅发送到本机 FACUT</div></div><div id="progress">{len(session.accepted_prompt_ids)} / {len(session.plan['prompts'])}</div></header>
-<section class="card"><div class="row"><label>声音档案 <select id="profiles">{profile_options}</select></label><div class="controls"><button id="switchProfile">切换档案</button><button id="newProfile">新建人物/风格</button></div></div><div class="muted">同一个人可以建立自然 VLOG、纪录片等多个版本；不同人物必须分别授权和录音。</div></section>
+<section class="card"><div class="row"><label>声音档案 <select id="profiles">{profile_options}</select></label><div class="controls"><button id="switchProfile">切换档案</button><button id="newProfile" title="新建人物/风格">+ 新建声音</button></div></div><div class="muted">名称可以自由填写；内部稳定 ID 会自动生成。不同人物必须分别授权和录音。</div></section>
 <section class="card"><div class="row"><label>麦克风 <select id="devices"><option value="">使用系统默认麦克风</option></select></label><button id="permission">启用麦克风</button></div><div class="meter"><div id="meter"></div></div><div id="status" class="muted">请先授权麦克风，然后逐条录制。</div></section>
 <section class="card"><div class="row"><span id="promptMeta" class="tag"></span><span id="delivery" class="muted"></span></div><div class="prompt" id="prompt"></div><audio id="playback" controls hidden></audio><div class="controls"><button id="record" class="primary" disabled>开始录音</button><button id="stop" class="danger" disabled>停止</button><button id="retry" disabled>重录</button><button id="save" disabled>保存本条</button><button id="next" disabled>下一条</button></div></section>
 <section class="card"><div class="row"><div><b>完成采集</b><div class="muted">可提前结束；FACUT 会按实际时长给出质量报告。</div></div><button id="finish">完成并导入声音档案</button></div></section>
-<dialog id="profileDialog"><form id="profileForm"><h2>新建声音档案</h2><div class="form-grid"><label>档案名称<input name="name" required placeholder="例如：妈妈的自然口播"></label><label>人物标识<input name="speaker" required placeholder="例如：mother"></label><label>授权关系<select name="consent"><option value="self">本人声音</option><option value="authorized">已获授权的人声</option></select></label><label>声音风格<select name="style"><option value="natural-vlog">自然 VLOG</option><option value="travel-documentary">旅行纪录片</option><option value="cheerful">轻快</option><option value="calm">沉稳</option></select></label><label class="wide">授权声明<textarea name="consent_statement" required placeholder="请记录声音本人对本机采集与合成用途的明确授权。"></textarea></label></div><div class="controls" style="margin-top:16px"><button type="button" id="cancelProfile">取消</button><button class="primary" type="submit">创建并切换</button></div></form></dialog>
+<dialog id="profileDialog"><form id="profileForm"><h2>新建声音档案</h2><div class="form-grid"><label>自定义名称<input name="name" required placeholder="例如：Zion、妈妈、旅行旁白"></label><label>人物标识（可选）<input name="speaker" placeholder="留空时使用自定义名称"></label><label>授权关系<select name="consent"><option value="self">本人声音</option><option value="authorized">已获授权的人声</option></select></label><label>录入模式<select name="mode"><option value="quick">快速试用 · 3 条</option><option value="recommended" selected>推荐采集 · 8 条</option><option value="styles">风格增强 · 5 条</option></select></label><label>声音用途<select name="style"><option value="natural-vlog">自然 VLOG</option><option value="travel-documentary">旅行纪录片</option><option value="cheerful">轻快</option><option value="calm">沉稳</option></select></label><label>语言<input name="language" value="zh-CN"></label><label class="wide">授权声明<textarea name="consent_statement" required placeholder="请记录声音本人对本机采集与合成用途的明确授权。"></textarea></label></div><div class="controls" style="margin-top:16px"><button type="button" id="cancelProfile">取消</button><button class="primary" type="submit">创建并开始录制</button></div></form></dialog>
 </main><script>
-const TOKEN={token}; const prompts={prompts}; let saved=new Set({accepted}),index=prompts.findIndex(p=>!saved.has(p.id));if(index<0)index=0;let stream,context,source,worklet,monitorGain,analyser,meterFrame,chunks=[],recording=false,wavBlob=null;
+const TOKEN={token}; const HAS_PROFILE={has_profile}; const prompts={prompts}; let saved=new Set({accepted}),index=prompts.findIndex(p=>!saved.has(p.id));if(index<0)index=0;let stream,context,source,worklet,monitorGain,analyser,meterFrame,chunks=[],recording=false,wavBlob=null;
 const $=id=>document.getElementById(id); function status(text,bad=false){{$('status').textContent=text;$('status').className=bad?'bad':'muted'}}
-function render(){{const p=prompts[index],names={{neutral:'自然',conversational:'对话感',informative:'清楚说明',warm:'温暖',restrained:'克制','natural-vlog':'轻松 VLOG','travel-documentary':'旅行纪录片'}},categories={{opening:'开场',observation:'现场观察','date-time':'日期与时间','price-number':'价格与数字',navigation:'方向指引',question:'疑问句',reflection:'感受与思考',explanation:'信息解释','ambient-sound':'环境声描述','family-reaction':'人物反应',english:'英文','mixed-alphabet':'中英混合',closing:'收尾'}};$('prompt').textContent=p.text;$('promptMeta').textContent=`第 ${{index+1}} 条 · ${{categories[p.category]||p.category}}`;$('delivery').textContent=`表达方式：${{names[p.delivery]||p.delivery}}`;$('progress').textContent=`${{saved.size}} / ${{prompts.length}}`;$('next').disabled=!saved.has(p.id)||index>=prompts.length-1}}
+function render(){{if(!HAS_PROFILE||!prompts.length){{$('prompt').textContent='请先点击“+ 新建声音”，填写名称和授权信息。';$('promptMeta').textContent='等待创建声音档案';$('delivery').textContent='';$('progress').textContent='0 / 0';$('permission').disabled=true;$('finish').disabled=true;return}}const p=prompts[index],names={{neutral:'自然',conversational:'对话感',informative:'清楚说明',warm:'温暖',restrained:'克制',natural:'自然',broadcast:'播音',chat:'聊天',comedy:'轻松幽默',excited:'真实兴奋','natural-vlog':'轻松 VLOG','travel-documentary':'旅行纪录片'}},categories={{opening:'开场',observation:'现场观察','date-time':'日期与时间','price-number':'价格与数字',navigation:'方向指引',question:'疑问句',reflection:'感受与思考',explanation:'信息解释','ambient-sound':'环境声描述','family-reaction':'人物反应',english:'英文','mixed-alphabet':'中英混合',closing:'收尾'}};$('prompt').textContent=p.text;$('promptMeta').textContent=`第 ${{index+1}} 条 · ${{categories[p.category]||p.category}}`;$('delivery').textContent=`表达方式：${{names[p.delivery]||p.delivery}}`;$('progress').textContent=`${{saved.size}} / ${{prompts.length}}`;$('next').disabled=!saved.has(p.id)||index>=prompts.length-1}}
 async function devices(){{const all=await navigator.mediaDevices.enumerateDevices();const inputs=all.filter(x=>x.kind==='audioinput');$('devices').innerHTML='';inputs.forEach((d,i)=>{{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||`麦克风 ${{i+1}}`;$('devices').appendChild(o)}})}}
 async function enable(){{if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器不支持麦克风采集');if(stream)stream.getTracks().forEach(t=>t.stop());if(context)await context.close().catch(()=>{{}});if(meterFrame)cancelAnimationFrame(meterFrame);const selected=$('devices').value,settings={{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}};if(selected)settings.deviceId={{exact:selected}};try{{stream=await navigator.mediaDevices.getUserMedia({{audio:settings}})}}catch(e){{if(selected&&e.name==='OverconstrainedError'){{stream=await navigator.mediaDevices.getUserMedia({{audio:{{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}}}})}}else throw e}}await devices();context=new AudioContext({{latencyHint:'interactive'}});await context.resume();if(!context.audioWorklet)throw new Error('当前浏览器不支持稳定音频线程，请使用最新版 Edge 或 Chrome');await context.audioWorklet.addModule('/voice-worklet.js');source=context.createMediaStreamSource(stream);worklet=new AudioWorkletNode(context,'facut-capture',{{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]}});worklet.port.onmessage=e=>{{if(recording)chunks.push(new Float32Array(e.data))}};monitorGain=context.createGain();monitorGain.gain.value=0;analyser=context.createAnalyser();source.connect(analyser);source.connect(worklet);worklet.connect(monitorGain);monitorGain.connect(context.destination);$('record').disabled=false;status(`麦克风已启用 · ${{context.sampleRate}} Hz · 稳定音频线程`);meterLoop()}}
 function meterLoop(){{if(!analyser)return;const d=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(d);let peak=0;for(const v of d)peak=Math.max(peak,Math.abs(v-128)/128);$('meter').style.width=`${{Math.min(100,peak*180)}}%`;meterFrame=requestAnimationFrame(meterLoop)}}
@@ -442,7 +484,7 @@ $('stop').onclick=()=>{{recording=false;wavBlob=encodeWav(chunks,context.sampleR
 $('retry').onclick=()=>{{$('playback').hidden=true;$('record').disabled=false;$('save').disabled=true;wavBlob=null;status('已清除当前录音，可以重新开始。')}};
 $('save').onclick=async()=>{{const p=prompts[index];$('save').disabled=true;status('FACUT 正在检查录音质量…');try{{const r=await fetch(`/api/recordings/${{p.id}}`,{{method:'POST',headers:{{'X-Facut-Token':TOKEN,'Content-Type':'audio/wav'}},body:wavBlob}}),j=await r.json();if(!r.ok)throw new Error(j.error?.message||'保存失败');saved.add(p.id);$('next').disabled=index>=prompts.length-1;$('record').disabled=false;status(`已保存 · 峰值 ${{j.data.quality.metrics.peak_dbfs}} dBFS`);render()}}catch(e){{$('save').disabled=false;status(e.message,true)}}}};
 $('next').onclick=()=>{{if(index<prompts.length-1)index++;wavBlob=null;$('playback').hidden=true;$('save').disabled=true;$('retry').disabled=true;$('record').disabled=!stream;render()}};
-$('finish').onclick=async()=>{{if(!confirm(`已保存 ${{saved.size}} 条录音，确定完成吗？`))return;$('finish').disabled=true;status('正在生成最终质量报告…');try{{const r=await fetch('/api/finish',{{method:'POST',headers:{{'X-Facut-Token':TOKEN}}}}),j=await r.json();if(!r.ok)throw new Error(j.error?.message||'完成失败');status(`已导入声音档案。质量状态：${{j.data.report.status}}`);document.querySelectorAll('button').forEach(b=>b.disabled=true);if(stream)stream.getTracks().forEach(t=>t.stop())}}catch(e){{$('finish').disabled=false;status(e.message,true)}}}};render();
+$('finish').onclick=async()=>{{if(!confirm(`已保存 ${{saved.size}} 条录音，确定完成吗？`))return;$('finish').disabled=true;status('正在生成最终质量报告…');try{{const r=await fetch('/api/finish',{{method:'POST',headers:{{'X-Facut-Token':TOKEN}}}}),j=await r.json();if(!r.ok)throw new Error(j.error?.message||'完成失败');status(`已导入声音档案。质量状态：${{j.data.report.status}}`);document.querySelectorAll('button').forEach(b=>b.disabled=true);if(stream)stream.getTracks().forEach(t=>t.stop())}}catch(e){{$('finish').disabled=false;status(e.message,true)}}}};render();if(!HAS_PROFILE)$('profileDialog').showModal();
 </script></body></html>"""
 
 

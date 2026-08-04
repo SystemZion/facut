@@ -57,6 +57,84 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def build_provider_request(
+    profile: VoiceProfile,
+    profile_directory: str | Path,
+    lines: list[dict[str, Any]],
+    output_directory: str | Path,
+) -> tuple[dict[str, Any], Path]:
+    """Build the stable local-provider request without starting a process."""
+
+    destination = Path(output_directory).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    request = {
+        "protocol": "facut-voice-provider/1.0",
+        "action": "synthesize",
+        "profile": profile.public_dict(),
+        "profile_directory": str(Path(profile_directory).resolve()),
+        "output_directory": str(destination),
+        "lines": lines,
+    }
+    return request, destination
+
+
+def validate_provider_response(
+    payload: dict[str, Any], destination: str | Path, profile_id: str
+) -> dict[str, Any]:
+    """Validate provider output paths and attach content hashes.
+
+    Both the one-shot provider adapter and the persistent loopback service use
+    this boundary, so neither path can trust files outside the requested output
+    directory.
+    """
+
+    output_root = Path(destination).expanduser().resolve()
+    if payload.get("status") != "success" or not isinstance(payload.get("outputs"), list):
+        raise RuntimeError("Local voice provider did not return a successful outputs list.")
+    outputs = []
+    for item in payload["outputs"]:
+        path = Path(str(item["output"])).expanduser().resolve()
+        if output_root != path.parent and output_root not in path.parents:
+            raise RuntimeError("Local voice provider returned an output outside the requested directory.")
+        if path.suffix.casefold() != ".wav" or not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError("Local voice provider returned a missing or invalid WAV output.")
+        outputs.append({**item, "output": str(path), "sha256": _hash_file(path)})
+    return {
+        "status": "success",
+        "provider": payload.get("provider"),
+        "model_version": payload.get("model_version"),
+        "profile_id": profile_id,
+        "outputs": outputs,
+        "warnings": payload.get("warnings", []),
+    }
+
+
+def invoke_provider_request(
+    executable: str | Path,
+    request: dict[str, Any],
+    *,
+    timeout: float = 300,
+) -> dict[str, Any]:
+    """Invoke a facut-voice-provider/1.0 executable once."""
+
+    completed = subprocess.run(
+        [str(executable), "--facut-voice-json"],
+        input=json.dumps(request, ensure_ascii=True),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        shell=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"Local voice provider failed: {completed.stderr[-2000:]}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Local voice provider returned invalid JSON.") from error
+
+
 def provider_status(explicit: str | Path | None = None) -> dict[str, Any]:
     source = "none"
     requested = ""
@@ -99,50 +177,8 @@ def synthesize_with_provider(
             ),
             details=status,
         )
-    destination = Path(output_directory).expanduser().resolve()
-    destination.mkdir(parents=True, exist_ok=True)
-    request = {
-        "protocol": "facut-voice-provider/1.0",
-        "action": "synthesize",
-        "profile": profile.public_dict(),
-        "profile_directory": str(Path(profile_directory).resolve()),
-        "output_directory": str(destination),
-        "lines": lines,
-    }
-    completed = subprocess.run(
-        [str(status["executable"]), "--facut-voice-json"],
-        # Keep the process protocol ASCII-clean.  This avoids Windows console
-        # code-page corruption while JSON still round-trips all Unicode text.
-        input=json.dumps(request, ensure_ascii=True),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        shell=False,
+    request, destination = build_provider_request(
+        profile, profile_directory, lines, output_directory
     )
-    if completed.returncode:
-        raise RuntimeError(f"Local voice provider failed: {completed.stderr[-2000:]}")
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError("Local voice provider returned invalid JSON.") from error
-    if payload.get("status") != "success" or not isinstance(payload.get("outputs"), list):
-        raise RuntimeError("Local voice provider did not return a successful outputs list.")
-    outputs = []
-    for item in payload["outputs"]:
-        path = Path(str(item["output"])).expanduser().resolve()
-        if destination != path.parent and destination not in path.parents:
-            raise RuntimeError("Local voice provider returned an output outside the requested directory.")
-        if path.suffix.casefold() != ".wav" or not path.is_file() or path.stat().st_size == 0:
-            raise RuntimeError("Local voice provider returned a missing or invalid WAV output.")
-        digest = _hash_file(path)
-        outputs.append({**item, "output": str(path), "sha256": digest})
-    return {
-        "status": "success",
-        "provider": payload.get("provider"),
-        "model_version": payload.get("model_version"),
-        "profile_id": profile.id,
-        "outputs": outputs,
-        "warnings": payload.get("warnings", []),
-    }
+    payload = invoke_provider_request(status["executable"], request, timeout=timeout)
+    return validate_provider_response(payload, destination, profile.id)
