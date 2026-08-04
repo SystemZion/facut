@@ -62,6 +62,21 @@ def _same_path(left: Path, right: Path) -> bool:
     return os.path.normcase(str(left.resolve())) == os.path.normcase(str(right.resolve()))
 
 
+def _path_key(value: str) -> str:
+    return os.path.normcase(os.path.expandvars(value.strip()).rstrip("\\/"))
+
+
+def _prioritize_path(entries: list[str], target: Path) -> tuple[list[str], bool]:
+    """Return a de-duplicated PATH with the FACUT directory first."""
+
+    target_key = _path_key(str(target))
+    cleaned = [item for item in entries if item.strip() and _path_key(item) != target_key]
+    updated = [str(target), *cleaned]
+    current_keys = [_path_key(item) for item in entries if item.strip()]
+    updated_keys = [_path_key(item) for item in updated]
+    return updated, current_keys != updated_keys
+
+
 def _atomic_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -109,17 +124,13 @@ def add_to_user_path(directory: str | Path) -> dict[str, Any]:
         except FileNotFoundError:
             current, value_type = "", winreg.REG_EXPAND_SZ
         entries = [item for item in str(current).split(";") if item.strip()]
-        normalized = {os.path.normcase(os.path.expandvars(item.strip()).rstrip("\\/")) for item in entries}
-        target_key = os.path.normcase(str(target).rstrip("\\/"))
-        changed = target_key not in normalized
+        entries, changed = _prioritize_path(entries, target)
         if changed:
-            entries.append(str(target))
             winreg.SetValueEx(key, "Path", 0, value_type, ";".join(entries))
     process_entries = [item for item in os.environ.get("PATH", "").split(";") if item]
-    if target_key not in {
-        os.path.normcase(os.path.expandvars(item).rstrip("\\/")) for item in process_entries
-    }:
-        os.environ["PATH"] = f"{target};{os.environ.get('PATH', '')}"
+    process_entries, process_changed = _prioritize_path(process_entries, target)
+    if process_changed:
+        os.environ["PATH"] = ";".join(process_entries)
     if changed:
         try:
             HWND_BROADCAST, WM_SETTINGCHANGE = 0xFFFF, 0x001A
@@ -128,7 +139,12 @@ def add_to_user_path(directory: str | Path) -> dict[str, Any]:
             )
         except (AttributeError, OSError):
             pass
-    return {"changed": changed, "available_now": True, "directory": str(target)}
+    return {
+        "changed": changed,
+        "available_now": True,
+        "directory": str(target),
+        "precedence": "first",
+    }
 
 
 def _normalize_exclusions(exclude: list[str]) -> set[str]:
