@@ -75,7 +75,12 @@ def ingest_command(
                 fps=30.0,
                 sample_rate=48000,
             )
-        assets = manager.import_paths([source], recursive=True, dry_run=dry_run)
+        assets = manager.import_paths(
+            [source],
+            recursive=True,
+            exclude_proxy_candidates=proxy_mode != "none",
+            dry_run=dry_run,
+        )
         if not dry_run:
             def record_trip(document):
                 document.settings["trip"] = {
@@ -98,20 +103,18 @@ def ingest_command(
                 ffmpeg=state.config.tools.ffmpeg,
                 ffprobe=state.config.tools.ffprobe,
             )
-            for asset in assets:
-                if asset.kind != MediaKind.VIDEO:
-                    continue
-                try:
-                    linked, _, matched = service.relink(asset.id, source)
-                    proxy_results.append(
-                        {"media_id": asset.id, "status": "linked", "path": str(matched)}
-                    )
-                    del linked
-                except (FileNotFoundError, ProxyError):
-                    if proxy_mode == "link":
-                        proxy_results.append(
-                            {"media_id": asset.id, "status": "not_found", "path": None}
-                        )
+            proxy_results, _ = service.scan(
+                search_directories=[source],
+                link=True,
+            )
+            if proxy_mode == "auto":
+                matched_ids = {
+                    str(item["media_id"])
+                    for item in proxy_results
+                    if item["status"] == "linked"
+                }
+                for asset in assets:
+                    if asset.kind != MediaKind.VIDEO or asset.id in matched_ids:
                         continue
                     _, _, generated = service.create(
                         asset.id, height=proxy_height, codec="h264", overwrite=False

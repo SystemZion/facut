@@ -286,6 +286,53 @@ def preview_timeline(
         _abort(ctx, command, error)
 
 
+@preview_app.command("compare")
+def preview_compare(
+    ctx: typer.Context,
+    before: Annotated[str, typer.Argument()],
+    after: Annotated[str, typer.Argument()],
+    output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
+    changed_only: Annotated[bool, typer.Option("--changed-only/--full")] = True,
+    padding: Annotated[float, typer.Option("--padding", min=0.0, max=10.0)] = 0.5,
+    height: Annotated[int, typer.Option("--height")] = 360,
+    fps: Annotated[float, typer.Option("--fps")] = 24.0,
+    hardware: Annotated[str, typer.Option("--hardware")] = "auto",
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+) -> None:
+    """Render paired previews for only the timeline ranges changed between versions."""
+
+    from facut.cli.main import emit
+
+    command = "preview.compare"
+    try:
+        state = _state(ctx)
+        manager = manager_for(state)
+        from facut.render.compare import render_compare_previews
+
+        current = manager.require_document()
+        backend = FFmpegBackend(state.config.tools.ffmpeg)
+        data = render_compare_previews(
+            manager,
+            backend,
+            before=before,
+            after=after,
+            output_dir=output_dir,
+            changed_only=changed_only,
+            padding=padding,
+            height=height,
+            fps=fps,
+            hardware=hardware,
+            overwrite=overwrite,
+        )
+        emit(
+            state,
+            success_response(command, data, project_revision=current.revision),
+            human=f"[green]A/B previews ready:[/green] {data['output_dir']}",
+        )
+    except Exception as error:
+        _abort(ctx, command, error)
+
+
 def render_command(
     ctx: typer.Context,
     output: Annotated[Path, typer.Option("--output", "-o")],
@@ -354,6 +401,11 @@ def render_command(
             from facut.core.sequences import materialize_sequence
 
             document = materialize_sequence(document, sequence)
+        master_loudness = document.settings.get("audio", {}).get("master_loudness", {})
+        if loudness is None and master_loudness:
+            loudness = float(master_loudness.get("target_lufs", -14.0))
+            true_peak = float(master_loudness.get("true_peak_db", true_peak))
+            lra = float(master_loudness.get("loudness_range", lra))
         if preset:
             if preset not in RENDER_PRESETS:
                 raise ValueError(

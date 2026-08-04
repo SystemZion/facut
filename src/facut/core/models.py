@@ -391,6 +391,11 @@ class HistoryEntry(StrictModel):
     timestamp: datetime = Field(default_factory=utc_now)
     summary: str
     command: dict[str, Any] = Field(default_factory=dict)
+    commit_id: str | None = None
+    parent_commit_ids: list[str] = Field(default_factory=list)
+    branch: str | None = None
+    actor: Literal["user", "agent", "system"] = "user"
+    intent: str | None = None
 
 
 class ProjectSettings(StrictModel):

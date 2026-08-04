@@ -10,7 +10,7 @@ import tempfile
 from typing import Any, Callable
 
 from facut import __version__
-from facut.core.models import ProjectDocument, TrackType
+from facut.core.models import Clip, ProjectDocument, TrackType
 
 from .cache import RenderCache, cache_key
 from .ffmpeg_backend import FFmpegBackend, RenderError
@@ -56,17 +56,11 @@ def incremental_eligibility(project: ProjectDocument) -> tuple[bool, str | None]
         and track.type in {TrackType.VIDEO, TrackType.IMAGE}
         and any(clip.enabled for clip in track.clips)
     ]
-    if len(video_tracks) != 1:
-        return False, "incremental cache requires exactly one enabled video track"
+    if not video_tracks:
+        return False, "incremental cache requires an enabled base video track"
+    video_tracks.sort(key=lambda item: item.order)
     if project.transitions:
         return False, "transitions cross segment boundaries"
-    if project.subtitle_cues or any(item.enabled for item in project.text_overlays):
-        return False, "timed subtitles or text cross segment boundaries"
-    if any(
-        track.enabled and track.type == TrackType.AUDIO and any(c.enabled for c in track.clips)
-        for track in project.tracks
-    ):
-        return False, "independent audio tracks cross segment boundaries"
     clips = sorted(
         (clip for clip in video_tracks[0].clips if clip.enabled),
         key=lambda item: item.timeline_start,
@@ -94,25 +88,136 @@ class IncrementalRenderer:
         )
         self.ffmpeg_version = (version.stdout.splitlines() or ["unknown"])[0]
 
+    @staticmethod
+    def _slice_clip(clip: Clip, start: float, end: float) -> Clip | None:
+        overlap_start = max(start, clip.timeline_start)
+        overlap_end = min(end, clip.end)
+        if overlap_end <= overlap_start + 1e-9:
+            return None
+        candidate = clip.model_copy(deep=True)
+        trim_start = overlap_start - clip.timeline_start
+        trim_end = clip.end - overlap_end
+        rate = abs(clip.speed)
+        if not clip.loop and clip.freeze_frame is None:
+            if clip.speed > 0:
+                candidate.source_in += trim_start * rate
+                candidate.source_out -= trim_end * rate
+            else:
+                candidate.source_out -= trim_start * rate
+                candidate.source_in += trim_end * rate
+        candidate.timeline_start = overlap_start - start
+        if clip.timeline_duration is not None or clip.loop or clip.freeze_frame is not None:
+            candidate.timeline_duration = overlap_end - overlap_start
+        candidate.keyframes = [
+            item.model_copy(update={"time": item.time - trim_start})
+            for item in candidate.keyframes
+            if trim_start - 1e-9 <= item.time <= trim_start + (overlap_end - overlap_start) + 1e-9
+        ]
+        audio = candidate.audio.model_dump()
+        if trim_start > 1e-9:
+            audio["fade_in"] = 0.0
+            candidate.audio_fade_in = 0.0
+        if trim_end > 1e-9:
+            audio["fade_out"] = 0.0
+            candidate.audio_fade_out = 0.0
+        candidate.audio = candidate.audio.__class__.model_validate(audio)
+        return candidate
+
     def _segment_document(
         self, project: ProjectDocument, clip_id: str
     ) -> ProjectDocument:
         candidate = project.model_copy(deep=True)
+        base_tracks = sorted(
+            (
+                track
+                for track in candidate.tracks
+                if track.enabled
+                and not track.muted
+                and track.type in {TrackType.VIDEO, TrackType.IMAGE}
+                and any(item.enabled for item in track.clips)
+            ),
+            key=lambda item: item.order,
+        )
+        base_clip = next(
+            clip for clip in base_tracks[0].clips if clip.id == clip_id
+        )
+        segment_start, segment_end = base_clip.timeline_start, base_clip.end
         candidate.transitions = []
-        candidate.subtitle_cues = []
-        candidate.text_overlays = []
-        candidate.markers = []
         selected_tracks = []
         for track in candidate.tracks:
-            if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            if track.type in {TrackType.SUBTITLE, TrackType.MASK}:
+                selected_tracks.append(track)
                 continue
-            selected = [clip for clip in track.clips if clip.id == clip_id]
-            if not selected:
+            if track.type == TrackType.ADJUSTMENT:
+                adjustments = []
+                for item in track.metadata.get("adjustments", []):
+                    item_start = float(item["at"])
+                    item_end = item_start + float(item["duration"])
+                    overlap_start = max(segment_start, item_start)
+                    overlap_end = min(segment_end, item_end)
+                    if overlap_end <= overlap_start:
+                        continue
+                    adjusted = dict(item)
+                    adjusted["at"] = overlap_start - segment_start
+                    adjusted["duration"] = overlap_end - overlap_start
+                    adjustments.append(adjusted)
+                track.metadata["adjustments"] = adjustments
+                selected_tracks.append(track)
                 continue
-            selected[0].timeline_start = 0.0
+            if track.type not in {TrackType.VIDEO, TrackType.IMAGE, TrackType.AUDIO}:
+                continue
+            if track is base_tracks[0]:
+                selected = [item for item in track.clips if item.id == clip_id]
+                selected[0].timeline_start = 0.0
+            else:
+                selected = [
+                    sliced
+                    for item in track.clips
+                    if item.enabled
+                    for sliced in [self._slice_clip(item, segment_start, segment_end)]
+                    if sliced is not None
+                ]
             track.clips = selected
-            selected_tracks.append(track)
+            if selected or track is base_tracks[0]:
+                selected_tracks.append(track)
         candidate.tracks = selected_tracks
+        candidate.subtitle_cues = [
+            cue.model_copy(
+                update={
+                    "start": max(segment_start, cue.start) - segment_start,
+                    "end": min(segment_end, cue.end) - segment_start,
+                }
+            )
+            for cue in candidate.subtitle_cues
+            if cue.end > segment_start and cue.start < segment_end
+        ]
+        candidate.text_overlays = [
+            overlay.model_copy(
+                update={
+                    "at": max(segment_start, overlay.at) - segment_start,
+                    "duration": min(segment_end, overlay.end) - max(segment_start, overlay.at),
+                }
+            )
+            for overlay in candidate.text_overlays
+            if overlay.end > segment_start and overlay.at < segment_end
+        ]
+        candidate.markers = [
+            marker.model_copy(update={"at": marker.at - segment_start})
+            for marker in candidate.markers
+            if segment_start <= marker.at <= segment_end
+        ]
+        ducking = []
+        for item in candidate.settings.get("audio_ducking", []):
+            overlap_start = max(segment_start, float(item["start"]))
+            overlap_end = min(segment_end, float(item["end"]))
+            if overlap_end <= overlap_start:
+                continue
+            adjusted = dict(item)
+            adjusted["start"] = overlap_start - segment_start
+            adjusted["end"] = overlap_end - segment_start
+            ducking.append(adjusted)
+        if "audio_ducking" in candidate.settings:
+            candidate.settings["audio_ducking"] = ducking
         candidate.recompute_duration()
         return candidate
 
@@ -143,13 +248,17 @@ class IncrementalRenderer:
             raise FileExistsError(
                 f'Output "{destination}" already exists; use overwrite to replace it.'
             )
-        track = next(
-            track
-            for track in project.tracks
-            if track.enabled
-            and track.type in {TrackType.VIDEO, TrackType.IMAGE}
-            and any(clip.enabled for clip in track.clips)
-        )
+        track = sorted(
+            (
+                track
+                for track in project.tracks
+                if track.enabled
+                and not track.muted
+                and track.type in {TrackType.VIDEO, TrackType.IMAGE}
+                and any(clip.enabled for clip in track.clips)
+            ),
+            key=lambda item: item.order,
+        )[0]
         clips = sorted(
             (clip for clip in track.clips if clip.enabled),
             key=lambda item: item.timeline_start,
@@ -165,8 +274,15 @@ class IncrementalRenderer:
             source = Path(asset.path)
             if not source.is_absolute():
                 source = (Path(project_dir) / source).resolve()
+            segment_document = self._segment_document(project, clip.id)
             parameters = {
-                "clip": clip.model_dump(mode="json"),
+                "segment": {
+                    "tracks": [item.model_dump(mode="json") for item in segment_document.tracks],
+                    "transitions": [],
+                    "subtitle_cues": [item.model_dump(mode="json") for item in segment_document.subtitle_cues],
+                    "text_overlays": [item.model_dump(mode="json") for item in segment_document.text_overlays],
+                    "settings": segment_document.settings,
+                },
                 "project": {
                     "width": width or project.project.width,
                     "height": height or project.project.height,
@@ -182,8 +298,18 @@ class IncrementalRenderer:
                 "color_space": color_space,
                 "audio_sample_rate": audio_sample_rate,
             }
+            segment_sources: list[Path] = []
+            for segment_track in segment_document.tracks:
+                for segment_clip in segment_track.clips:
+                    segment_asset = segment_document.find_media(segment_clip.media_id)
+                    if segment_asset is None:
+                        continue
+                    segment_source = Path(segment_asset.path)
+                    if not segment_source.is_absolute():
+                        segment_source = (Path(project_dir) / segment_source).resolve()
+                    segment_sources.append(segment_source)
             key = cache_key(
-                inputs=[source],
+                inputs=sorted(set(segment_sources), key=lambda item: str(item).casefold()),
                 parameters=parameters,
                 software_version=__version__,
                 ffmpeg_version=self.ffmpeg_version,
@@ -232,7 +358,7 @@ class IncrementalRenderer:
                     )
 
                 rendered = self.backend.render(
-                    self._segment_document(project, clip.id),
+                    segment_document,
                     project_dir,
                     segment,
                     width=width,

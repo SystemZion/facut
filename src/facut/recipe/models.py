@@ -41,6 +41,17 @@ class RecipeClip(RecipeModel):
     transform: dict[str, Any] = Field(default_factory=dict)
     effects: list[RecipeEffect] = Field(default_factory=list)
     audio: dict[str, Any] = Field(default_factory=dict)
+    speed: float | None = None
+    reverse: bool = False
+    speed_curve: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_speed_controls(self) -> "RecipeClip":
+        if sum((self.speed is not None, self.reverse, self.speed_curve is not None)) > 1:
+            raise ValueError("clip speed, reverse and speed_curve are mutually exclusive")
+        if self.speed == 0:
+            raise ValueError("clip speed cannot be zero")
+        return self
 
 
 class RecipeTransition(RecipeModel):

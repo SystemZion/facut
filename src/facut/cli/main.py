@@ -201,6 +201,7 @@ def main() -> None:
 
 
 from facut.cli.project_commands import (  # noqa: E402
+    branch_app,
     history_app,
     import_command,
     init_command,
@@ -257,6 +258,7 @@ app.command("redo")(redo_command)
 app.command("run")(run_command)
 app.add_typer(project_app, name="project")
 app.add_typer(history_app, name="history")
+app.add_typer(branch_app, name="branch")
 app.add_typer(timeline_app, name="timeline")
 app.add_typer(clip_app, name="clip")
 app.add_typer(transition_app, name="transition")

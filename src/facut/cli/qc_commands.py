@@ -9,7 +9,7 @@ import typer
 
 from facut.cli.common import public_error
 from facut.qc.engine import QCEngine, resolve_qc_scope
-from facut.qc.report import write_markdown
+from facut.qc.report import write_json, write_markdown
 from facut.responses import success_response
 
 
@@ -21,7 +21,11 @@ def qc_command(
     ] = None,
     report: Annotated[
         Path | None,
-        typer.Option("--report", "--markdown", help="Write a Markdown QC report."),
+        typer.Option("--report", help="Write the complete structured JSON QC report."),
+    ] = None,
+    markdown: Annotated[
+        Path | None,
+        typer.Option("--markdown", help="Write a human-readable Markdown QC report."),
     ] = None,
     contact_sheet: Annotated[
         Path | None,
@@ -48,6 +52,11 @@ def qc_command(
         float, typer.Option("--loudness-tolerance", min=0.0)
     ] = 2.0,
     true_peak: Annotated[float, typer.Option("--true-peak")] = -1.0,
+    freeze_duration: Annotated[float, typer.Option("--freeze-duration", min=0.1)] = 2.0,
+    expected_duration: Annotated[
+        float | None,
+        typer.Option("--expected-duration", help="Expected final timeline duration in seconds."),
+    ] = None,
     timeout: Annotated[
         float | None,
         typer.Option("--timeout", min=0.1, help="Per-check timeout in seconds."),
@@ -60,6 +69,10 @@ def qc_command(
     state: CliState = ctx.ensure_object(CliState)
     try:
         scope, sources = resolve_qc_scope(target, project=state.project)
+        if expected_duration is None and target is not None and state.project is not None:
+            from facut.core.project_manager import ProjectManager
+
+            expected_duration = ProjectManager(state.project).load().project.duration
         engine = QCEngine(
             ffmpeg=state.config.tools.ffmpeg,
             ffprobe=state.config.tools.ffprobe,
@@ -70,6 +83,8 @@ def qc_command(
             target_lufs=target_lufs,
             loudness_tolerance_lu=loudness_tolerance,
             maximum_true_peak_dbfs=true_peak,
+            freeze_minimum_duration=freeze_duration,
+            expected_duration=expected_duration,
             timeout=timeout,
         )
         qc_report = engine.run(
@@ -78,12 +93,18 @@ def qc_command(
             contact_sheet=contact_sheet,
             overwrite=overwrite,
         )
+        json_path: str | None = None
         markdown_path: str | None = None
         if report is not None:
-            markdown_path = str(
-                write_markdown(qc_report, report, overwrite=overwrite).resolve()
-            )
+            # Keep 0.6 compatibility for explicit .md report paths.
+            if report.suffix.casefold() in {".md", ".markdown"} and markdown is None:
+                markdown_path = str(write_markdown(qc_report, report, overwrite=overwrite).resolve())
+            else:
+                json_path = str(write_json(qc_report, report, overwrite=overwrite).resolve())
+        if markdown is not None:
+            markdown_path = str(write_markdown(qc_report, markdown, overwrite=overwrite).resolve())
         data = qc_report.model_dump(mode="json")
+        data["json_report"] = json_path
         data["markdown_report"] = markdown_path
         emit(
             state,

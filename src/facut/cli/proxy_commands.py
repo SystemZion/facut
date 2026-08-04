@@ -129,6 +129,37 @@ def proxy_relink(
         _abort(ctx, "proxy.relink", error)
 
 
+@proxy_app.command("scan")
+def proxy_scan(
+    ctx: typer.Context,
+    media_id: Annotated[str | None, typer.Option("--media-id")] = None,
+    search: Annotated[
+        list[Path] | None,
+        typer.Option("--search", help="Additional directory to scan recursively."),
+    ] = None,
+    link: Annotated[bool, typer.Option("--link")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Score LRF/proxy candidates and atomically link unambiguous matches."""
+
+    try:
+        service = _service(ctx)
+        data, state = service.scan(
+            media_id,
+            search_directories=search,
+            link=link,
+            dry_run=dry_run,
+        )
+        _emit(
+            ctx,
+            "proxy.scan",
+            {"results": data, "link": link, "dry_run": dry_run},
+            state.revision,
+        )
+    except Exception as error:
+        _abort(ctx, "proxy.scan", error)
+
+
 @proxy_app.command("status")
 def proxy_status(
     ctx: typer.Context,

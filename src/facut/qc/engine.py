@@ -15,6 +15,7 @@ from facut.media.tools import find_executable
 from .detectors import (
     check_black_frames,
     check_decode,
+    check_freeze,
     check_loudness,
     check_silence,
     generate_contact_sheet,
@@ -84,6 +85,9 @@ class QCEngine:
         target_lufs: float = -14.0,
         loudness_tolerance_lu: float = 2.0,
         maximum_true_peak_dbfs: float = -1.0,
+        freeze_minimum_duration: float = 2.0,
+        expected_duration: float | None = None,
+        duration_tolerance: float = 1 / 30,
         timeout: float | None = None,
     ) -> None:
         self.ffmpeg = find_executable("ffmpeg", ffmpeg)
@@ -95,6 +99,9 @@ class QCEngine:
         self.target_lufs = target_lufs
         self.loudness_tolerance_lu = loudness_tolerance_lu
         self.maximum_true_peak_dbfs = maximum_true_peak_dbfs
+        self.freeze_minimum_duration = freeze_minimum_duration
+        self.expected_duration = expected_duration
+        self.duration_tolerance = duration_tolerance
         self.timeout = timeout
 
     def run(
@@ -174,6 +181,26 @@ class QCEngine:
         has_video = any(item.get("codec_type") == "video" for item in streams)
         has_audio = any(item.get("codec_type") == "audio" for item in streams)
         duration = _duration(metadata)
+        if self.expected_duration is not None and duration is not None:
+            difference = duration - self.expected_duration
+            checks["timeline_duration"] = CheckResult(
+                status=(
+                    QCStatus.PASS
+                    if abs(difference) <= self.duration_tolerance + 1e-9
+                    else QCStatus.FAIL
+                ),
+                summary=(
+                    "Container duration matches the expected timeline within one frame."
+                    if abs(difference) <= self.duration_tolerance + 1e-9
+                    else f"Container duration differs from the expected timeline by {difference:.6f}s."
+                ),
+                data={
+                    "expected_seconds": self.expected_duration,
+                    "actual_seconds": duration,
+                    "difference_seconds": difference,
+                    "tolerance_seconds": self.duration_tolerance,
+                },
+            )
         if has_video and source.kind != "image":
             checks["delivery_video"] = _check_delivery_video(streams)
         else:
@@ -211,10 +238,22 @@ class QCEngine:
                 pixel_threshold=self.black_pixel_threshold,
                 timeout=self.timeout,
             )
+            checks["freeze"] = self._safe_check(
+                "Freeze analysis",
+                check_freeze,
+                source.path,
+                self.ffmpeg,
+                minimum_duration=self.freeze_minimum_duration,
+                timeout=self.timeout,
+            )
         else:
             checks["black_frames"] = CheckResult(
                 status=QCStatus.SKIPPED,
                 summary="Black-segment detection requires a timed video stream.",
+            )
+            checks["freeze"] = CheckResult(
+                status=QCStatus.SKIPPED,
+                summary="Freeze detection requires a timed video stream.",
             )
         if has_audio:
             checks["silence"] = self._safe_check(
@@ -372,6 +411,8 @@ def _compact_metadata(raw: dict[str, Any]) -> dict[str, Any]:
                     "channel_layout",
                     "duration",
                     "bit_rate",
+                    "tags",
+                    "side_data_list",
                 )
                 if stream.get(key) is not None
             }
@@ -415,6 +456,18 @@ def _rate(value: Any) -> float | None:
 def _check_delivery_video(streams: list[dict[str, Any]]) -> CheckResult:
     video = next(item for item in streams if item.get("codec_type") == "video")
     issues: list[str] = []
+    rotation = 0.0
+    try:
+        rotation = float((video.get("tags") or {}).get("rotate") or 0)
+    except (TypeError, ValueError):
+        rotation = 0.0
+    for item in video.get("side_data_list") or []:
+        try:
+            rotation = float(item.get("rotation", rotation))
+        except (TypeError, ValueError):
+            continue
+    if abs(rotation) % 360 > 1e-6:
+        issues.append(f"Output retains rotation metadata ({rotation:g} degrees); review orientation.")
     pixel_format = str(video.get("pix_fmt") or "unknown")
     if pixel_format != "yuv420p":
         issues.append(f"Pixel format is {pixel_format}, expected yuv420p for broad SDR delivery.")
@@ -463,6 +516,7 @@ def _check_delivery_video(streams: list[dict[str, Any]]) -> CheckResult:
             "nominal_fps": nominal,
             "average_fps": average,
             "variable_frame_rate": variable,
+            "rotation": rotation,
         },
         errors=issues,
     )

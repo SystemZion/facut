@@ -21,6 +21,10 @@ _SILENCE_END = re.compile(
     r"silence_end:\s*(?P<end>-?[\d.]+)\s*\|\s*"
     r"silence_duration:\s*(?P<duration>[\d.]+)"
 )
+_FREEZE_START = re.compile(r"freeze_start:\s*(?P<start>-?[\d.]+)")
+_FREEZE_END = re.compile(
+    r"freeze_duration:\s*(?P<duration>[\d.]+).*?freeze_end:\s*(?P<end>-?[\d.]+)"
+)
 
 
 def check_decode(
@@ -217,6 +221,75 @@ def check_silence(
             "segments": segments,
             "threshold_db": threshold_db,
             "minimum_duration_seconds": minimum_duration,
+        },
+    )
+
+
+def check_freeze(
+    source: Path,
+    ffmpeg: str,
+    *,
+    minimum_duration: float = 2.0,
+    noise_db: float = -60.0,
+    timeout: float | None = None,
+) -> CheckResult:
+    """Detect suspicious static video intervals without declaring intentional holds invalid."""
+
+    segments: list[dict[str, float]] = []
+    open_start: float | None = None
+
+    def parse(line: str) -> None:
+        nonlocal open_start
+        start_match = _FREEZE_START.search(line)
+        if start_match:
+            open_start = float(start_match["start"])
+        end_match = _FREEZE_END.search(line)
+        if end_match:
+            end = float(end_match["end"])
+            duration = float(end_match["duration"])
+            start = open_start if open_start is not None else end - duration
+            segments.append({"start": start, "end": end, "duration": duration})
+            open_start = None
+
+    result = run_streaming(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "info",
+            "-i",
+            source,
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            f"freezedetect=n={noise_db}dB:d={minimum_duration}",
+            "-f",
+            "null",
+            "-",
+        ],
+        on_stderr=parse,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        return CheckResult(
+            status=QCStatus.FAIL,
+            summary="Freeze analysis failed.",
+            data={"returncode": result.returncode},
+            errors=result.stderr_tail[-20:],
+        )
+    return CheckResult(
+        status=QCStatus.WARNING if segments else QCStatus.PASS,
+        summary=(
+            f"Detected {len(segments)} long static segment(s); review intentional holds."
+            if segments
+            else "No suspicious static segment met the configured threshold."
+        ),
+        data={
+            "segments": segments,
+            "minimum_duration_seconds": minimum_duration,
+            "noise_db": noise_db,
         },
     )
 

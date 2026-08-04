@@ -43,8 +43,10 @@ def _keyframe_expr(
         end = _fmt(right.time)
         left_value = _fmt(float(left.value))
         delta = _fmt(float(right.value) - float(left.value))
+        progress = f"({time_var}-{start})/({end}-{start})"
+        eased = _easing_expr(progress, left.easing)
         segment = (
-            f"{left_value}+({delta})*({time_var}-{start})/({end}-{start})"
+            f"{left_value}+({delta})*({eased})"
         )
         expression = f"if(lt({time_var}\\,{end})\\,{segment}\\,{expression})"
     first = points[0]
@@ -52,6 +54,19 @@ def _keyframe_expr(
         f"if(lt({time_var}\\,{_fmt(first.time)})\\,"
         f"{_fmt(float(first.value))}\\,{expression})"
     )
+
+
+def _easing_expr(progress: str, easing: str) -> str:
+    """Compile supported deterministic easing names to FFmpeg expressions."""
+
+    if easing == "ease-in":
+        return f"pow({progress},2)"
+    if easing == "ease-out":
+        return f"1-pow(1-({progress}),2)"
+    if easing in {"ease-in-out", "cubic"}:
+        # Smoothstep is cubic, continuous, and avoids another nested if().
+        return f"({progress})*({progress})*(3-2*({progress}))"
+    return progress
 
 
 def _filter_path(path: str | Path) -> str:

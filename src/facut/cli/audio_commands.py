@@ -180,9 +180,13 @@ def audio_mute(
 def audio_process(
     ctx: typer.Context,
     clip_id: Annotated[str, typer.Argument()],
-    highpass_hz: Annotated[float | None, typer.Option("--highpass-hz")] = None,
+    highpass_hz: Annotated[float | None, typer.Option("--highpass", "--highpass-hz")] = None,
     denoise_strength: Annotated[
-        float | None, typer.Option("--denoise-strength")
+        float | None, typer.Option("--denoise", "--denoise-strength")
+    ] = None,
+    compress: Annotated[
+        str | None,
+        typer.Option("--compress", help="Compressor preset: vlog, dialogue, or gentle."),
     ] = None,
     compressor: Annotated[bool, typer.Option("--compressor")] = False,
     disable_compressor: Annotated[
@@ -194,7 +198,7 @@ def audio_process(
     compressor_ratio: Annotated[
         float | None, typer.Option("--compressor-ratio")
     ] = None,
-    limiter_db: Annotated[float | None, typer.Option("--limiter-db")] = None,
+    limiter_db: Annotated[float | None, typer.Option("--limiter", "--limiter-db")] = None,
     loudnorm_lufs: Annotated[float | None, typer.Option("--loudnorm-lufs")] = None,
     channel_mode: Annotated[str | None, typer.Option("--channel-mode")] = None,
     pan: Annotated[float | None, typer.Option("--pan")] = None,
@@ -215,6 +219,7 @@ def audio_process(
             highpass_hz=highpass_hz,
             denoise_strength=denoise_strength,
             compressor=compressor_value,
+            compressor_preset=compress,
             compressor_threshold_db=compressor_threshold_db,
             compressor_ratio=compressor_ratio,
             limiter_db=limiter_db,
@@ -223,6 +228,30 @@ def audio_process(
             pan=pan,
             clear_pan=clear_pan,
         ),
+        dry_run,
+    )
+
+
+@audio_app.command("loudness")
+def audio_loudness(
+    ctx: typer.Context,
+    target: Annotated[float, typer.Option("--target")] = -14.0,
+    true_peak: Annotated[float, typer.Option("--true-peak")] = -1.0,
+    loudness_range: Annotated[float, typer.Option("--lra")] = 11.0,
+    two_pass: Annotated[bool, typer.Option("--two-pass/--single-pass")] = True,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Set project-wide loudness defaults; rendering uses two-pass by default."""
+
+    _execute(
+        ctx,
+        "audio.loudness",
+        {
+            "target": target,
+            "true_peak": true_peak,
+            "loudness_range": loudness_range,
+            "two_pass": two_pass,
+        },
         dry_run,
     )
 

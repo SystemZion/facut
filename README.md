@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.6.0` 补齐可复用安装/更新链路、独立模型库与 CUDA 自动发现，并增加无损顺序拼接快路径、两遍式母带响度、外部 ASS 烧录、亚帧吸附、轨道追加及持久渲染诊断日志。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python，也不会误用系统中 2013 年的旧版 FFmpeg。
+当前版本 `0.7.0` 增加 LRF 原生代理、专业画面/声音执行、变速与倒放、CutGraph 分支历史、跨轨片段级缓存和更完整的自动 QC。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python，也不会误用系统中 2013 年的旧版 FFmpeg。
 
 ## 安装
 
@@ -151,9 +151,21 @@ facut doctor --sample-render
 450f
 ```
 
-输出同时提供秒、时间码和帧编号。`proxy create/link/relink/status` 在同一个工程内维护原片/代理关系；预览自动使用在线代理，最终渲染自动回到原片。`proxy relink <MEDIA_ID> --search <DIR>` 可识别同名 `_LRF` 与 `_proxy` 文件。
+输出同时提供秒、时间码和帧编号。`proxy create/link/relink/scan/status` 在同一个工程内维护原片/代理关系；预览自动使用在线代理，最终渲染自动回到原片。`proxy scan --link` 会识别 `_LRF`、`-LRF`、`.LRF` 与 `_proxy`，拒绝零字节/损坏候选，并在歧义时返回 `PROXY_AMBIGUOUS`。
 
 顺序组装可使用 `timeline add <MEDIA_ID> --track V1 --append`，无需每次查询总时长；显式 `--out` 超过探测时长不满一帧时会钳制，亚帧缝隙/重叠会自动吸附并写入片段警告。脚本只需素材 ID 时可用 `facut import ... --porcelain`。
+
+画面和速度处理直接写入非破坏时间线：
+
+```powershell
+facut --project vlog clip transform clip_01 --crop 120:80:3600:2000 --scale 1.08
+facut --project vlog clip motion clip_01 --preset slow-push --intensity 0.35
+facut --project vlog clip speed clip_01 --rate 2
+facut --project vlog clip speed clip_01 --reverse
+facut --project vlog clip speed clip_01 --curve speed.json
+```
+
+速度曲线使用源片段相对秒数，支持 `step` 和确定性采样的 `linear`：`{"version":"1.0","mode":"linear","steps":8,"points":[{"at":0,"rate":1},{"at":2,"rate":2},{"at":4,"rate":0.75}]}`。曲线节点会进入缓存、Recipe 和 CutGraph；倒放同时反转画面与原音。
 
 纯单轨、硬切、全文件、编码参数一致且无任何画面/声音处理的时间线，`render --fast-path auto` 会使用 FFmpeg concat stream-copy，零重编码、零画质损失；`--fast-path off` 可禁用。强制剪裁流复制必须显式使用 `--fast-path force`，结果会警告关键帧误差。
 
@@ -419,12 +431,28 @@ facut --project demo audio crossfade --from <LEFT_ID> --to <RIGHT_ID> --duration
 
 ```bash
 facut --project demo proxy create <MEDIA_ID> --height 540
+facut --project demo proxy scan --link
 facut --project demo proxy status --json
 facut --project demo preview timeline
 facut --project demo render --output final.mp4 --incremental --jsonl-progress
 ```
 
-增量渲染以素材状态和片段参数哈希缓存中间段。当前安全优化范围是单个连续主视频轨、无转场/字幕/文字/额外音频；复杂工程会明确警告并降级为完整渲染，不会给出虚假的缓存命中。渲染器强制以时间线终点封装并裁掉音视频尾巴。JSONL 进度包含阶段、百分比、输出时间、帧率、速度、ETA 与当前片段。
+增量渲染以素材状态和片段参数哈希缓存中间段。连续主视频轨可同时包含叠加视频、独立音频、字幕、文字和调整层；每个主片段只缓存与该区间相交的节点。转场目前仍会明确降级为完整渲染，不会给出虚假的缓存命中。渲染器强制以时间线终点封装并裁掉音视频尾巴。JSONL 进度包含阶段、百分比、输出时间、帧率、速度、ETA、当前片段和缓存命中。
+
+## CutGraph 分支剪辑历史
+
+```powershell
+facut --project vlog history status
+facut --project vlog history log --graph
+facut --project vlog branch create faster-opening --switch
+facut --project vlog history diff main..HEAD
+facut --project vlog preview compare main HEAD --changed-only
+facut --project vlog branch accept faster-opening --into main
+```
+
+撤销只移动当前分支指针，不删除未来版本；撤销后继续编辑会自动保存恢复分支。`restore` 把旧状态恢复成一个新提交。`branch accept` 仅允许安全快速前进，分叉时返回 `HISTORY_CONFLICT`，不会自动覆盖主版本。
+
+`facut run`、JSON-RPC 时间线写操作、Recipe build 和口播应用默认从 `main` 自动进入 `agent/`、`recipe/` 或 `narration/` 实验分支。人工检查后再 `branch accept`；已在非主分支时继续沿当前实验分支工作。
 
 ## QC、分析和标记
 
@@ -471,7 +499,7 @@ YouTube 预设保留工程原帧率，标准帧率 4K SDR 使用 45Mbps、高帧
 - HDR/PQ/HLG/Log 与 BT.2020 素材尚未实现自动 HDR→SDR tone-map；BT.709 交付预设会明确阻止这类素材，避免只改标签而产生错误颜色。
 - GPX 已实现；KML、带在线地图瓦片或自动地名解析的地图样式尚未实现。
 - OTIO 原生 JSON 支持高保真 FACUT 元数据往返；FCPXML 当前是明确标注损失的 1.9 保守子集。
-- 增量缓存会对复杂工程安全降级为整片渲染；跨转场区间复用是后续优化。
+- 增量缓存会在存在转场时安全降级为整片渲染；跨转场边界复用是后续优化。
 
 ## 开发与测试
 

@@ -100,13 +100,17 @@ def timeline_show(
     ctx: typer.Context,
     from_time: Annotated[str | None, typer.Option("--from")] = None,
     to_time: Annotated[str | None, typer.Option("--to")] = None,
+    waveform: Annotated[bool, typer.Option("--waveform")] = False,
+    beats: Annotated[bool, typer.Option("--beats")] = False,
+    width: Annotated[int, typer.Option("--width", min=20, max=400)] = 100,
 ) -> None:
     """Show clips, transitions, and exact frame-aware positions."""
 
     from facut.cli.main import emit
 
     try:
-        document = manager_for(_state(ctx)).require_document()
+        manager = manager_for(_state(ctx))
+        document = manager.require_document()
         lower = float(parse_time(from_time, document.project.fps).seconds) if from_time else 0.0
         upper = float(parse_time(to_time, document.project.fps).seconds) if to_time else float("inf")
         tracks = []
@@ -129,10 +133,25 @@ def timeline_show(
             "tracks": tracks,
             "transitions": [item.model_dump(mode="json") for item in document.transitions],
         }
+        waveform_human = ""
+        if waveform:
+            from facut.media.timeline_waveform import timeline_waveforms, waveform_text
+
+            waveform_data = timeline_waveforms(
+                manager,
+                document,
+                width=width,
+                from_time=lower,
+                to_time=None if upper == float("inf") else upper,
+                ffmpeg=_state(ctx).config.tools.ffmpeg,
+                include_beats=beats,
+            )
+            data["waveform"] = waveform_data
+            waveform_human = "\n\n" + waveform_text(waveform_data)
         emit(
             _state(ctx),
             success_response("timeline.show", data, project_revision=document.revision),
-            human="\n".join(lines) or "Timeline is empty.",
+            human=("\n".join(lines) or "Timeline is empty.") + waveform_human,
         )
     except Exception as error:
         _abort(ctx, "timeline.show", error)
@@ -185,6 +204,10 @@ def clip_transform(
     crop_top: Annotated[float | None, typer.Option("--crop-top")] = None,
     crop_right: Annotated[float | None, typer.Option("--crop-right")] = None,
     crop_bottom: Annotated[float | None, typer.Option("--crop-bottom")] = None,
+    crop: Annotated[
+        str | None,
+        typer.Option("--crop", help="Source rectangle left:top:width:height."),
+    ] = None,
     fit: Annotated[str | None, typer.Option("--fit")] = None,
     flip_x: Annotated[bool | None, typer.Option("--flip-x/--no-flip-x")] = None,
     flip_y: Annotated[bool | None, typer.Option("--flip-y/--no-flip-y")] = None,
@@ -215,6 +238,7 @@ def clip_transform(
         "crop_top": crop_top,
         "crop_right": crop_right,
         "crop_bottom": crop_bottom,
+        "crop": crop,
         "fit": fit,
         "flip_x": flip_x,
         "flip_y": flip_y,
@@ -228,6 +252,81 @@ def clip_transform(
         ctx,
         "clip.transform",
         {name: value for name, value in params.items() if value is not None},
+        dry_run,
+    )
+
+
+@clip_app.command("motion")
+def clip_motion(
+    ctx: typer.Context,
+    clip_id: str,
+    preset: Annotated[str, typer.Option("--preset")],
+    intensity: Annotated[float, typer.Option("--intensity", min=0.0, max=1.0)] = 0.35,
+    easing: Annotated[str, typer.Option("--easing")] = "ease-in-out",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Apply a restrained digital camera-movement preset."""
+
+    _execute(
+        ctx,
+        "clip.motion",
+        {
+            "clip_id": clip_id,
+            "preset": preset,
+            "intensity": intensity,
+            "easing": easing,
+        },
+        dry_run,
+    )
+
+
+@clip_app.command("speed")
+def clip_speed(
+    ctx: typer.Context,
+    clip_id: str,
+    rate: Annotated[float | None, typer.Option("--rate")] = None,
+    duration: Annotated[str | None, typer.Option("--duration")] = None,
+    curve: Annotated[Path | None, typer.Option("--curve", exists=True, dir_okay=False)] = None,
+    reverse: Annotated[bool, typer.Option("--reverse")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Apply constant speed, target duration, a speed curve, or reverse playback."""
+
+    if curve is not None and any((rate is not None, duration is not None, reverse)):
+        _abort(
+            ctx,
+            "clip.speed",
+            ValueError("--curve cannot be combined with --rate, --duration, or --reverse."),
+        )
+        return
+    if duration is not None and (rate is not None or reverse):
+        _abort(ctx, "clip.speed", ValueError("--duration cannot be combined with --rate or --reverse."))
+        return
+    if rate is None and duration is None and curve is None and not reverse:
+        _abort(ctx, "clip.speed", ValueError("Specify --rate, --duration, --curve, or --reverse."))
+        return
+
+    if reverse:
+        rate = -abs(rate or 1.0)
+    if curve is not None:
+        try:
+            curve_payload = json.loads(curve.read_text(encoding="utf-8-sig"))
+            if not isinstance(curve_payload, dict):
+                raise ValueError("Speed curve JSON must contain an object.")
+        except Exception as error:
+            _abort(ctx, "clip.speed_curve", error)
+            return
+        _execute(
+            ctx,
+            "clip.speed_curve",
+            {"clip_id": clip_id, "curve": curve_payload},
+            dry_run,
+        )
+        return
+    _execute(
+        ctx,
+        "clip.speed",
+        {name: value for name, value in {"clip_id": clip_id, "rate": rate, "duration": duration}.items() if value is not None},
         dry_run,
     )
 

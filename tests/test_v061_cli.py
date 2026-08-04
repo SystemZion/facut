@@ -126,6 +126,21 @@ def test_new_agent_schemas_are_discoverable() -> None:
         "recipe.validate",
         "recipe.plan",
         "recipe.build",
+        "clip.motion",
+        "clip.speed",
+        "clip.speed_curve",
+        "audio.process",
+        "audio.crossfade",
+        "proxy.scan",
+        "proxy.link_auto",
+        "history.status",
+        "history.diff",
+        "history.restore",
+        "branch.create",
+        "branch.switch",
+        "branch.accept",
+        "preview.compare",
+        "qc.run",
     ):
         result = runner.invoke(app, ["--json", "schema", "action", action])
         assert result.exit_code == 0, (action, result.output)
