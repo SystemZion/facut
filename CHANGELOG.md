@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2 — 2026-08-04
+
+- Fixed Windows installation so the frozen FACUT directory is de-duplicated
+  and placed first in the user and current-process PATH. This prevents an older
+  Python console-script launcher from shadowing the installed EXE.
+
 ## 0.6.1 — 2026-08-04
 
 - Added `voice studio` with no-ID startup, arbitrary profile names, profile

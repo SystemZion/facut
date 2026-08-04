@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from facut.exceptions import InvalidArgumentError
-from facut.installation import install_facut, update_facut
+from facut.installation import _prioritize_path, install_facut, update_facut
 
 
 def _installed_executable(directory: Path) -> Path:
@@ -56,6 +56,17 @@ def test_install_rejects_unknown_exclusion(tmp_path: Path) -> None:
             exclude=["mystery"],
             add_path=False,
         )
+
+
+def test_install_path_is_deduplicated_and_prioritized(tmp_path: Path) -> None:
+    target = (tmp_path / "facut-bin").resolve()
+    entries = [str(tmp_path / "python-scripts"), str(target), str(target) + os.sep]
+    updated, changed = _prioritize_path(entries, target)
+    assert changed is True
+    assert updated == [str(target), str(tmp_path / "python-scripts")]
+    same, changed_again = _prioritize_path(updated, target)
+    assert same == updated
+    assert changed_again is False
 
 
 def test_offline_update_replaces_isolated_install(tmp_path: Path) -> None:
