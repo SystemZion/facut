@@ -588,7 +588,10 @@ class GraphBuilder:
                     overlay_ref = f"overlayref{overlay_number}"
                     filters.append(
                         f"[{mask_label}][{overlay_label}]scale2ref="
-                        f"w=rw:h=rh[{mask_scaled}][{overlay_ref}]"
+                        # ``iw``/``ih`` resolve to the reference input here on
+                        # FFmpeg 5 through 8.  Newer ``rw``/``rh`` variables
+                        # are unavailable on older release builds.
+                        f"w=iw:h=ih[{mask_scaled}][{overlay_ref}]"
                     )
                     masked_label = f"masked{overlay_number}"
                     filters.append(

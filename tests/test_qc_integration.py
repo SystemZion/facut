@@ -52,7 +52,9 @@ def _qc_tools() -> tuple[str, str, str] | None:
         ).stdout
         encoder = "libx264" if " libx264 " in encoders else "mpeg4" if " mpeg4 " in encoders else ""
         probe = os.environ.get("FACUT_TEST_FFPROBE") or os.environ.get("FACUT_FFPROBE")
-        adjacent = Path(candidate).with_name("ffprobe.exe")
+        adjacent = Path(candidate).with_name(
+            "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        )
         if not probe and adjacent.is_file():
             probe = str(adjacent)
         probe = probe or shutil.which("ffprobe")

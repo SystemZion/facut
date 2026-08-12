@@ -169,11 +169,12 @@ def test_direct_copy_real_concat_is_playable(tmp_path: Path) -> None:
     )
     assert result.encoder == "copy"
     assert result.output.stat().st_size > 1000
-    ffprobe = Path(ffmpeg).with_name("ffprobe.exe")
+    ffprobe = os.environ.get("FACUT_TEST_FFPROBE") or shutil.which("ffprobe")
+    assert ffprobe, "FFprobe is unavailable"
     duration = float(
         subprocess.run(
             [
-                str(ffprobe),
+                ffprobe,
                 "-v",
                 "error",
                 "-show_entries",

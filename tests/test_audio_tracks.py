@@ -232,12 +232,12 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
             "-hide_banner",
             "-loglevel",
             "error",
+            "-i",
+            str(output),
             "-ss",
             "2.2",
             "-t",
             "0.5",
-            "-i",
-            str(output),
             "-vn",
             "-ac",
             "1",
@@ -250,6 +250,7 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
         capture_output=True,
         check=True,
     ).stdout
+    assert decoded, "FFmpeg returned no decoded audio samples"
     samples = array("f")
     samples.frombytes(decoded)
     assert _tone_strength(samples, 440) > 0.01, "camera audio was lost"

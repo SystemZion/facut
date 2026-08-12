@@ -56,7 +56,9 @@ def _ffmpeg_with_xfade() -> tuple[str, str, str] | None:
             encoder = "h264_qsv"
         else:
             continue
-        adjacent = Path(candidate).with_name("ffprobe.exe")
+        adjacent = Path(candidate).with_name(
+            "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        )
         probe = str(adjacent) if adjacent.is_file() else shutil.which("ffprobe")
         if probe:
             return str(candidate), probe, encoder
