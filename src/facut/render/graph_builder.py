@@ -367,6 +367,17 @@ class GraphBuilder:
                         clip, clip.duration, self.project.project.sample_rate
                     )
                 )
+                # Stateful filters such as loudnorm and alimiter can shorten a
+                # short stream on older FFmpeg releases because of their look-
+                # ahead latency. Keep native camera audio frame-aligned with
+                # its video clip after processing, just like independent
+                # timeline audio below.
+                audio_chain.extend(
+                    [
+                        f"apad=whole_dur={_fmt(clip.duration)}",
+                        f"atrim=duration={_fmt(clip.duration)}",
+                    ]
+                )
                 filters.append(",".join(audio_chain) + f"[a{index}]")
             else:
                 filters.append(

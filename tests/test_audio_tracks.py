@@ -145,6 +145,7 @@ def test_native_and_independent_audio_share_processing_model(tmp_path: Path) -> 
     assert "volume=-3dB" in graph
     assert "loudnorm=I=-14:TP=-1:LRA=11" in graph
     assert "alimiter=limit=" in graph
+    assert "apad=whole_dur=3,atrim=duration=3[a0]" in graph
     assert "pan=stereo|c0=1*c0|c1=0.75*c1" in graph
     assert "channel_layouts=mono,pan=stereo|c0=c0|c1=c0" in graph
     timeline.set_audio_mute(camera_id)
