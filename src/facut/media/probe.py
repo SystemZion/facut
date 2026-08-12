@@ -52,6 +52,11 @@ def probe_media(
             suggestion="Verify that FFprobe supports the file's container and codec.",
         ) from exc
     info = _parse_probe(payload)
+    # Image demuxers commonly expose one synthetic frame (for example 0.04s at
+    # 25 fps). That is not a meaningful source duration. FACUT treats stills
+    # as timeless media and assigns their display duration on the timeline.
+    if source.suffix.casefold() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        info.duration = None
     if include_keyframes and info.video_codec:
         info.keyframes = probe_keyframes(source, ffprobe=executable, timeout=timeout)
     return info

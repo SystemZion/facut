@@ -28,7 +28,6 @@ def _qc_tools() -> tuple[str, str, str] | None:
         os.environ.get("FACUT_TEST_FFMPEG"),
         os.environ.get("FACUT_FFMPEG"),
         shutil.which("ffmpeg"),
-        r"D:\工具\jianyin\JianyingPro\9.3.0.13547\ffmpeg.exe",
     ]
     for candidate in candidates:
         if not candidate or not Path(candidate).is_file():

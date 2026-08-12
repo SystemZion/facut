@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.7.0` 增加 LRF 原生代理、专业画面/声音执行、变速与倒放、CutGraph 分支历史、跨轨片段级缓存和更完整的自动 QC。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python，也不会误用系统中 2013 年的旧版 FFmpeg。
+当前版本 `0.7.1` 稳定了 LRF/CutGraph 专业执行链路：拒绝旧版 FFmpeg、静态图片默认 5 秒并支持 `timeline add --duration`、响度只重编码音频且复用画面母版、AAC 真峰值带安全余量和封装后复测。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
 
 ## 安装
 
@@ -67,14 +67,14 @@ facut models status
 已有模型无需移动或复制，可直接链接任意目录：
 
 ```powershell
-facut models link srt_model D:\工具\mediakit\models\whisper-turbo
+facut models link srt_model D:\MediaModels\whisper-turbo
 facut models link voice_model D:\FACUT\models\Fun-CosyVoice3-0.5B-2512
 facut models path D:\FACUT\models
 ```
 
 字幕识别会在导入 `faster-whisper` 前自动发现 pip 安装的 cuDNN/cuBLAS DLL，并在结果和 `doctor --json` 中报告实际 CUDA 设备数。模型始终使用本地目录和 `local_files_only=True`，不会因 Hugging Face 校验或项目目录清理而失效。
 
-单文件 EXE 为控制安装体积不会内嵌 Python、CTranslate2、cuDNN 和模型权重；执行 ASR 时会自动桥接已经安装 `faster-whisper` 的外部 Python。可用 `FACUT_ANALYSIS_PYTHON=D:\工具\Python\python.exe` 或配置文件 `tools.analysis_python` 固定解释器，避免命中错误的 Python 环境。
+单文件 EXE 为控制安装体积不会内嵌 Python、CTranslate2、cuDNN 和模型权重；执行 ASR 时会自动桥接已经安装 `faster-whisper` 的外部 Python。可用 `FACUT_ANALYSIS_PYTHON=D:\Python311\python.exe` 或配置文件 `tools.analysis_python` 固定解释器，避免命中错误的 Python 环境。
 
 安装 `srt_model` 后，字幕识别默认自动使用它：
 

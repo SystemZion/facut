@@ -196,6 +196,8 @@ class RecipeEngine:
             }
             if clip.source_out is not None:
                 command["source_out"] = clip.source_out
+            if clip.duration is not None:
+                command["duration"] = clip.duration
             if action == "audio.add":
                 command.update(clip.audio)
                 command.pop("append", None)  # audio.add has no append option yet

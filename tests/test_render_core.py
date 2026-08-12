@@ -30,7 +30,6 @@ def _ffmpeg_with_xfade() -> tuple[str, str, str] | None:
     candidates = [
         os.environ.get("FACUT_TEST_FFMPEG"),
         shutil.which("ffmpeg"),
-        r"D:\工具\jianyin\JianyingPro\9.3.0.13547\ffmpeg.exe",
     ]
     for candidate in candidates:
         if not candidate or not Path(candidate).is_file():
@@ -320,7 +319,12 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
     assert progress_events
     assert progress_events[-1]["progress"] == pytest.approx(1.0)
     assert any(event["stage"] == "loudness_scan" for event in progress_events)
+    assert any(event["stage"] == "loudness_apply" for event in progress_events)
     assert "eta_seconds" in progress_events[-1]
+    assert final.loudness is not None
+    assert abs(final.loudness["output_lufs"] - (-14.0)) <= 0.5
+    assert final.loudness["actual_true_peak_db"] <= -1.0
+    assert final.loudness["video_master_reused"] is True
     assert list((tmp_path / "logs").glob("loudness-pass1-*.log"))
     assert list((tmp_path / "logs").glob("render-*.log"))
     for path, expected in ((final.output, 3.5), (preview.output, 1.5)):
@@ -421,3 +425,31 @@ def test_render_and_range_preview_are_playable(tmp_path: Path) -> None:
     assert len(midpoint) == 3
     red, _, blue = midpoint
     assert red > 20 and blue > 20, "mid-transition frame must blend both clips"
+
+
+def test_audio_mastering_keeps_digital_silence_and_copies_video(tmp_path: Path) -> None:
+    tools = _ffmpeg_with_xfade()
+    if tools is None:
+        pytest.skip("No modern FFmpeg is available")
+    ffmpeg, _, encoder = tools
+    source = tmp_path / "silent-master.mp4"
+    output = tmp_path / "silent-final.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=160x90:r=30:d=1",
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=1",
+            "-c:v", encoder, "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", str(source),
+        ],
+        check=True,
+    )
+    metrics = FFmpegBackend(ffmpeg).normalize_master(
+        source, output, duration=1.0, target_lufs=-14, true_peak=-1,
+        loudness_range=11, audio_codec="aac", audio_bitrate="192k",
+        audio_sample_rate=48000, overwrite=False, progress=None,
+        log_directory=tmp_path / "logs",
+    )
+    assert output.is_file()
+    assert metrics["skipped"] == "digital_silence"
+    assert metrics["video_master_reused"] is True

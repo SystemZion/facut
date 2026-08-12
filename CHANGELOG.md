@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.1 — 2026-08-12
+
+### Fixed
+
+- Unified tests and runtime media-tool selection around FACUT's embedded or
+  reviewed FFmpeg 5+ resolver; legacy PATH binaries are rejected.
+- Still-image probe durations are no longer treated as real clip lengths.
+  `timeline add`, Recipes and Agent Schema now accept `duration`, with a
+  non-destructive five-second default for images.
+- Two-pass EBU R128 mastering now scans audio only, stream-copies the rendered
+  video master, emits continuous JSONL progress, reserves an AAC true-peak
+  safety margin and verifies the muxed result.
+- Doctor now distinguishes runtime extraction, stable install identity, tool
+  source, and detected/usable/implemented video encoders.
+- The eager version path avoids importing every editing subsystem.
+
+### Release safety
+
+- Added a tracked-file privacy gate and ignored local voice auditions, model
+  fragments, provider builds and machine-only download helpers.
+- PyInstaller paths are now checkout-relative rather than author-machine
+  absolute paths.
+- CPU voice PyTorch overlays are explicit configuration and do not replace the
+  CUDA runtime or modify retained voice recordings.
+
+### Verified
+
+- 201 automated tests pass on the Windows development environment with the
+  same modern-tool resolver used by the product.
+
 ## 0.6.2 — 2026-08-04
 
 - Fixed Windows installation so the frozen FACUT directory is de-duplicated
@@ -137,7 +167,7 @@ All notable changes to `facut` are documented here.
   360x640, exact 3.000-second H.264/AAC output, `yuv420p`, BT.709.
 - Automated suite: 104 tests when modern FFmpeg/FFprobe are supplied.
 
-## 0.3.0 — 2026-08-02
+## 0.7.0 — 2026-08-04
 
 ### Added
 

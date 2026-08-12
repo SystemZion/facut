@@ -76,12 +76,19 @@ def timeline_add(
     ] = False,
     source_in: Annotated[str, typer.Option("--in")] = "0",
     source_out: Annotated[str | None, typer.Option("--out")] = None,
+    duration: Annotated[
+        str | None,
+        typer.Option("--duration", help="Timeline duration; still images default to 5s."),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Place a source range on a timeline track."""
 
     if append and at is not None:
         _abort(ctx, "timeline.add", ValueError("Use either --append or --at, not both."))
+        return
+    if source_out is not None and duration is not None:
+        _abort(ctx, "timeline.add", ValueError("Use either --out or --duration, not both."))
         return
     params = {
         "media_id": media_id,
@@ -92,6 +99,8 @@ def timeline_add(
     }
     if source_out is not None:
         params["out"] = source_out
+    if duration is not None:
+        params["duration"] = duration
     _execute(ctx, "timeline.add", params, dry_run)
 
 

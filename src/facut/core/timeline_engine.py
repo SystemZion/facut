@@ -191,6 +191,7 @@ class TimelineEngine:
         at: str | float = 0,
         source_in: str | float = 0,
         source_out: str | float | None = None,
+        duration: str | float | None = None,
         clip_id: str | None = None,
         append: bool = False,
     ) -> Clip:
@@ -202,15 +203,25 @@ class TimelineEngine:
             raise TimelineItemNotFound(f'Media "{media_id}" was not found.')
         in_seconds = seconds(source_in, self.fps)
         media_duration = asset.technical.duration
-        out_seconds = (
-            seconds(source_out, self.fps) if source_out is not None else media_duration
-        )
+        if source_out is not None and duration is not None:
+            raise TimelineError("Specify either source out or duration, not both.")
+        requested_duration = seconds(duration, self.fps) if duration is not None else None
+        if requested_duration is not None and requested_duration <= 0:
+            raise TimelineError("Clip duration must be positive.")
+        if requested_duration is not None:
+            out_seconds = in_seconds + requested_duration
+        elif source_out is not None:
+            out_seconds = seconds(source_out, self.fps)
+        elif asset.kind == MediaKind.IMAGE:
+            out_seconds = in_seconds + 5.0
+        else:
+            out_seconds = media_duration
         if out_seconds is None:
             raise TimelineError(
                 f'Media "{media_id}" has no duration; specify an explicit out point.'
             )
         timeline_warnings: list[str] = []
-        if media_duration is not None and out_seconds > media_duration:
+        if asset.kind != MediaKind.IMAGE and media_duration is not None and out_seconds > media_duration:
             excess = out_seconds - media_duration
             if excess <= 1 / self.fps + 1e-9:
                 timeline_warnings.append(

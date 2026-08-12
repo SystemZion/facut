@@ -55,6 +55,32 @@ def test_time_formats(value: object, expected_seconds: float, expected_frame: in
     assert parsed.as_dict()["timecode"].count(":") == 2
 
 
+def test_still_image_defaults_to_five_seconds_and_accepts_duration() -> None:
+    document = project()
+    document.media.append(
+        MediaAsset(
+            id="photo", kind=MediaKind.IMAGE, path="photo.jpg",
+            original_name="photo.jpg", size=1, sha256="b" * 64,
+            technical=MediaTechnicalInfo(duration=None, width=4000, height=3000),
+        )
+    )
+    engine = TimelineEngine(document)
+    engine.add_track("image", "P1")
+    default_clip = engine.add_clip("photo", "P1")
+    explicit_clip = engine.add_clip("photo", "P1", append=True, duration="4s")
+    assert default_clip.duration == pytest.approx(5.0)
+    assert explicit_clip.duration == pytest.approx(4.0)
+    assert explicit_clip.timeline_start == pytest.approx(5.0)
+
+
+def test_clip_duration_and_source_out_are_mutually_exclusive() -> None:
+    document = project()
+    engine = TimelineEngine(document)
+    engine.add_track("video", "V1")
+    with pytest.raises(TimelineError, match="either source out or duration"):
+        engine.add_clip("media_01", "V1", source_out=5, duration=4)
+
+
 def test_split_trim_move_and_ripple_delete() -> None:
     document = project()
     engine = TimelineEngine(document)

@@ -75,6 +75,13 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                         {"type": "string", "minLength": 1},
                     ]
                 },
+                "duration": {
+                    "oneOf": [
+                        {"type": "number", "exclusiveMinimum": 0},
+                        {"type": "string", "minLength": 1},
+                    ],
+                    "description": "Clip timeline duration; still images default to 5 seconds.",
+                },
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["media_id", "track"],

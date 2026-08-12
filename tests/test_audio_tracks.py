@@ -24,7 +24,6 @@ from facut.render.graph_builder import GraphBuilder
 def _modern_ffmpeg() -> tuple[str, str] | None:
     candidates = [
         os.environ.get("FACUT_TEST_FFMPEG"),
-        r"D:\工具\jianyin\JianyingPro\9.3.0.13547\ffmpeg.exe",
         shutil.which("ffmpeg"),
     ]
     for candidate in candidates:

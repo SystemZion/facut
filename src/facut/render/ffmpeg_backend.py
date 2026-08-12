@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import time
@@ -16,8 +15,10 @@ from typing import Any, Callable
 
 from facut.core.models import ProjectDocument
 from facut.exceptions import NotImplementedFacutError
+from facut.media.tools import find_executable
 from facut.render.graph_builder import FilterGraph, GraphBuilder
 from facut.render.hardware import EncoderChoice, available_encoders, choose_h264_encoder
+from facut.render.loudness import LoudnessMasterError, master_loudness as apply_master_loudness
 from facut.subtitles.compiler import SubtitleCompiler
 
 
@@ -49,9 +50,10 @@ class RenderResult:
     hardware: str
     warnings: list[str]
     cached: bool = False
+    loudness: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "status": "success",
             "output": str(self.output),
             "duration": self.duration,
@@ -60,6 +62,9 @@ class RenderResult:
             "cached": self.cached,
             "warnings": self.warnings,
         }
+        if self.loudness is not None:
+            payload["loudness"] = self.loudness
+        return payload
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -79,20 +84,7 @@ def _progress_number(value: str | None, default: float = 0.0) -> float:
 def find_ffmpeg(explicit: str | Path | None = None) -> str:
     """Resolve FFmpeg without invoking a shell."""
 
-    if explicit:
-        candidate = Path(explicit)
-        if candidate.is_file():
-            return str(candidate)
-        resolved = shutil.which(str(explicit))
-        if resolved:
-            return resolved
-        raise FileNotFoundError(f"FFmpeg executable was not found: {explicit}")
-    resolved = shutil.which("ffmpeg")
-    if not resolved:
-        raise FileNotFoundError(
-            "FFmpeg is required. Install it or configure the ffmpeg path."
-        )
-    return resolved
+    return find_executable("ffmpeg", explicit)
 
 
 def _friendly_failure(detail: str) -> str:
@@ -215,39 +207,24 @@ class FFmpegBackend:
                 preview=preview,
                 subtitle_file=subtitle_file,
             )
-            if loudness_target is not None:
-                targets = {
-                    "target_lufs": float(loudness_target),
-                    "true_peak_db": float(true_peak),
-                    "loudness_range": float(loudness_range),
-                }
-                measured = self._measure_loudness(
-                    graph,
-                    targets,
-                    log_directory=log_directory,
-                    progress=progress,
-                )
-                graph = GraphBuilder(project, project_dir).build(
-                    width=width,
-                    height=height,
-                    fps=fps,
-                    range_from=range_from,
-                    range_to=range_to,
-                    preview=preview,
-                    subtitle_file=subtitle_file,
-                    master_loudness={**targets, **measured},
-                )
         except Exception:
             if generated_subtitle is not None:
                 generated_subtitle.unlink(missing_ok=True)
             raise
         choice = choose_h264_encoder(self.ffmpeg, hardware)
         warnings = list(choice.warnings)
+        render_destination = destination
+        if loudness_target is not None:
+            render_destination = destination.with_name(
+                f".{destination.stem}.facut-master-{os.getpid()}{destination.suffix}"
+            )
+            render_destination.unlink(missing_ok=True)
+        loudness_metrics: dict[str, Any] | None = None
         try:
             try:
                 self._run(
                     graph,
-                    destination,
+                    render_destination,
                     choice,
                     audio_codec=audio_codec,
                     audio_bitrate=audio_bitrate,
@@ -255,7 +232,7 @@ class FFmpegBackend:
                     color_space=color_space,
                     audio_sample_rate=audio_sample_rate,
                     preview=preview,
-                    overwrite=overwrite,
+                    overwrite=True if loudness_target is not None else overwrite,
                     progress=progress,
                     log_directory=log_directory,
                 )
@@ -271,7 +248,7 @@ class FFmpegBackend:
                 software = EncoderChoice("libx264", "none")
                 self._run(
                     graph,
-                    destination,
+                    render_destination,
                     software,
                     audio_codec=audio_codec,
                     audio_bitrate=audio_bitrate,
@@ -284,7 +261,33 @@ class FFmpegBackend:
                     log_directory=log_directory,
                 )
                 choice = software
+            if loudness_target is not None:
+                try:
+                    loudness_metrics = apply_master_loudness(
+                        self.ffmpeg,
+                        render_destination,
+                        destination,
+                        duration=graph.duration,
+                        target_lufs=float(loudness_target),
+                        true_peak=float(true_peak),
+                        loudness_range=float(loudness_range),
+                        audio_codec=audio_codec,
+                        audio_bitrate=audio_bitrate,
+                        audio_sample_rate=audio_sample_rate,
+                        overwrite=overwrite,
+                        progress=progress,
+                        log_directory=log_directory,
+                    )
+                    if loudness_metrics.get("skipped") == "digital_silence":
+                        warnings.append("Master loudness was skipped because the mix is digital silence.")
+                except LoudnessMasterError as error:
+                    raise RenderError(
+                        str(error), command=error.command, detail=error.stderr,
+                        log_path=error.log_path,
+                    ) from error
         finally:
+            if loudness_target is not None:
+                render_destination.unlink(missing_ok=True)
             if generated_subtitle is not None:
                 generated_subtitle.unlink(missing_ok=True)
         return RenderResult(
@@ -293,105 +296,41 @@ class FFmpegBackend:
             encoder=choice.encoder,
             hardware=choice.hardware,
             warnings=warnings,
+            loudness=loudness_metrics,
         )
 
-    def _measure_loudness(
+    def normalize_master(
         self,
-        graph: FilterGraph,
-        targets: dict[str, float],
+        source: str | Path,
+        destination: str | Path,
         *,
-        log_directory: Path,
+        duration: float,
+        target_lufs: float,
+        true_peak: float,
+        loudness_range: float,
+        audio_codec: str,
+        audio_bitrate: str,
+        audio_sample_rate: int | None,
+        overwrite: bool,
         progress: ProgressCallback | None,
-    ) -> dict[str, float]:
-        """Run EBU R128 pass one and return measured values for linear pass two."""
+        log_directory: str | Path,
+    ) -> dict[str, Any]:
+        """Apply audio-only mastering to an existing picture/mix master."""
 
-        measurement_label = "facut_loudness_measure"
-        loudnorm = (
-            f"loudnorm=I={targets['target_lufs']}:TP={targets['true_peak_db']}:"
-            f"LRA={targets['loudness_range']}:print_format=json"
-        )
-        filter_graph = (
-            graph.filter_complex
-            + f";[{graph.audio_label}]{loudnorm}[{measurement_label}]"
-        )
-        args = [
-            self.ffmpeg,
-            "-hide_banner",
-            "-nostdin",
-            *graph.input_args,
-            "-filter_complex",
-            filter_graph,
-            "-map",
-            f"[{graph.video_label}]",
-            "-map",
-            f"[{measurement_label}]",
-            "-f",
-            "null",
-            "-",
-        ]
-        if progress:
-            progress(
-                {
-                    "event": "progress",
-                    "stage": "loudness_scan",
-                    "progress": 0.0,
-                    "out_time_seconds": 0.0,
-                    "frame": 0,
-                    "fps": 0.0,
-                    "speed": None,
-                    "eta_seconds": None,
-                }
+        try:
+            return apply_master_loudness(
+                self.ffmpeg, Path(source), Path(destination), duration=duration,
+                target_lufs=target_lufs, true_peak=true_peak,
+                loudness_range=loudness_range, audio_codec=audio_codec,
+                audio_bitrate=audio_bitrate, audio_sample_rate=audio_sample_rate,
+                overwrite=overwrite, progress=progress,
+                log_directory=Path(log_directory),
             )
-        completed = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        log_directory.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        log_path = log_directory / f"loudness-pass1-{stamp}.log"
-        log_path.write_text(
-            "command_json:\n"
-            + json.dumps(args, ensure_ascii=False, indent=2)
-            + "\nstderr:\n"
-            + completed.stderr,
-            encoding="utf-8",
-        )
-        if completed.returncode != 0:
+        except LoudnessMasterError as error:
             raise RenderError(
-                "FFmpeg could not complete loudness analysis pass one.",
-                command=args,
-                detail=completed.stderr[-8000:],
-                log_path=log_path,
-            )
-        matches = re.findall(r"\{\s*\"input_i\".*?\}", completed.stderr, re.DOTALL)
-        if not matches:
-            raise RenderError(
-                "FFmpeg completed loudness analysis without measured EBU R128 data.",
-                command=args,
-                detail=completed.stderr[-8000:],
-                log_path=log_path,
-            )
-        payload = json.loads(matches[-1])
-        names = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
-        measured = {name: float(payload[name]) for name in names}
-        if progress:
-            progress(
-                {
-                    "event": "progress",
-                    "stage": "loudness_scan",
-                    "progress": 1.0,
-                    "out_time_seconds": graph.duration,
-                    "frame": 0,
-                    "fps": 0.0,
-                    "speed": None,
-                    "eta_seconds": 0.0,
-                }
-            )
-        return measured
-
+                str(error), command=error.command, detail=error.stderr,
+                log_path=error.log_path,
+            ) from error
 
     @staticmethod
     def _compile_subtitles(project: ProjectDocument) -> Path | None:

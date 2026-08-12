@@ -29,9 +29,10 @@ class IncrementalRenderResult:
     cached: bool
     segments_total: int
     segments_reused: int
+    loudness: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "status": "success",
             "output": str(self.output),
             "duration": self.duration,
@@ -43,6 +44,9 @@ class IncrementalRenderResult:
             "segments_reused": self.segments_reused,
             "warnings": self.warnings,
         }
+        if self.loudness is not None:
+            payload["loudness"] = self.loudness
+        return payload
 
 
 def incremental_eligibility(project: ProjectDocument) -> tuple[bool, str | None]:

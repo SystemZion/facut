@@ -422,7 +422,10 @@ def render_command(
             audio_sample_rate = settings["audio_sample_rate"]
             color_space = settings.get("color_space")
         else:
-            color_space = None
+            # H.264 final delivery defaults to explicit BT.709 metadata. The
+            # backend blocks HDR/Log sources until a real tone-map is supplied,
+            # so this never silently relabels wide-gamut footage.
+            color_space = "bt709"
             audio_sample_rate = None
         audio_bitrate = audio_bitrate or "320k"
         fast_path = fast_path.strip().casefold()
@@ -452,9 +455,6 @@ def render_command(
             color_space=color_space,
             allow_trimmed=fast_path == "force",
         )
-        if loudness is not None:
-            copy_plan.eligible = False
-            copy_plan.reason = "master loudness normalization requires audio filtering"
         if burn_subtitle is not None:
             copy_plan.eligible = False
             copy_plan.reason = "external subtitle burn-in requires rendered frames"
@@ -463,16 +463,22 @@ def render_command(
                 f"Forced stream-copy is unsafe for this timeline: {copy_plan.reason}."
             )
         eligible, fallback_reason = incremental_eligibility(document)
-        if loudness is not None:
-            eligible, fallback_reason = False, "master loudness spans the complete timeline"
         if burn_subtitle is not None:
             eligible, fallback_reason = False, "external subtitle burn-in spans segment boundaries"
+        render_target = output
+        render_overwrite = overwrite
+        if loudness is not None:
+            render_target = output.with_name(
+                f".{output.stem}.facut-master-r{document.revision}{output.suffix}"
+            )
+            render_target.unlink(missing_ok=True)
+            render_overwrite = True
         if fast_path != "off" and copy_plan.eligible:
             result = render_direct_copy(
                 backend.ffmpeg,
                 copy_plan,
-                output,
-                overwrite=overwrite,
+                render_target,
+                overwrite=render_overwrite,
                 progress=progress,
             )
         elif incremental and eligible:
@@ -481,7 +487,7 @@ def render_command(
             ).render(
                 document,
                 manager.project_dir,
-                output,
+                render_target,
                 width=width,
                 height=height,
                 fps=fps,
@@ -492,7 +498,7 @@ def render_command(
                 hardware=hardware,
                 color_space=color_space,
                 audio_sample_rate=audio_sample_rate,
-                overwrite=overwrite,
+                overwrite=render_overwrite,
                 progress=progress,
             )
             if fast_path == "auto" and copy_plan.reason:
@@ -503,7 +509,7 @@ def render_command(
             result = backend.render(
                 document,
                 manager.project_dir,
-                output,
+                render_target,
                 width=width,
                 height=height,
                 fps=fps,
@@ -514,12 +520,10 @@ def render_command(
                 hardware=hardware,
                 color_space=color_space,
                 audio_sample_rate=audio_sample_rate,
-                overwrite=overwrite,
+                overwrite=render_overwrite,
                 progress=progress,
                 burn_subtitle=burn_subtitle,
-                loudness_target=loudness,
-                true_peak=true_peak,
-                loudness_range=lra,
+                loudness_target=None,
             )
             if incremental and fallback_reason:
                 result.warnings.append(
@@ -529,6 +533,29 @@ def render_command(
                 result.warnings.append(
                     f"Stream-copy fallback: {copy_plan.reason}."
                 )
+        if loudness is not None:
+            try:
+                result.loudness = backend.normalize_master(
+                    render_target,
+                    output,
+                    duration=result.duration,
+                    target_lufs=loudness,
+                    true_peak=true_peak,
+                    loudness_range=lra,
+                    audio_codec=audio_codec,
+                    audio_bitrate=audio_bitrate,
+                    audio_sample_rate=audio_sample_rate,
+                    overwrite=overwrite,
+                    progress=progress,
+                    log_directory=manager.project_dir / "logs",
+                )
+                result.output = output.resolve()
+                if result.loudness.get("skipped") == "digital_silence":
+                    result.warnings.append(
+                        "Master loudness was skipped because the mix is digital silence."
+                    )
+            finally:
+                render_target.unlink(missing_ok=True)
         emit(
             state,
             success_response(

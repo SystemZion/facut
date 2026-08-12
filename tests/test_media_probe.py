@@ -63,6 +63,19 @@ def test_probe_missing_file() -> None:
         probe_media("definitely-does-not-exist.mp4")
 
 
+def test_probe_treats_still_image_as_timeless(tmp_path) -> None:
+    ffmpeg = os.environ["FACUT_TEST_FFMPEG"]
+    image = tmp_path / "photo.jpg"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=blue:s=320x180", "-frames:v", "1", str(image)],
+        check=True,
+    )
+    info = probe_media(image)
+    assert info.duration is None
+    assert (info.width, info.height) == (320, 180)
+
+
 def test_probe_parses_camera_gps_timezone_and_hdr_metadata() -> None:
     info = _parse_probe(
         {
