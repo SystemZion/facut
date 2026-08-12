@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from platformdirs import user_data_path
@@ -233,24 +234,53 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 def latest_release(repository: str = DEFAULT_REPOSITORY) -> dict[str, Any]:
-    request = Request(
+    api_request = Request(
         f"https://api.github.com/repos/{repository}/releases/latest",
         headers={"Accept": "application/vnd.github+json", "User-Agent": f"facut/{__version__}"},
     )
-    with urlopen(request, timeout=20) as response:
-        payload = json.load(response)
-    asset = next(
-        (item for item in payload.get("assets", []) if str(item.get("name", "")).lower() == "facut.exe"),
-        None,
-    )
+    try:
+        with urlopen(api_request, timeout=20) as response:
+            payload = json.load(response)
+        asset = next(
+            (
+                item
+                for item in payload.get("assets", [])
+                if str(item.get("name", "")).lower() == "facut.exe"
+            ),
+            None,
+        )
+        latest_version = str(payload.get("tag_name") or "").lstrip("v")
+        release_url = payload.get("html_url")
+        asset_url = asset.get("browser_download_url") if asset else None
+        asset_size = asset.get("size") if asset else None
+        source = "github-api"
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        # GitHub's anonymous REST quota is small and shared by some networks.
+        # The public /releases/latest redirect is not API-rate-limited and its
+        # final URL contains the canonical tag. Release assets have stable URLs.
+        public_request = Request(
+            f"https://github.com/{repository}/releases/latest",
+            headers={"User-Agent": f"facut/{__version__}"},
+        )
+        with urlopen(public_request, timeout=20) as response:
+            release_url = response.geturl()
+        match = re.search(r"/releases/tag/v?([^/?#]+)", release_url)
+        if match is None:
+            raise ValueError("GitHub did not return a recognizable latest Release tag.")
+        latest_version = match.group(1)
+        tag = f"v{latest_version}"
+        asset_url = f"https://github.com/{repository}/releases/download/{tag}/facut.exe"
+        asset_size = None
+        source = "public-release-redirect"
     return {
         "repository": repository,
         "current_version": __version__,
-        "latest_version": str(payload.get("tag_name") or "").lstrip("v"),
-        "release_url": payload.get("html_url"),
-        "asset_url": asset.get("browser_download_url") if asset else None,
-        "asset_size": asset.get("size") if asset else None,
-        "update_available": _version_tuple(str(payload.get("tag_name") or "0")) > _version_tuple(__version__),
+        "latest_version": latest_version,
+        "release_url": release_url,
+        "asset_url": asset_url,
+        "asset_size": asset_size,
+        "source": source,
+        "update_available": _version_tuple(latest_version) > _version_tuple(__version__),
     }
 
 

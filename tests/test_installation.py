@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 
 import pytest
+from urllib.error import HTTPError
 
 from facut.exceptions import InvalidArgumentError
-from facut.installation import _prioritize_path, install_facut, update_facut
+from facut.installation import _prioritize_path, install_facut, latest_release, update_facut
 
 
 def _installed_executable(directory: Path) -> Path:
@@ -84,4 +85,34 @@ def test_offline_update_replaces_isolated_install(tmp_path: Path) -> None:
     assert result["updated"] is True
     assert result["mode"] == "replaced"
     assert _installed_executable(install_dir).read_bytes() == update.read_bytes()
+
+
+def test_latest_release_falls_back_when_anonymous_api_is_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PublicResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def geturl(self) -> str:
+            return "https://github.com/SystemZion/facut/releases/tag/v9.8.7"
+
+    calls = 0
+
+    def fake_urlopen(_request, timeout=20):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError("api", 403, "rate limit exceeded", {}, None)
+        return PublicResponse()
+
+    monkeypatch.setattr("facut.installation.urlopen", fake_urlopen)
+    release = latest_release()
+
+    assert release["latest_version"] == "9.8.7"
+    assert release["source"] == "public-release-redirect"
+    assert release["asset_url"].endswith("/v9.8.7/facut.exe")
 
