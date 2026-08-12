@@ -234,10 +234,6 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
             "error",
             "-i",
             str(output),
-            "-ss",
-            "2.2",
-            "-t",
-            "0.5",
             "-vn",
             "-ac",
             "1",
@@ -251,8 +247,15 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
         check=True,
     ).stdout
     assert decoded, "FFmpeg returned no decoded audio samples"
-    samples = array("f")
-    samples.frombytes(decoded)
+    all_samples = array("f")
+    all_samples.frombytes(decoded)
+    # Decode once and slice in sample space. FFmpeg 5 can return an empty
+    # stream for post-input ``-ss`` on short MP4/AAC files even though the
+    # complete audio stream is present and correctly timestamped.
+    start = round(2.2 * 48000)
+    end = round(2.7 * 48000)
+    samples = all_samples[start:end]
+    assert samples, "Rendered audio ended before the looped-music check window"
     assert _tone_strength(samples, 440) > 0.01, "camera audio was lost"
     assert _tone_strength(samples, 880) > 0.003, "looped music was not mixed"
     assert max(abs(sample) for sample in samples) < 0.9, "limiter did not cap peaks"
