@@ -75,6 +75,13 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                         {"type": "string", "minLength": 1},
                     ]
                 },
+                "duration": {
+                    "oneOf": [
+                        {"type": "number", "exclusiveMinimum": 0},
+                        {"type": "string", "minLength": 1},
+                    ],
+                    "description": "Clip timeline duration; still images default to 5 seconds.",
+                },
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["media_id", "track"],
@@ -213,6 +220,157 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             },
             ["plan", "voice", "preview_dir"],
         ),
+    },
+    "clip.motion": {
+        "summary": "Apply a deterministic digital camera-movement preset.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "clip_id": {"type": "string", "minLength": 1},
+                "preset": {"enum": ["slow-push", "slow-pull", "pan-left", "pan-right", "tilt-up", "tilt-down"]},
+                "intensity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.35},
+                "easing": {"enum": ["linear", "ease-in", "ease-out", "ease-in-out", "cubic"], "default": "ease-in-out"},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["clip_id", "preset"],
+        ),
+    },
+    "clip.speed": {
+        "summary": "Apply a constant speed, target duration, or negative rate for reverse playback.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "clip_id": {"type": "string", "minLength": 1},
+                "rate": {"type": "number", "not": {"const": 0}},
+                "duration": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["clip_id"],
+        ),
+    },
+    "clip.speed_curve": {
+        "summary": "Apply a step or sampled-linear speed curve using source-relative points.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "clip_id": {"type": "string", "minLength": 1},
+                "curve": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "version": {"type": "string", "default": "1.0"},
+                        "mode": {"enum": ["step", "linear"], "default": "linear"},
+                        "steps": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
+                        "points": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {"at": {"oneOf": [{"type": "number"}, {"type": "string"}]}, "rate": {"type": "number", "exclusiveMinimum": 0}},
+                                "required": ["at", "rate"],
+                            },
+                        },
+                    },
+                    "required": ["points"],
+                },
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["clip_id", "curve"],
+        ),
+    },
+    "audio.process": {
+        "summary": "Configure non-destructive high-pass, denoise, compressor and limiter processing.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "clip_id": {"type": "string", "minLength": 1},
+                "highpass_hz": {"type": "number", "minimum": 20, "maximum": 20000},
+                "denoise_strength": {"type": "number", "minimum": 0.01, "maximum": 1},
+                "compressor_preset": {"enum": ["vlog", "dialogue", "gentle", "off"]},
+                "limiter_db": {"type": "number", "minimum": -20, "maximum": 0},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["clip_id"],
+        ),
+    },
+    "audio.crossfade": {
+        "summary": "Crossfade two overlapping independent audio clips.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "from": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "minLength": 1},
+                "duration": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["from", "to", "duration"],
+        ),
+    },
+    "history.status": {
+        "summary": "Read the active CutGraph branch and redo state.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "history.diff": {
+        "summary": "Compare two CutGraph commits using semantic timeline entities.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"before": {"type": "string"}, "after": {"type": "string"}}, ["before", "after"]),
+    },
+    "history.restore": {
+        "summary": "Restore a prior CutGraph state as a new commit.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"commit": {"type": "string", "minLength": 1}}, ["commit"]),
+    },
+    "branch.create": {
+        "summary": "Create a named CutGraph branch without copying media.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"name": {"type": "string", "minLength": 1}, "start": {"type": "string", "default": "HEAD"}, "switch": {"type": "boolean", "default": False}}, ["name"]),
+    },
+    "branch.switch": {
+        "summary": "Switch the project working state to a CutGraph branch.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"name": {"type": "string", "minLength": 1}}, ["name"]),
+    },
+    "branch.accept": {
+        "summary": "Fast-forward a target branch; divergent histories fail safely.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"source": {"type": "string", "minLength": 1}, "target": {"type": "string", "default": "main"}}, ["source"]),
+    },
+    "proxy.scan": {
+        "summary": "Score LRF/proxy candidates and optionally link unique high-confidence matches.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"media_id": {"type": ["string", "null"]}, "search": {"type": "array", "items": {"type": "string"}}, "link": {"type": "boolean", "default": False}, "dry_run": {"type": "boolean", "default": False}}),
+    },
+    "proxy.link_auto": {
+        "summary": "Automatically link one unambiguous proxy candidate for a media asset.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"media_id": {"type": "string"}, "search": {"type": ["string", "null"]}, "dry_run": {"type": "boolean", "default": False}}, ["media_id"]),
+    },
+    "preview.compare": {
+        "summary": "Render paired A/B previews for changed CutGraph ranges.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"before": {"type": "string"}, "after": {"type": "string"}, "output_dir": {"type": "string"}, "changed_only": {"type": "boolean", "default": True}, "padding": {"type": "number", "minimum": 0, "default": 0.5}, "height": {"type": "integer", "minimum": 64, "default": 360}, "fps": {"type": "number", "exclusiveMinimum": 0, "default": 24}, "hardware": {"type": "string", "default": "auto"}, "overwrite": {"type": "boolean", "default": False}}, ["before", "after", "output_dir"]),
+    },
+    "qc.run": {
+        "summary": "Run deterministic decode, black, freeze, silence, loudness and output-spec QC.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"target": {"type": "string"}, "contact_sheet": {"type": ["string", "null"]}, "expected_duration": {"type": ["number", "null"]}, "overwrite": {"type": "boolean", "default": False}}, ["target"]),
     },
     "narration.generate": {
         "summary": "Generate a strict evidence-grounded narration plan without inventing facts.",

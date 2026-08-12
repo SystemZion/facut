@@ -191,6 +191,7 @@ class TimelineEngine:
         at: str | float = 0,
         source_in: str | float = 0,
         source_out: str | float | None = None,
+        duration: str | float | None = None,
         clip_id: str | None = None,
         append: bool = False,
     ) -> Clip:
@@ -202,15 +203,25 @@ class TimelineEngine:
             raise TimelineItemNotFound(f'Media "{media_id}" was not found.')
         in_seconds = seconds(source_in, self.fps)
         media_duration = asset.technical.duration
-        out_seconds = (
-            seconds(source_out, self.fps) if source_out is not None else media_duration
-        )
+        if source_out is not None and duration is not None:
+            raise TimelineError("Specify either source out or duration, not both.")
+        requested_duration = seconds(duration, self.fps) if duration is not None else None
+        if requested_duration is not None and requested_duration <= 0:
+            raise TimelineError("Clip duration must be positive.")
+        if requested_duration is not None:
+            out_seconds = in_seconds + requested_duration
+        elif source_out is not None:
+            out_seconds = seconds(source_out, self.fps)
+        elif asset.kind == MediaKind.IMAGE:
+            out_seconds = in_seconds + 5.0
+        else:
+            out_seconds = media_duration
         if out_seconds is None:
             raise TimelineError(
                 f'Media "{media_id}" has no duration; specify an explicit out point.'
             )
         timeline_warnings: list[str] = []
-        if media_duration is not None and out_seconds > media_duration:
+        if asset.kind != MediaKind.IMAGE and media_duration is not None and out_seconds > media_duration:
             excess = out_seconds - media_duration
             if excess <= 1 / self.fps + 1e-9:
                 timeline_warnings.append(
@@ -426,10 +437,16 @@ class TimelineEngine:
         highpass_hz: float | None = None,
         denoise_strength: float | None = None,
         compressor: bool | None = None,
+        compressor_preset: str | None = None,
         compressor_threshold_db: float | None = None,
         compressor_ratio: float | None = None,
+        compressor_attack_ms: float | None = None,
+        compressor_release_ms: float | None = None,
+        compressor_makeup_db: float | None = None,
         limiter_db: float | None = None,
         loudnorm_lufs: float | None = None,
+        true_peak_db: float | None = None,
+        loudness_range: float | None = None,
         channel_mode: str | None = None,
         pan: float | None = None,
         clear_pan: bool = False,
@@ -444,23 +461,72 @@ class TimelineEngine:
             values["denoise_strength"] = (
                 None if denoise_strength == 0 else denoise_strength
             )
+        if compressor_preset is not None:
+            presets = {
+                "vlog": {
+                    "threshold_db": -18.0,
+                    "ratio": 4.0,
+                    "attack_ms": 20.0,
+                    "release_ms": 250.0,
+                    "makeup_db": 2.0,
+                },
+                "dialogue": {
+                    "threshold_db": -20.0,
+                    "ratio": 3.0,
+                    "attack_ms": 15.0,
+                    "release_ms": 180.0,
+                    "makeup_db": 2.0,
+                },
+                "gentle": {
+                    "threshold_db": -16.0,
+                    "ratio": 2.0,
+                    "attack_ms": 30.0,
+                    "release_ms": 300.0,
+                    "makeup_db": 1.0,
+                },
+            }
+            if compressor_preset.casefold() not in presets:
+                raise TimelineError("Compressor preset must be vlog, dialogue, or gentle.")
+            values["compressor"] = presets[compressor_preset.casefold()]
         if compressor is False:
             values["compressor"] = None
-        elif compressor or compressor_threshold_db is not None or compressor_ratio is not None:
+        elif compressor or any(
+            item is not None
+            for item in (
+                compressor_threshold_db,
+                compressor_ratio,
+                compressor_attack_ms,
+                compressor_release_ms,
+                compressor_makeup_db,
+            )
+        ):
             compressor_values = values.get("compressor") or {}
             if compressor_threshold_db is not None:
                 compressor_values["threshold_db"] = compressor_threshold_db
             if compressor_ratio is not None:
                 compressor_values["ratio"] = compressor_ratio
+            if compressor_attack_ms is not None:
+                compressor_values["attack_ms"] = compressor_attack_ms
+            if compressor_release_ms is not None:
+                compressor_values["release_ms"] = compressor_release_ms
+            if compressor_makeup_db is not None:
+                compressor_values["makeup_db"] = compressor_makeup_db
             values["compressor"] = compressor_values
         if limiter_db is not None:
             values["limiter"] = (
                 None if limiter_db == 0 else {"ceiling_db": limiter_db}
             )
         if loudnorm_lufs is not None:
-            values["loudness"] = (
-                None if loudnorm_lufs == 0 else {"target_lufs": loudnorm_lufs}
-            )
+            if loudnorm_lufs == 0:
+                values["loudness"] = None
+            else:
+                loudness_values = values.get("loudness") or {}
+                loudness_values["target_lufs"] = loudnorm_lufs
+                if true_peak_db is not None:
+                    loudness_values["true_peak_db"] = true_peak_db
+                if loudness_range is not None:
+                    loudness_values["loudness_range"] = loudness_range
+                values["loudness"] = loudness_values
         if channel_mode is not None:
             if channel_mode not in {"original", "mono", "stereo"}:
                 raise TimelineError(
@@ -473,6 +539,26 @@ class TimelineEngine:
             values["pan"] = pan
         clip.audio = AudioProcessing.model_validate(values)
         return clip
+
+    def set_master_loudness(
+        self,
+        *,
+        target: float,
+        true_peak: float = -1.0,
+        loudness_range: float = 11.0,
+        two_pass: bool = True,
+    ) -> dict[str, Any]:
+        """Save deterministic master loudness defaults for subsequent renders."""
+
+        settings = AudioLoudnessSettings(
+            target_lufs=target,
+            true_peak_db=true_peak,
+            loudness_range=loudness_range,
+        )
+        payload = settings.model_dump(mode="json")
+        payload["two_pass"] = bool(two_pass)
+        self.project.settings.setdefault("audio", {})["master_loudness"] = payload
+        return payload
 
     def crossfade_audio(
         self, from_clip_id: str, to_clip_id: str, duration: str | float
@@ -574,6 +660,7 @@ class TimelineEngine:
         crop_top: float | None = None,
         crop_right: float | None = None,
         crop_bottom: float | None = None,
+        crop: str | None = None,
         fit: str | None = None,
         flip_x: bool | None = None,
         flip_y: bool | None = None,
@@ -587,6 +674,23 @@ class TimelineEngine:
         if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
             raise TimelineError("Picture transforms require a video or image clip.")
         values = clip.transform.model_dump()
+        if crop is not None:
+            asset = self.project.find_media(clip.media_id)
+            if asset is None or not asset.technical.width or not asset.technical.height:
+                raise TimelineError("Crop shorthand requires known source dimensions.")
+            try:
+                left, top, crop_width, crop_height = (
+                    float(item.strip()) for item in crop.split(":")
+                )
+            except (TypeError, ValueError) as error:
+                raise TimelineError("Crop must use left:top:width:height.") from error
+            if min(left, top, crop_width, crop_height) < 0 or crop_width <= 0 or crop_height <= 0:
+                raise TimelineError("Crop values must describe a positive source rectangle.")
+            right = asset.technical.width - left - crop_width
+            bottom = asset.technical.height - top - crop_height
+            if right < 0 or bottom < 0:
+                raise TimelineError("Crop rectangle exceeds source dimensions.")
+            crop_left, crop_top, crop_right, crop_bottom = left, top, right, bottom
         supplied = {
             "x": x,
             "y": y,
@@ -617,13 +721,66 @@ class TimelineEngine:
                     )
                 if keyframe.time > clip.duration:
                     raise TimelineError("Transform keyframe exceeds clip duration.")
-                if keyframe.easing != "linear":
-                    raise TimelineError(
-                        "NOT_IMPLEMENTED: rendered transform keyframes currently use linear easing."
-                    )
+                if keyframe.easing not in {
+                    "linear",
+                    "ease-in",
+                    "ease-out",
+                    "ease-in-out",
+                    "cubic",
+                }:
+                    raise TimelineError(f'Unsupported keyframe easing "{keyframe.easing}".')
                 if not isinstance(keyframe.value, (int, float)):
                     raise TimelineError("Transform keyframe values must be numeric.")
             clip.keyframes = parsed
+        return clip
+
+    def apply_motion_preset(
+        self,
+        clip_id: str,
+        *,
+        preset: str,
+        intensity: float = 0.35,
+        easing: str = "ease-in-out",
+    ) -> Clip:
+        """Apply a conservative VLOG-friendly digital camera move."""
+
+        clip, track = self._clip_and_track(clip_id)
+        if track.type not in {TrackType.VIDEO, TrackType.IMAGE}:
+            raise TimelineError("Motion presets require a video or image clip.")
+        if not 0.0 <= float(intensity) <= 1.0:
+            raise TimelineError("Motion intensity must be between 0 and 1.")
+        normalized = preset.casefold().strip()
+        duration = clip.duration
+        zoom = 0.15 * float(intensity)
+        travel_x = self.project.project.width * 0.06 * float(intensity)
+        travel_y = self.project.project.height * 0.06 * float(intensity)
+        definitions: dict[str, dict[str, tuple[float, float]]] = {
+            "slow-push": {"scale_x": (1.0, 1.0 + zoom), "scale_y": (1.0, 1.0 + zoom)},
+            "slow-pull": {"scale_x": (1.0 + zoom, 1.0), "scale_y": (1.0 + zoom, 1.0)},
+            "pan-left": {"x": (travel_x, -travel_x), "scale_x": (1.0 + zoom, 1.0 + zoom), "scale_y": (1.0 + zoom, 1.0 + zoom)},
+            "pan-right": {"x": (-travel_x, travel_x), "scale_x": (1.0 + zoom, 1.0 + zoom), "scale_y": (1.0 + zoom, 1.0 + zoom)},
+            "tilt-up": {"y": (travel_y, -travel_y), "scale_x": (1.0 + zoom, 1.0 + zoom), "scale_y": (1.0 + zoom, 1.0 + zoom)},
+            "tilt-down": {"y": (-travel_y, travel_y), "scale_x": (1.0 + zoom, 1.0 + zoom), "scale_y": (1.0 + zoom, 1.0 + zoom)},
+        }
+        definition = definitions.get(normalized)
+        if definition is None:
+            raise TimelineError(
+                "Motion preset must be slow-push, slow-pull, pan-left, pan-right, tilt-up, or tilt-down."
+            )
+        properties = set(definition)
+        clip.keyframes = [item for item in clip.keyframes if item.property not in properties]
+        for property_name, (start, end) in definition.items():
+            clip.keyframes.extend(
+                [
+                    Keyframe(property=property_name, time=0.0, value=start, easing=easing),
+                    Keyframe(property=property_name, time=duration, value=end, easing=easing),
+                ]
+            )
+        clip.metadata["motion_preset"] = {
+            "name": normalized,
+            "intensity": round(float(intensity), 4),
+            "easing": easing,
+        }
         return clip
 
     def freeze_clip(
@@ -839,6 +996,137 @@ class TimelineEngine:
         self._remove_transitions_for(clip_id)
         self.project.recompute_duration()
         return clip
+
+    def apply_speed_curve(
+        self,
+        clip_id: str,
+        *,
+        curve: dict[str, Any],
+    ) -> list[Clip]:
+        """Apply an auditable piecewise speed curve by segmenting the source clip.
+
+        Curve ``at`` values are seconds relative to the clip source range. ``step``
+        holds each point's rate until the next point. ``linear`` samples the rate
+        ramp into deterministic constant-rate segments, which keeps preview,
+        final render, cache keys, history and exchange files in agreement.
+        """
+
+        clip, track = self._clip_and_track(clip_id)
+        mode = str(curve.get("mode", "linear")).strip().casefold()
+        if mode not in {"step", "linear"}:
+            raise TimelineError('Speed curve mode must be "step" or "linear".')
+        raw_points = curve.get("points")
+        if not isinstance(raw_points, list) or not raw_points:
+            raise TimelineError('Speed curve requires a non-empty "points" list.')
+        source_duration = clip.source_out - clip.source_in
+        parsed: list[tuple[float, float]] = []
+        for index, item in enumerate(raw_points, start=1):
+            if not isinstance(item, dict):
+                raise TimelineError(f"Speed curve point {index} must be an object.")
+            try:
+                at = seconds(item.get("at", 0), self.fps)
+                rate = float(item["rate"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise TimelineError(
+                    f'Speed curve point {index} requires numeric "at" and "rate".'
+                ) from error
+            if not 0 <= at <= source_duration + 1e-9:
+                raise TimelineError(
+                    f"Speed curve point {index} is outside the clip source range."
+                )
+            if rate <= 0:
+                raise TimelineError(
+                    "Speed curve rates must be positive; use clip speed --reverse "
+                    "for deterministic full-clip reverse playback."
+                )
+            parsed.append((min(at, source_duration), rate))
+        parsed.sort(key=lambda item: item[0])
+        if any(abs(left[0] - right[0]) < 1e-9 for left, right in zip(parsed, parsed[1:])):
+            raise TimelineError("Speed curve point times must be unique.")
+        if parsed[0][0] > 1e-9:
+            parsed.insert(0, (0.0, parsed[0][1]))
+        elif parsed[0][0] < 1e-9:
+            parsed[0] = (0.0, parsed[0][1])
+        if parsed[-1][0] < source_duration - 1e-9:
+            parsed.append((source_duration, parsed[-1][1]))
+        elif parsed[-1][0] > source_duration - 1e-9:
+            parsed[-1] = (source_duration, parsed[-1][1])
+        if len(parsed) < 2:
+            parsed.append((source_duration, parsed[0][1]))
+
+        steps = curve.get("steps", 8)
+        if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= 64:
+            raise TimelineError("Speed curve steps must be an integer from 1 to 64.")
+        intervals: list[tuple[float, float, float]] = []
+        for left, right in zip(parsed, parsed[1:]):
+            start, start_rate = left
+            end, end_rate = right
+            if end - start <= 1e-9:
+                continue
+            subdivisions = 1 if mode == "step" else steps
+            width = (end - start) / subdivisions
+            for subdivision in range(subdivisions):
+                source_start = start + subdivision * width
+                source_end = end if subdivision == subdivisions - 1 else source_start + width
+                if mode == "step":
+                    rate = start_rate
+                else:
+                    midpoint = (subdivision + 0.5) / subdivisions
+                    rate = start_rate + (end_rate - start_rate) * midpoint
+                intervals.append((source_start, source_end, rate))
+        if not intervals:
+            raise TimelineError("Speed curve produced no playable intervals.")
+
+        original = clip.model_copy(deep=True)
+        original_timeline_duration = original.duration
+        output_cursor = original.timeline_start
+        segments: list[Clip] = []
+        for index, (relative_start, relative_end, rate) in enumerate(intervals):
+            segment = original.model_copy(deep=True)
+            segment.id = original.id if index == 0 else new_id("clip")
+            segment.timeline_start = output_cursor
+            segment.source_in = original.source_in + relative_start
+            segment.source_out = original.source_in + relative_end
+            segment.speed = rate
+            segment.timeline_duration = None
+            segment.freeze_frame = None
+            segment.loop = False
+            segment.audio.fade_in = original.audio.fade_in if index == 0 else 0.0
+            segment.audio.fade_out = original.audio.fade_out if index == len(intervals) - 1 else 0.0
+            segment.audio_fade_in = original.audio_fade_in if index == 0 else 0.0
+            segment.audio_fade_out = original.audio_fade_out if index == len(intervals) - 1 else 0.0
+            segment.metadata = deepcopy(original.metadata)
+            segment.metadata["speed_curve"] = {
+                "version": str(curve.get("version", "1.0")),
+                "mode": mode,
+                "segment": index + 1,
+                "segments": len(intervals),
+                "source_at": relative_start,
+                "rate": rate,
+            }
+            # Existing keyframes are timeline-relative. Preserve those whose
+            # normalized source position falls inside this generated segment.
+            remapped: list[Keyframe] = []
+            for keyframe in original.keyframes:
+                source_at = (
+                    keyframe.time / original_timeline_duration * source_duration
+                    if original_timeline_duration > 0
+                    else 0.0
+                )
+                if relative_start - 1e-9 <= source_at <= relative_end + 1e-9:
+                    copied = keyframe.model_copy(deep=True)
+                    copied.time = max(0.0, (source_at - relative_start) / rate)
+                    remapped.append(copied)
+            segment.keyframes = remapped
+            segments.append(segment)
+            output_cursor += segment.duration
+
+        track.clips.remove(clip)
+        track.clips.extend(segments)
+        track.clips.sort(key=lambda item: (item.timeline_start, item.id))
+        self._remove_transitions_for(clip_id)
+        self.project.recompute_duration()
+        return segments
 
     def add_transition(
         self,

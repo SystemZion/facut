@@ -14,6 +14,7 @@ venv/
 /build/
 /dist/
 /*.spec
+!/facut.spec
 *.log
 
 # Bundled third-party binaries are distributed through GitHub Releases.
@@ -30,6 +31,13 @@ venv/
 /artifacts/
 /.playwright-cli/
 /output/
+/demos/
+/providers/*/build/
+/tools/cosyvoice_smoke.py
+/tools/download_torch_wheel_fast.ps1
+/tools/race_torch_last_segment.ps1
+*.part
+*.audition.wav
 
 # Editors and operating systems
 .idea/

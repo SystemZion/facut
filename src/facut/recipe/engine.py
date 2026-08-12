@@ -128,8 +128,16 @@ class RecipeEngine:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         plan = self.plan(recipe, recipe_path=recipe_path, output=output)
+        if not dry_run:
+            self.manager.ensure_experiment_branch("recipe")
         result = CommandEngine(self.manager).run_batch(
-            {"version": "1.0", "atomic": True, "commands": plan.commands},
+            {
+                "version": "1.0",
+                "atomic": True,
+                "actor": "agent",
+                "intent": f"Apply recipe {plan.recipe_sha256[:12]}",
+                "commands": plan.commands,
+            },
             dry_run=dry_run,
         )
         return {
@@ -188,12 +196,22 @@ class RecipeEngine:
             }
             if clip.source_out is not None:
                 command["source_out"] = clip.source_out
+            if clip.duration is not None:
+                command["duration"] = clip.duration
             if action == "audio.add":
                 command.update(clip.audio)
                 command.pop("append", None)  # audio.add has no append option yet
             commands.append(command)
             if clip.transform:
                 commands.append({"action": "clip.transform", "clip_id": clip_id, **clip.transform})
+            if clip.speed is not None:
+                commands.append({"action": "clip.speed", "clip_id": clip_id, "rate": clip.speed})
+            elif clip.reverse:
+                commands.append({"action": "clip.speed", "clip_id": clip_id, "rate": -1.0})
+            elif clip.speed_curve is not None:
+                commands.append(
+                    {"action": "clip.speed_curve", "clip_id": clip_id, "curve": clip.speed_curve}
+                )
             for effect in clip.effects:
                 commands.append(
                     {

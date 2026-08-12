@@ -407,6 +407,41 @@
           "additionalProperties": true,
           "title": "Command",
           "type": "object"
+        },
+        "commit_id": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Commit Id"
+        },
+        "parent_commit_ids": {
+          "items": {"type": "string"},
+          "title": "Parent Commit Ids",
+          "type": "array"
+        },
+        "branch": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "actor": {
+          "default": "user",
+          "enum": ["user", "agent", "system"],
+          "title": "Actor",
+          "type": "string"
+        },
+        "intent": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Intent"
         }
       },
       "required": [

@@ -51,9 +51,19 @@ def public_error(error: Exception) -> FacutError:
         return RenderError(message, suggestion=suggestion, details=details)
     if code in {"TIMELINE_CONFLICT"} or error.__class__.__name__ == "TimelineConflictError":
         return TimelineConflictError(message, suggestion=suggestion, details=details)
+    if code == "HISTORY_CONFLICT":
+        public = TimelineConflictError(message, suggestion=suggestion, details=details)
+        public.code = code
+        return public
     if code in {"PROJECT_NOT_FOUND", "FILE_NOT_FOUND"}:
         return ResourceNotFoundError(message, suggestion=suggestion)
-    if code in {"VOICE_AMBIGUOUS", "VOICE_ALIAS_CONFLICT", "INVALID_COMMAND"}:
+    if code in {
+        "VOICE_AMBIGUOUS",
+        "VOICE_ALIAS_CONFLICT",
+        "INVALID_COMMAND",
+        "PROXY_AMBIGUOUS",
+        "HISTORY_ERROR",
+    }:
         public = InvalidArgumentError(message, suggestion=suggestion, details=details)
         public.code = code
         return public

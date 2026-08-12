@@ -66,12 +66,15 @@ class CommandEngine:
         if not isinstance(commands, list):
             raise CommandEngineError('Batch payload requires a "commands" list.')
         atomic = bool(payload.get("atomic", True))
+        batch_actor = str(payload.get("actor", "user"))
         if not atomic:
             results = []
             for command in commands:
                 if not isinstance(command, dict) or "action" not in command:
                     raise CommandEngineError("Every command requires an action.")
                 params = {key: value for key, value in command.items() if key != "action"}
+                if batch_actor == "agent":
+                    params.setdefault("_actor", "agent")
                 results.append(self.execute(command["action"], params, dry_run=dry_run))
             return {
                 "status": "success",
@@ -100,7 +103,12 @@ class CommandEngine:
             "run.batch",
             f"Applied {len(commands)} commands atomically",
             operation,
-            command={"atomic": True, "commands": commands},
+            command={
+                "atomic": True,
+                "commands": commands,
+                **({"_actor": "agent"} if batch_actor == "agent" else {}),
+                **({"_intent": payload["intent"]} if payload.get("intent") else {}),
+            },
             dry_run=dry_run,
         )
         return {
@@ -135,7 +143,11 @@ class CommandEngine:
         action = command.get("action")
         if not isinstance(action, str):
             raise CommandEngineError("Command action must be a string.")
-        args = {key: value for key, value in command.items() if key != "action"}
+        args = {
+            key: value
+            for key, value in command.items()
+            if key not in {"action", "_actor", "_intent"}
+        }
         timeline = TimelineEngine(document)
         aliases = {"track": "track_id"}
         if action == "timeline.add":
@@ -153,6 +165,8 @@ class CommandEngine:
                     "type": "transition_type",
                 }
             )
+        elif action == "audio.crossfade":
+            aliases.update({"from": "from_clip_id", "to": "to_clip_id"})
         for old, new in aliases.items():
             if old in args and new not in args:
                 args[new] = args.pop(old)
@@ -165,6 +179,7 @@ class CommandEngine:
             "clip.move": timeline.move_clip,
             "clip.duplicate": timeline.duplicate_clip,
             "clip.transform": timeline.transform_clip,
+            "clip.motion": timeline.apply_motion_preset,
             "clip.freeze": timeline.freeze_clip,
             "clip.composite": timeline.configure_composite,
             "effect.add": timeline.add_effect,
@@ -174,6 +189,10 @@ class CommandEngine:
             "clip.trim": timeline.trim_clip,
             "clip.delete": timeline.delete_clip,
             "clip.speed": timeline.set_speed,
+            "clip.speed_curve": timeline.apply_speed_curve,
+            "audio.process": timeline.configure_audio,
+            "audio.crossfade": timeline.crossfade_audio,
+            "audio.loudness": timeline.set_master_loudness,
             "transition.add": timeline.add_transition,
             "transition.remove": timeline.remove_transition,
         }

@@ -17,6 +17,12 @@ from typing import Any
 # remains CUDA when available.
 if os.environ.get("FACUT_VOICE_DEVICE", "auto").casefold() == "cpu":
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    # A CUDA-enabled PyTorch build can crash during import when a Windows eGPU
+    # is physically disconnected.  Keep the normal CUDA runtime untouched and
+    # allow the installer to provide a small, explicit CPU wheel overlay for
+    # this mode instead of replacing the user's GPU packages.
+    if cpu_overlay := os.environ.get("FACUT_CPU_TORCH_OVERLAY"):
+        sys.path.insert(0, str(Path(cpu_overlay).expanduser().resolve()))
 
 import numpy as np
 import soundfile

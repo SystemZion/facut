@@ -84,6 +84,14 @@ class ModelConfig(BaseModel):
         return preferred
 
 
+class VoiceConfig(BaseModel):
+    """Optional external runtimes for local personal-voice synthesis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpu_overlay: Path | None = None
+
+
 class AppConfig(BaseModel):
     """Validated global facut settings."""
 
@@ -94,6 +102,7 @@ class AppConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
     log_level: str = "INFO"
     temporary_directory: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()) / "facut")
 
@@ -160,6 +169,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         values["tools"]["analysis_python"] = analysis_python
     if model_home := os.environ.get("FACUT_MODEL_HOME"):
         values["models"]["directory"] = model_home
+    if cpu_overlay := os.environ.get("FACUT_CPU_TORCH_OVERLAY"):
+        values["voice"]["cpu_overlay"] = cpu_overlay
     return AppConfig.model_validate(values)
 
 
@@ -185,7 +196,7 @@ def serialize_config(config: AppConfig) -> str:
                 raw["tools"][key] = "auto"
     lines = [f'log_level = {_toml_scalar(raw["log_level"])}']
     lines.append(f'temporary_directory = {_toml_scalar(raw["temporary_directory"])}')
-    for section in ("render", "preview", "cache", "tools", "models"):
+    for section in ("render", "preview", "cache", "tools", "models", "voice"):
         lines.extend(("", f"[{section}]"))
         lines.extend(
             f"{key} = {_toml_scalar(value)}"

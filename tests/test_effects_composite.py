@@ -75,7 +75,7 @@ def test_mask_and_blend_mode_graphs(tmp_path: Path) -> None:
     mask.write_bytes(b"placeholder")
     timeline.configure_composite(overlay_id, mask_path="mask.png")
     graph = GraphBuilder(document, tmp_path).build()
-    assert "scale2ref=w=rw:h=rh" in graph.filter_complex
+    assert "scale2ref=w=iw:h=ih" in graph.filter_complex
     assert "alphamerge" in graph.filter_complex
 
     document, timeline, overlay_id = _project(tmp_path)

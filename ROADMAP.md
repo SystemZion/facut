@@ -11,20 +11,26 @@ FACUT 的主线是日常 VLOG、旅行、City Walk、亲子出行与周末记录
 - 口播独立音频轨、原声保留、音乐闪避 attack/release 实际进入渲染图。
 - Recipe validate/plan/build、JSON Schema、CLI 与 JSON-RPC Agent 接口。
 
-## 0.7 — 本地视觉理解与 VLOG 故事
+## 0.7 — CutGraph 专业执行引擎
 
-- 混合设备摄取与旋转、VFR、时区、GPS、HDR/Log 元数据统一。
-- 可插拔本地视觉 Worker：场景、镜头类型、人物反应、质量、重复镜头和主体轨迹。
-- faster-whisper ASR、说话人分离、可编辑中英字幕和文本剪辑。
-- weekend-vlog、citywalk、family-trip、food-vlog、daily-life、talking-vlog 故事模板。
-- 广播剪辑优先，随后进行 B-roll 覆盖、连续性和重复镜头诊断。
+- 不自建、下载或集成本地视觉模型；画面理解由操作 FACUT 的 AI 完成。
+- LRF 原生代理扫描、候选评分、歧义阻断、预览走代理、最终输出强制回原片。
+- clip transform/motion/speed/freeze/reverse 与 step/linear 速度曲线。
+- 原视频音轨处理、高通、降噪、压缩、限制、交叉淡化、两遍响度目标和终端波形。
+- Git 式 CutGraph 分支历史、语义 diff、restore、快速前进 accept 与变化区间 A/B 预览。
+- 多轨、字幕、文字与独立音轨进入片段级增量缓存；自动 QC 增加定格、时长与旋转检查。
 
-## 0.8 — 专业精修与增量效率
+## 0.7.2 — RenderGraph v2
 
-- 对话增强、风噪/低频/混响处理、环境声延续、J-cut/L-cut 与平台响度闭环。
-- Log/HDR 色彩管理、镜头匹配、肤色保护、畸变与地平线处理。
-- 跨转场、多轨和字幕的片段级增量缓存，只重渲变化区间。
-- 代理、ASR、波形、缩略图和视觉分析的后台队列、暂停和恢复。
+- 将转场建模为独立边界节点，分离画面、原声、音乐、口播、字幕和文字缓存。
+- 修改 25 分钟工程片尾 5 秒时，目标缓存复用率不低于 95%。
+- 后台渲染队列、取消、恢复、失败节点重试和变化区间 A/B 审片。
+
+## 0.8 — MixLab 与 VLOG 自动混音
+
+- 审核优先的 `mix analyze/plan/apply`，逐轨增益、闪避曲线、理由和置信度。
+- 对话增强、风噪/低频/混响处理、环境声延续与更完整的 J-cut/L-cut 工作流。
+- 每个口播区间生成调整前/后 A/B 试听，明确 apply 后才写入可撤销分支。
 
 ## 0.9 — 旅行包装与多平台派生
 

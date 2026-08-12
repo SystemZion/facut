@@ -24,7 +24,6 @@ from facut.render.graph_builder import GraphBuilder
 def _modern_ffmpeg() -> tuple[str, str] | None:
     candidates = [
         os.environ.get("FACUT_TEST_FFMPEG"),
-        r"D:\工具\jianyin\JianyingPro\9.3.0.13547\ffmpeg.exe",
         shutil.which("ffmpeg"),
     ]
     for candidate in candidates:
@@ -146,6 +145,7 @@ def test_native_and_independent_audio_share_processing_model(tmp_path: Path) -> 
     assert "volume=-3dB" in graph
     assert "loudnorm=I=-14:TP=-1:LRA=11" in graph
     assert "alimiter=limit=" in graph
+    assert "apad=whole_dur=3,atrim=duration=3[a0]" in graph
     assert "pan=stereo|c0=1*c0|c1=0.75*c1" in graph
     assert "channel_layouts=mono,pan=stereo|c0=c0|c1=c0" in graph
     timeline.set_audio_mute(camera_id)
@@ -233,10 +233,6 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
             "-hide_banner",
             "-loglevel",
             "error",
-            "-ss",
-            "2.2",
-            "-t",
-            "0.5",
             "-i",
             str(output),
             "-vn",
@@ -251,8 +247,16 @@ def test_real_ffmpeg_mix_keeps_original_and_looped_music(tmp_path: Path) -> None
         capture_output=True,
         check=True,
     ).stdout
-    samples = array("f")
-    samples.frombytes(decoded)
+    assert decoded, "FFmpeg returned no decoded audio samples"
+    all_samples = array("f")
+    all_samples.frombytes(decoded)
+    # Decode once and slice in sample space. FFmpeg 5 can return an empty
+    # stream for post-input ``-ss`` on short MP4/AAC files even though the
+    # complete audio stream is present and correctly timestamped.
+    start = round(2.2 * 48000)
+    end = round(2.7 * 48000)
+    samples = all_samples[start:end]
+    assert samples, "Rendered audio ended before the looped-music check window"
     assert _tone_strength(samples, 440) > 0.01, "camera audio was lost"
     assert _tone_strength(samples, 880) > 0.003, "looped music was not mixed"
     assert max(abs(sample) for sample in samples) < 0.9, "limiter did not cap peaks"

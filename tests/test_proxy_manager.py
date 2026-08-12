@@ -6,7 +6,7 @@ import pytest
 
 from facut.core.models import MediaAsset, MediaKind, MediaTechnicalInfo
 from facut.core.project_manager import ProjectManager
-from facut.media.proxy_manager import ProxyError, ProxyManager
+from facut.media.proxy_manager import ProxyAmbiguousError, ProxyError, ProxyManager
 from facut.core.timeline_engine import TimelineEngine
 from facut.render.graph_builder import GraphBuilder
 
@@ -103,3 +103,57 @@ def test_preview_uses_proxy_and_final_uses_original(monkeypatch, tmp_path: Path)
     final = GraphBuilder(document, manager.project_dir).build(preview=False)
     assert preview.source_paths[0] == proxy.resolve()
     assert final.source_paths[0].name == "camera.mp4"
+
+
+def test_proxy_scan_links_one_high_confidence_lrf_atomically(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    proxy = tmp_path / "camera_LRF.mp4"
+    proxy.write_bytes(b"proxy")
+    monkeypatch.setattr(
+        "facut.media.proxy_manager.probe_media",
+        lambda *args, **kwargs: MediaTechnicalInfo(
+            duration=10,
+            video_codec="h264",
+            width=960,
+            height=540,
+            frame_rate=25,
+        ),
+    )
+    results, state = ProxyManager(manager).scan(
+        search_directories=[tmp_path], link=True
+    )
+    assert state.revision == 1
+    assert results[0]["status"] == "linked"
+    assert results[0]["selected"]["score"] >= 0.85
+    asset = state.find_media("camera")
+    assert asset is not None
+    assert asset.proxy_path == str(proxy.resolve())
+    assert asset.metadata["proxy"]["source"] == "automatic_scan"
+
+
+def test_proxy_scan_rejects_ambiguous_candidates(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    (tmp_path / "camera_LRF.mp4").write_bytes(b"one")
+    (tmp_path / "camera-proxy.mov").write_bytes(b"two")
+    monkeypatch.setattr(
+        "facut.media.proxy_manager.probe_media",
+        lambda *args, **kwargs: MediaTechnicalInfo(
+            duration=10,
+            video_codec="h264",
+            width=960,
+            height=540,
+            frame_rate=25,
+        ),
+    )
+    with pytest.raises(ProxyAmbiguousError):
+        ProxyManager(manager).scan(search_directories=[tmp_path], link=True)
+    assert manager.require_document().revision == 0
+
+
+def test_proxy_scan_reports_zero_byte_candidate(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    (tmp_path / "camera_LRF.mp4").touch()
+    results, _ = ProxyManager(manager).scan(search_directories=[tmp_path])
+    candidate = results[0]["candidates"][0]
+    assert candidate["valid"] is False
+    assert "empty" in candidate["error"]

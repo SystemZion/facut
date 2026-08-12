@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,6 +76,11 @@ def root(
     del version
     try:
         config = load_config()
+        if config.voice.cpu_overlay is not None:
+            os.environ.setdefault(
+                "FACUT_CPU_TORCH_OVERLAY",
+                str(config.voice.cpu_overlay.expanduser().resolve()),
+            )
     except FacutError as exc:
         response = error_response("startup", exc)
         if json_output:
@@ -200,7 +206,16 @@ def main() -> None:
     app()
 
 
+# The console-script imports this module before calling ``main``.  Avoid loading
+# every editing subsystem for the eager version query; this keeps automation
+# health checks fast without changing normal Typer registration or tests.
+if len(sys.argv) == 2 and sys.argv[1] == "--version":
+    typer.echo(f"facut {__version__}")
+    raise SystemExit(ExitCode.SUCCESS)
+
+
 from facut.cli.project_commands import (  # noqa: E402
+    branch_app,
     history_app,
     import_command,
     init_command,
@@ -257,6 +272,7 @@ app.command("redo")(redo_command)
 app.command("run")(run_command)
 app.add_typer(project_app, name="project")
 app.add_typer(history_app, name="history")
+app.add_typer(branch_app, name="branch")
 app.add_typer(timeline_app, name="timeline")
 app.add_typer(clip_app, name="clip")
 app.add_typer(transition_app, name="transition")

@@ -45,5 +45,34 @@ def test_stdio_json_rpc_reuses_loaded_project(tmp_path) -> None:
     assert any(action["name"] == "narration.suggest" for action in lines[3]["result"]["actions"])
     assert any(action["name"] == "voice.profile.create" for action in lines[3]["result"]["actions"])
     assert any(action["name"] == "narration.synthesize" for action in lines[3]["result"]["actions"])
+    assert any(action["name"] == "clip.speed_curve" for action in lines[3]["result"]["actions"])
+    assert any(action["name"] == "proxy.scan" for action in lines[3]["result"]["actions"])
     assert lines[4]["result"]["plan_first"] is True
     assert lines[5]["result"]["status"] == "shutdown"
+
+
+def test_agent_rpc_mutation_uses_experiment_branch(tmp_path) -> None:
+    runner = CliRunner()
+    project = tmp_path / "project"
+    assert runner.invoke(app, ["--json", "init", str(project)]).exit_code == 0
+    requests = "\n".join(
+        [
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "timeline.track.add",
+                    "params": {"type": "video", "name": "V1"},
+                }
+            ),
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "history.status"}),
+            json.dumps({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+        ]
+    )
+    result = runner.invoke(
+        app, ["--project", str(project), "serve", "--no-handshake"], input=requests + "\n"
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert lines[0]["result"]["project_revision"] == 1
+    assert lines[1]["result"]["data"]["branch"].startswith("agent/")

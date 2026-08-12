@@ -71,14 +71,95 @@ def test_incremental_eligibility_accepts_contiguous_simple_timeline() -> None:
     assert reason is None
 
 
-def test_incremental_eligibility_explains_cross_boundary_content() -> None:
+def test_incremental_eligibility_supports_subtitles_and_rejects_transitions() -> None:
     project = _project()
     project.subtitle_cues.append(
         SubtitleCue(track_id="S1", start=0, end=1, text="caption")
     )
     eligible, reason = incremental_eligibility(project)
+    assert eligible is True
+    assert reason is None
+    from facut.core.models import Transition
+
+    project.transitions.append(
+        Transition(
+            type="dissolve",
+            duration=0.5,
+            from_clip_id="c1",
+            to_clip_id="c2",
+            track_id="V1",
+            at=2,
+        )
+    )
+    eligible, reason = incremental_eligibility(project)
     assert eligible is False
-    assert reason and "subtitles" in reason
+    assert reason and "transition" in reason
+
+
+def test_incremental_segment_slices_overlay_audio_and_subtitles(tmp_path: Path) -> None:
+    project = _project()
+    project.media.extend(
+        [
+            MediaAsset(
+                id="overlay",
+                kind=MediaKind.VIDEO,
+                path="overlay.mp4",
+                original_name="overlay.mp4",
+                size=1,
+                sha256="3" * 64,
+                technical=MediaTechnicalInfo(duration=4, video_codec="h264"),
+            ),
+            MediaAsset(
+                id="music",
+                kind=MediaKind.AUDIO,
+                path="music.wav",
+                original_name="music.wav",
+                size=1,
+                sha256="4" * 64,
+                technical=MediaTechnicalInfo(duration=4, audio_codec="pcm_s16le"),
+            ),
+        ]
+    )
+    project.tracks.extend(
+        [
+            Track(
+                id="V2",
+                type=TrackType.VIDEO,
+                name="Overlay",
+                order=1,
+                clips=[
+                    Clip(
+                        id="overlay_clip",
+                        media_id="overlay",
+                        track_id="V2",
+                        timeline_start=1,
+                        source_out=3,
+                    )
+                ],
+            ),
+            Track(
+                id="A1",
+                type=TrackType.AUDIO,
+                name="Music",
+                order=2,
+                clips=[
+                    Clip(id="music_clip", media_id="music", track_id="A1", source_out=4)
+                ],
+            ),
+            Track(id="S1", type=TrackType.SUBTITLE, name="Captions", order=3),
+        ]
+    )
+    project.subtitle_cues.append(SubtitleCue(track_id="S1", start=1.5, end=2.5, text="caption"))
+    renderer = object.__new__(IncrementalRenderer)
+    segment = renderer._segment_document(project, "c2")
+    overlay = next(track for track in segment.tracks if track.id == "V2").clips[0]
+    music = next(track for track in segment.tracks if track.id == "A1").clips[0]
+    assert overlay.timeline_start == 0
+    assert overlay.source_in == pytest.approx(1)
+    assert overlay.source_out == pytest.approx(3)
+    assert music.source_in == pytest.approx(2)
+    assert segment.subtitle_cues[0].start == 0
+    assert segment.subtitle_cues[0].end == pytest.approx(0.5)
 
 
 def test_real_incremental_second_render_reuses_all_segments(tmp_path: Path) -> None:
@@ -142,7 +223,9 @@ def test_real_incremental_second_render_reuses_all_segments(tmp_path: Path) -> N
     assert second.cached is True
     assert second.segments_reused == second.segments_total == 2
     assert second.output.stat().st_size > 1000
-    ffprobe = str(Path(ffmpeg).with_name("ffprobe.exe"))
+    ffprobe = os.environ.get("FACUT_TEST_FFPROBE") or shutil.which("ffprobe")
+    if not ffprobe:
+        pytest.skip("FFprobe is unavailable for duration verification")
     duration = float(
         subprocess.run(
             [

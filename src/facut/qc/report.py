@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from .models import QCReport
 
@@ -46,4 +47,28 @@ def write_markdown(
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(render_markdown(report), encoding="utf-8", newline="\n")
+    return destination
+
+
+def write_json(
+    report: QCReport, output: str | Path, *, overwrite: bool = False
+) -> Path:
+    """Write the complete machine-readable QC evidence atomically."""
+
+    destination = Path(output).expanduser().resolve()
+    if destination.exists() and not overwrite:
+        raise FileExistsError(
+            f'Output "{destination}" already exists. Use --overwrite to replace it.'
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination

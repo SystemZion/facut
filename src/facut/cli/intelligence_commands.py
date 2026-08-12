@@ -417,6 +417,8 @@ def narration_apply(
         from facut.core.command_engine import CommandEngine
 
         manager = manager_for(_state(ctx))
+        if not dry_run:
+            manager.ensure_experiment_branch("narration")
         result = CommandEngine(manager).execute(
             "narration.apply",
             {
@@ -426,6 +428,8 @@ def narration_apply(
                 "preserve_original": preserve_original,
                 "track_id": track,
                 "allow_stale": allow_stale,
+                "_actor": "agent",
+                "_intent": f"Apply reviewed narration plan {plan_file.name}",
             },
             dry_run=dry_run,
         )

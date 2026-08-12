@@ -43,8 +43,10 @@ def _keyframe_expr(
         end = _fmt(right.time)
         left_value = _fmt(float(left.value))
         delta = _fmt(float(right.value) - float(left.value))
+        progress = f"({time_var}-{start})/({end}-{start})"
+        eased = _easing_expr(progress, left.easing)
         segment = (
-            f"{left_value}+({delta})*({time_var}-{start})/({end}-{start})"
+            f"{left_value}+({delta})*({eased})"
         )
         expression = f"if(lt({time_var}\\,{end})\\,{segment}\\,{expression})"
     first = points[0]
@@ -52,6 +54,19 @@ def _keyframe_expr(
         f"if(lt({time_var}\\,{_fmt(first.time)})\\,"
         f"{_fmt(float(first.value))}\\,{expression})"
     )
+
+
+def _easing_expr(progress: str, easing: str) -> str:
+    """Compile supported deterministic easing names to FFmpeg expressions."""
+
+    if easing == "ease-in":
+        return f"pow({progress},2)"
+    if easing == "ease-out":
+        return f"1-pow(1-({progress}),2)"
+    if easing in {"ease-in-out", "cubic"}:
+        # Smoothstep is cubic, continuous, and avoids another nested if().
+        return f"({progress})*({progress})*(3-2*({progress}))"
+    return progress
 
 
 def _filter_path(path: str | Path) -> str:
@@ -352,6 +367,17 @@ class GraphBuilder:
                         clip, clip.duration, self.project.project.sample_rate
                     )
                 )
+                # Stateful filters such as loudnorm and alimiter can shorten a
+                # short stream on older FFmpeg releases because of their look-
+                # ahead latency. Keep native camera audio frame-aligned with
+                # its video clip after processing, just like independent
+                # timeline audio below.
+                audio_chain.extend(
+                    [
+                        f"apad=whole_dur={_fmt(clip.duration)}",
+                        f"atrim=duration={_fmt(clip.duration)}",
+                    ]
+                )
                 filters.append(",".join(audio_chain) + f"[a{index}]")
             else:
                 filters.append(
@@ -573,7 +599,10 @@ class GraphBuilder:
                     overlay_ref = f"overlayref{overlay_number}"
                     filters.append(
                         f"[{mask_label}][{overlay_label}]scale2ref="
-                        f"w=rw:h=rh[{mask_scaled}][{overlay_ref}]"
+                        # ``iw``/``ih`` resolve to the reference input here on
+                        # FFmpeg 5 through 8.  Newer ``rw``/``rh`` variables
+                        # are unavailable on older release builds.
+                        f"w=iw:h=ih[{mask_scaled}][{overlay_ref}]"
                     )
                     masked_label = f"masked{overlay_number}"
                     filters.append(

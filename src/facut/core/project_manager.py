@@ -6,12 +6,14 @@ import json
 import os
 import shutil
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import ValidationError
 
 from .history import HistoryStore
+from .cutgraph import CutGraphStore, semantic_diff
 from .models import HistoryEntry, ProjectDocument, ProjectSettings
 
 T = TypeVar("T")
@@ -49,6 +51,7 @@ class ProjectManager:
         self.project_dir = self.project_file.parent
         self.document: ProjectDocument | None = None
         self.history = HistoryStore(self.project_dir)
+        self.cutgraph = CutGraphStore(self.project_dir)
 
     @classmethod
     def create(
@@ -86,6 +89,7 @@ class ProjectManager:
             )
         )
         manager.save(create_snapshot=True)
+        manager.cutgraph.initialize(manager.document, migrate_legacy=False)
         return manager
 
     def load(self) -> ProjectDocument:
@@ -156,15 +160,26 @@ class ProjectManager:
         """Apply one mutation transaction and return its result plus new state."""
 
         current = self.require_document()
+        if not dry_run:
+            self.cutgraph.initialize(current)
         candidate = current.model_copy(deep=True)
         result = operation(candidate)
-        candidate.revision += 1
+        candidate.revision = (
+            current.revision + 1
+            if dry_run
+            else max(current.revision, self.cutgraph.max_revision()) + 1
+        )
+        actor_value = str((command or {}).get("_actor", "user"))
+        actor = actor_value if actor_value in {"user", "agent", "system"} else "user"
+        intent = (command or {}).get("_intent")
         candidate.history.append(
             HistoryEntry(
                 revision=candidate.revision,
                 action=action,
                 summary=summary,
                 command=command or {},
+                actor=actor,
+                intent=str(intent) if intent is not None else None,
             )
         )
         candidate.recompute_duration()
@@ -173,34 +188,128 @@ class ProjectManager:
             return result, candidate
         self.history.save_snapshot(current)
         self.history.clear_redo()
+        commit_id, branch = self.cutgraph.prepare_commit(
+            candidate,
+            action=action,
+            summary=summary,
+            actor=actor,
+            intent=str(intent) if intent is not None else None,
+        )
         self.document = candidate
         self.save(create_snapshot=True)
+        self.cutgraph.finalize_commit(branch, commit_id)
         return result, candidate
 
     def undo(self) -> ProjectDocument:
         current = self.require_document()
-        if current.revision <= 0:
-            raise ProjectError("There is no operation to undo.")
-        target_revision = current.revision - 1
-        self.history.push_redo(current)
-        restored = self.history.load_snapshot(target_revision)
+        self.cutgraph.initialize(current)
+        restored = self.cutgraph.undo()
         self.document = restored
         self.save(create_snapshot=False)
         return restored
 
     def redo(self) -> ProjectDocument:
-        restored = self.history.pop_redo()
-        if restored is None:
-            raise ProjectError("There is no operation to redo.")
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        restored = self.cutgraph.redo()
         self.document = restored
         self.save(create_snapshot=True)
         return restored
 
     def checkout(self, revision: int) -> ProjectDocument:
-        restored = self.history.load_snapshot(revision)
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        matching = []
+        for path in self.cutgraph.objects.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if int(payload.get("revision", -1)) == revision:
+                matching.append(payload["commit_id"])
+        if len(matching) != 1:
+            raise ProjectError(
+                f"Project revision {revision} was not found or is ambiguous.",
+                suggestion="Use `facut history log --graph` and restore by commit ID.",
+            )
+        restored = self.cutgraph.document_at(matching[0])
         self.document = restored
         self.save(create_snapshot=False)
         return restored
+
+    def switch_branch(self, name: str) -> ProjectDocument:
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        restored = self.cutgraph.switch_branch(name)
+        self.document = restored
+        self.save(create_snapshot=False)
+        return restored
+
+    def ensure_experiment_branch(self, prefix: str = "agent") -> str:
+        """Keep generated edits off main by switching to a unique experiment branch."""
+
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        branch = self.cutgraph.current_branch()
+        if branch != "main":
+            return branch
+        base = f"{prefix}/{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        candidate = base
+        existing = {item["name"] for item in self.cutgraph.list_branches()}
+        suffix = 2
+        while candidate in existing:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        self.cutgraph.create_branch(candidate)
+        self.document = self.cutgraph.switch_branch(candidate)
+        self.save(create_snapshot=False)
+        return candidate
+
+    def accept_branch(self, source: str, target: str = "main") -> tuple[dict[str, Any], ProjectDocument]:
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        result, restored = self.cutgraph.accept_branch(source, target)
+        if restored is not None:
+            self.document = restored
+            self.save(create_snapshot=False)
+        return result, self.require_document()
+
+    def restore_commit(self, identifier: str) -> ProjectDocument:
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        target = self.cutgraph.document_at(identifier)
+        candidate = target.model_copy(deep=True)
+        candidate.revision = max(current.revision, self.cutgraph.max_revision()) + 1
+        candidate.history = list(current.history)
+        candidate.history.append(
+            HistoryEntry(
+                revision=candidate.revision,
+                action="history.restore",
+                summary=f"Restored project state from {identifier}",
+                command={"commit": identifier},
+            )
+        )
+        commit_id, branch = self.cutgraph.prepare_commit(
+            candidate,
+            action="history.restore",
+            summary=f"Restored project state from {identifier}",
+        )
+        self.history.save_snapshot(current)
+        self.document = candidate
+        self.save(create_snapshot=True)
+        self.cutgraph.finalize_commit(branch, commit_id)
+        return candidate
+
+    def diff_history(self, before: str, after: str) -> dict[str, Any]:
+        current = self.require_document()
+        self.cutgraph.initialize(current)
+        result = semantic_diff(
+            self.cutgraph.document_at(before),
+            self.cutgraph.document_at(after),
+        )
+        result["before"] = self.cutgraph.resolve(before)
+        result["after"] = self.cutgraph.resolve(after)
+        return result
 
     def resolve_path(self, stored_path: str) -> Path:
         path = Path(stored_path)
@@ -222,13 +331,23 @@ class ProjectManager:
         return manager
 
     def import_paths(
-        self, paths: list[str | Path], *, recursive: bool = False, dry_run: bool = False
+        self,
+        paths: list[str | Path],
+        *,
+        recursive: bool = False,
+        exclude_proxy_candidates: bool = False,
+        dry_run: bool = False,
     ) -> list[Any]:
         """Import paths through the media service without coupling the CLI to it."""
 
         from facut.media.importer import MediaImporter
 
-        return MediaImporter(self).import_paths(paths, recursive=recursive, dry_run=dry_run)
+        return MediaImporter(self).import_paths(
+            paths,
+            recursive=recursive,
+            exclude_proxy_candidates=exclude_proxy_candidates,
+            dry_run=dry_run,
+        )
 
     def resolve_media(self, media_or_path: str) -> Any:
         document = self.require_document()

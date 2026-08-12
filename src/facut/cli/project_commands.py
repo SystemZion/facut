@@ -15,11 +15,13 @@ from facut.cli.common import compact_project, manager_for, public_error
 from facut.core.command_engine import CommandEngine
 from facut.core.project_manager import ProjectManager
 from facut.media.probe import probe_media
+from facut.media.proxy_manager import ProxyManager
 from facut.responses import success_response
 
 
 project_app = typer.Typer(help="Inspect, validate, snapshot, and manage projects.")
 history_app = typer.Typer(help="Inspect project revision history.")
+branch_app = typer.Typer(help="Create, switch, inspect, and accept CutGraph branches.")
 
 
 def _state(ctx: typer.Context):
@@ -83,6 +85,14 @@ def import_command(
     ctx: typer.Context,
     paths: Annotated[list[Path], typer.Argument(help="Media file(s) or directories.")],
     recursive: Annotated[bool, typer.Option("--recursive", "-r")] = False,
+    proxy: Annotated[
+        str,
+        typer.Option("--proxy", help="none or auto (detect and link existing LRF proxies)."),
+    ] = "none",
+    proxy_search: Annotated[
+        list[Path] | None,
+        typer.Option("--proxy-search", help="Additional directory to scan recursively."),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     porcelain: Annotated[
         bool,
@@ -95,10 +105,30 @@ def import_command(
     """Import supported video, audio, image, and subtitle assets."""
 
     try:
-        manager = manager_for(_state(ctx))
-        assets = manager.import_paths(paths, recursive=recursive, dry_run=dry_run)
+        state = _state(ctx)
+        manager = manager_for(state)
+        proxy_mode = proxy.casefold()
+        if proxy_mode not in {"none", "auto"}:
+            raise ValueError("--proxy must be none or auto.")
+        assets = manager.import_paths(
+            paths,
+            recursive=recursive,
+            exclude_proxy_candidates=proxy_mode == "auto",
+            dry_run=dry_run,
+        )
+        proxy_results: list[dict[str, object]] = []
+        if proxy_mode == "auto" and not dry_run:
+            service = ProxyManager(
+                manager,
+                ffmpeg=state.config.tools.ffmpeg,
+                ffprobe=state.config.tools.ffprobe,
+            )
+            proxy_results, _ = service.scan(
+                search_directories=proxy_search,
+                link=True,
+            )
         if porcelain:
-            if _state(ctx).json_output:
+            if state.json_output:
                 raise ValueError("Use either --json or --porcelain, not both.")
             for asset in assets:
                 typer.echo(asset.id)
@@ -108,7 +138,7 @@ def import_command(
         _emit(
             ctx,
             "import",
-            {"media": data, "dry_run": dry_run},
+            {"media": data, "proxies": proxy_results, "dry_run": dry_run},
             "\n".join(f"[green]{asset.id}[/green]  {asset.original_name}" for asset in assets),
             revision=revision,
         )
@@ -229,6 +259,180 @@ def history_list(ctx: typer.Context) -> None:
         _abort(ctx, "history.list", error)
 
 
+@history_app.command("status")
+def history_status(ctx: typer.Context) -> None:
+    """Show current CutGraph branch, commit, and redo state."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.require_document()
+        manager.cutgraph.initialize(document)
+        data = manager.cutgraph.status()
+        text = (
+            f"Branch: {data['branch']}\n"
+            f"HEAD: {data['head']}\n"
+            f"Redo available: {'yes' if data['redo_available'] else 'no'}"
+        )
+        _emit(ctx, "history.status", data, text, revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "history.status", error)
+
+
+@history_app.command("log")
+def history_log(
+    ctx: typer.Context,
+    start: Annotated[str, typer.Argument()] = "HEAD",
+    graph: Annotated[bool, typer.Option("--graph")] = False,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 50,
+) -> None:
+    """Show commit-addressed history from a branch or commit."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.require_document()
+        manager.cutgraph.initialize(document)
+        data = manager.cutgraph.log(start, limit=limit)
+        prefix = "* " if graph else ""
+        text = "\n".join(
+            f"{prefix}{item['commit_id'][:12]}  r{item['revision']:<4} "
+            f"{item['branch']:<18} {item['action']}  {item['summary']}"
+            for item in data
+        ) or "No commits."
+        _emit(ctx, "history.log", data, text, revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "history.log", error)
+
+
+@history_app.command("diff")
+def history_diff(
+    ctx: typer.Context,
+    range_spec: Annotated[str, typer.Argument(help="before..after")] = "main..HEAD",
+) -> None:
+    """Compare two revisions using clips, tracks, effects, audio, and proxy entities."""
+
+    try:
+        if ".." not in range_spec:
+            raise ValueError("History diff requires before..after.")
+        before, after = range_spec.split("..", 1)
+        manager = manager_for(_state(ctx))
+        data = manager.diff_history(before, after)
+        summary = data["summary"]
+        text = (
+            f"Added: {summary['added']}  Removed: {summary['removed']}  "
+            f"Modified: {summary['modified']}"
+        )
+        _emit(
+            ctx,
+            "history.diff",
+            data,
+            text,
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _abort(ctx, "history.diff", error)
+
+
+@history_app.command("undo")
+def history_undo(ctx: typer.Context) -> None:
+    """Move the current branch to its parent without deleting the future."""
+
+    undo_command(ctx)
+
+
+@history_app.command("redo")
+def history_redo(ctx: typer.Context) -> None:
+    """Move forward along the most recently undone CutGraph path."""
+
+    redo_command(ctx)
+
+
+@history_app.command("restore")
+def history_restore(ctx: typer.Context, commit: str) -> None:
+    """Restore an earlier state as a new commit on the current branch."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.restore_commit(commit)
+        _emit(
+            ctx,
+            "history.restore",
+            {"commit": commit, "revision": document.revision},
+            f"[green]Restored {commit} as revision {document.revision}.[/green]",
+            revision=document.revision,
+        )
+    except Exception as error:
+        _abort(ctx, "history.restore", error)
+
+
+@branch_app.command("create")
+def branch_create(
+    ctx: typer.Context,
+    name: str,
+    start: Annotated[str, typer.Option("--start")] = "HEAD",
+    switch: Annotated[bool, typer.Option("--switch")] = False,
+) -> None:
+    """Create a branch from a commit and optionally switch to it."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.require_document()
+        manager.cutgraph.initialize(document)
+        data = manager.cutgraph.create_branch(name, start=start)
+        if switch:
+            document = manager.switch_branch(name)
+            data["current"] = True
+        _emit(ctx, "branch.create", data, f"[green]Created branch {name}.[/green]", revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "branch.create", error)
+
+
+@branch_app.command("switch")
+def branch_switch(ctx: typer.Context, name: str) -> None:
+    """Switch the working project to a saved branch tip."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.switch_branch(name)
+        data = manager.cutgraph.status()
+        _emit(ctx, "branch.switch", data, f"[green]Switched to {name}.[/green]", revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "branch.switch", error)
+
+
+@branch_app.command("list")
+def branch_list(ctx: typer.Context) -> None:
+    """List CutGraph branches and their tips."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        document = manager.require_document()
+        manager.cutgraph.initialize(document)
+        data = manager.cutgraph.list_branches()
+        text = "\n".join(
+            f"{'*' if item['current'] else ' '} {item['name']:<24} {item['commit_id'][:12]}"
+            for item in data
+        )
+        _emit(ctx, "branch.list", data, text, revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "branch.list", error)
+
+
+@branch_app.command("accept")
+def branch_accept(
+    ctx: typer.Context,
+    source: str,
+    target: Annotated[str, typer.Option("--into")] = "main",
+) -> None:
+    """Fast-forward a target branch; divergent histories are never overwritten."""
+
+    try:
+        manager = manager_for(_state(ctx))
+        data, document = manager.accept_branch(source, target)
+        _emit(ctx, "branch.accept", data, f"[green]Accepted {source} into {target}.[/green]", revision=document.revision)
+    except Exception as error:
+        _abort(ctx, "branch.accept", error)
+
+
 def undo_command(ctx: typer.Context) -> None:
     """Restore the immediately preceding project revision."""
 
@@ -268,8 +472,18 @@ def run_command(
             "audio.fade", "clip.move", "clip.duplicate", "clip.transform",
             "clip.freeze", "clip.composite", "effect.add", "effect.remove",
             "adjustment.add", "clip.split", "clip.trim", "clip.delete",
-            "clip.speed", "transition.add", "transition.remove", "narration.apply",
+            "clip.motion", "clip.speed", "clip.speed_curve", "audio.process",
+            "audio.crossfade", "audio.loudness", "transition.add",
+            "transition.remove", "narration.apply",
         }
+        has_project_edits = any(
+            isinstance(command, dict) and command.get("action") in project_actions
+            for command in commands
+        )
+        if not dry_run and has_project_edits and bool(payload.get("agent", True)):
+            manager.ensure_experiment_branch("agent")
+            payload.setdefault("actor", "agent")
+            payload.setdefault("intent", "Apply Agent command batch")
         has_agent_actions = any(
             isinstance(command, dict) and command.get("action") not in project_actions
             for command in commands

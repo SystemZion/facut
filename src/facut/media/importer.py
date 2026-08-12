@@ -11,7 +11,7 @@ from facut.core.project_manager import ProjectManager, ProjectError
 
 from .probe import probe_media
 
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".lrf"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".opus"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt"}
@@ -34,9 +34,14 @@ class MediaImporter:
         paths: Iterable[str | Path],
         *,
         recursive: bool = False,
+        exclude_proxy_candidates: bool = False,
         dry_run: bool = False,
     ) -> list[MediaAsset]:
-        files = self._expand_paths(paths, recursive=recursive)
+        files = self._expand_paths(
+            paths,
+            recursive=recursive,
+            exclude_proxy_candidates=exclude_proxy_candidates,
+        )
         prepared = [self._prepare(path) for path in files]
 
         def operation(document):
@@ -59,13 +64,21 @@ class MediaImporter:
             "media.import",
             f"Imported {len(files)} media file(s): {names}",
             operation,
-            command={"paths": [str(path) for path in files], "recursive": recursive},
+            command={
+                "paths": [str(path) for path in files],
+                "recursive": recursive,
+                "exclude_proxy_candidates": exclude_proxy_candidates,
+            },
             dry_run=dry_run,
         )
         return result
 
     def _expand_paths(
-        self, paths: Iterable[str | Path], *, recursive: bool
+        self,
+        paths: Iterable[str | Path],
+        *,
+        recursive: bool,
+        exclude_proxy_candidates: bool = False,
     ) -> list[Path]:
         discovered: list[Path] = []
         for supplied in paths:
@@ -81,6 +94,23 @@ class MediaImporter:
             {path for path in discovered if path.suffix.lower() in SUPPORTED_EXTENSIONS},
             key=lambda item: str(item).casefold(),
         )
+        if exclude_proxy_candidates:
+            from .proxy_manager import is_probable_proxy_path, proxy_base_stem
+
+            original_keys = {
+                (path.parent.resolve(), proxy_base_stem(path))
+                for path in result
+                if not is_probable_proxy_path(path)
+                and path.suffix.lower() in VIDEO_EXTENSIONS
+            }
+            result = [
+                path
+                for path in result
+                if not (
+                    is_probable_proxy_path(path)
+                    and (path.parent.resolve(), proxy_base_stem(path)) in original_keys
+                )
+            ]
         if not result:
             raise UnsupportedMediaError("No supported media files were found.")
         return result

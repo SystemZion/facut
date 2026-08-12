@@ -28,7 +28,6 @@ def _qc_tools() -> tuple[str, str, str] | None:
         os.environ.get("FACUT_TEST_FFMPEG"),
         os.environ.get("FACUT_FFMPEG"),
         shutil.which("ffmpeg"),
-        r"D:\工具\jianyin\JianyingPro\9.3.0.13547\ffmpeg.exe",
     ]
     for candidate in candidates:
         if not candidate or not Path(candidate).is_file():
@@ -53,7 +52,9 @@ def _qc_tools() -> tuple[str, str, str] | None:
         ).stdout
         encoder = "libx264" if " libx264 " in encoders else "mpeg4" if " mpeg4 " in encoders else ""
         probe = os.environ.get("FACUT_TEST_FFPROBE") or os.environ.get("FACUT_FFPROBE")
-        adjacent = Path(candidate).with_name("ffprobe.exe")
+        adjacent = Path(candidate).with_name(
+            "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        )
         if not probe and adjacent.is_file():
             probe = str(adjacent)
         probe = probe or shutil.which("ffprobe")

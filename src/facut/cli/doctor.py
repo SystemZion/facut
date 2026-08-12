@@ -229,6 +229,25 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
     located_ffprobe = shutil.which(config.tools.ffprobe)
     ffmpeg_path = str(Path(located_ffmpeg).resolve()) if located_ffmpeg else None
     ffprobe_path = str(Path(located_ffprobe).resolve()) if located_ffprobe else None
+    bundle_root = Path(getattr(sys, "_MEIPASS", "")).resolve() if getattr(sys, "_MEIPASS", None) else None
+
+    def tool_location(path: str | None, name: str) -> dict[str, str | None]:
+        if path is None:
+            return {"source": None, "runtime_executable": None, "stable_install_path": None}
+        candidate = Path(path).resolve()
+        if bundle_root and (candidate == bundle_root or bundle_root in candidate.parents):
+            source = "embedded"
+            stable = f"{Path(sys.executable).resolve()}::{candidate.relative_to(bundle_root)}"
+        elif "vendor" in {part.casefold() for part in candidate.parts}:
+            source = "source-vendor"
+            stable = str(candidate)
+        elif str(candidate).casefold() == str(Path(getattr(config.tools, name)).expanduser()).casefold():
+            source = "configured"
+            stable = str(candidate)
+        else:
+            source = "system-path"
+            stable = str(candidate)
+        return {"source": source, "runtime_executable": str(candidate), "stable_install_path": stable}
     ffmpeg_version = _first_line(_run([ffmpeg_path, "-version"])) if ffmpeg_path else None
     ffprobe_version = _first_line(_run([ffprobe_path, "-version"])) if ffprobe_path else None
     ffmpeg_major = _ffmpeg_major(ffmpeg_version)
@@ -264,6 +283,15 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
         "av1": any(name in encoders_text for name in ("libaom-av1", "libsvtav1", "av1_")),
         "prores": "prores_" in encoders_text,
         "vp9": "libvpx-vp9" in encoders_text,
+    }
+    implemented_video = {"h264": True, "h265": False, "av1": False, "prores": False, "vp9": False}
+    video_encoder_status = {
+        name: {
+            "detected": detected,
+            "usable": detected,
+            "implemented": implemented_video[name],
+        }
+        for name, detected in video_encoders.items()
     }
     audio_encoders = {
         "aac": " aac " in encoders_text,
@@ -329,14 +357,17 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
                 "version": ffmpeg_version,
                 "major": ffmpeg_major,
                 "modern_media_support": ffmpeg_modern,
+                **tool_location(ffmpeg_path, "ffmpeg"),
             },
             "ffprobe": {
                 "available": bool(ffprobe_version),
                 "executable": ffprobe_path,
                 "version": ffprobe_version,
+                **tool_location(ffprobe_path, "ffprobe"),
             },
             "encoders": {
                 "video": video_encoders,
+                "video_status": video_encoder_status,
                 "audio": audio_encoders,
                 "hardware": hardware_encoders,
             },

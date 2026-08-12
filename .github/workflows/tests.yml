@@ -26,6 +26,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install modern FFmpeg (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install modern FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Verify FFmpeg baseline
+        run: ffmpeg -hide_banner -version
+
       - name: Install package
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
 
@@ -34,3 +45,6 @@ jobs:
 
       - name: Compile package
         run: python -m compileall -q src
+
+      - name: Release privacy scan
+        run: python tools/privacy_scan.py

@@ -143,6 +143,124 @@ def serve_command(
                     "transitions": current["transitions"],
                     "markers": current["markers"],
                 }
+            elif method in {
+                "timeline.track.add", "timeline.add", "audio.add", "audio.volume",
+                "audio.fade", "clip.move", "clip.duplicate", "clip.transform",
+                "clip.motion", "clip.freeze", "clip.composite", "clip.split",
+                "clip.trim", "clip.delete", "clip.speed", "clip.speed_curve",
+                "effect.add", "effect.remove", "adjustment.add", "audio.process",
+                "audio.crossfade", "audio.loudness", "transition.add", "transition.remove",
+            }:
+                dry_run = bool(params.pop("dry_run", False))
+                if not dry_run:
+                    manager.ensure_experiment_branch("agent")
+                    params.setdefault("_actor", "agent")
+                    params.setdefault("_intent", f"Agent RPC {method}")
+                result = engine.execute(method, params, dry_run=dry_run)
+            elif method in {"proxy.scan", "proxy.link_auto"}:
+                from facut.media.proxy_manager import ProxyManager
+
+                service = ProxyManager(
+                    manager,
+                    ffmpeg=state.config.tools.ffmpeg,
+                    ffprobe=state.config.tools.ffprobe,
+                )
+                if method == "proxy.scan":
+                    data, current = service.scan(
+                        params.get("media_id"),
+                        search_directories=[Path(str(item)) for item in params.get("search", [])],
+                        link=bool(params.get("link", False)),
+                        dry_run=bool(params.get("dry_run", False)),
+                    )
+                    payload = {"results": data, "link": bool(params.get("link", False))}
+                else:
+                    asset, current, matched = service.relink(
+                        str(params["media_id"]),
+                        Path(str(params["search"])) if params.get("search") else None,
+                        dry_run=bool(params.get("dry_run", False)),
+                    )
+                    payload = {
+                        "media": asset.model_dump(mode="json"),
+                        "matched": str(matched),
+                    }
+                result = {
+                    "status": "success", "command": method, "data": payload,
+                    "warnings": [], "errors": [], "project_revision": current.revision,
+                }
+            elif method == "history.status":
+                current = manager.require_document()
+                manager.cutgraph.initialize(current)
+                result = {
+                    "status": "success", "command": method,
+                    "data": manager.cutgraph.status(), "warnings": [], "errors": [],
+                    "project_revision": current.revision,
+                }
+            elif method == "history.diff":
+                data = manager.diff_history(str(params["before"]), str(params["after"]))
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "history.restore":
+                current = manager.restore_commit(str(params["commit"]))
+                result = {
+                    "status": "success", "command": method,
+                    "data": {"commit": params["commit"], "revision": current.revision},
+                    "warnings": [], "errors": [], "project_revision": current.revision,
+                }
+            elif method == "branch.create":
+                current = manager.require_document()
+                manager.cutgraph.initialize(current)
+                data = manager.cutgraph.create_branch(
+                    str(params["name"]), start=str(params.get("start", "HEAD"))
+                )
+                if bool(params.get("switch", False)):
+                    current = manager.switch_branch(str(params["name"]))
+                    data["current"] = True
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": current.revision}
+            elif method == "branch.switch":
+                current = manager.switch_branch(str(params["name"]))
+                result = {"status": "success", "command": method, "data": manager.cutgraph.status(), "warnings": [], "errors": [], "project_revision": current.revision}
+            elif method == "branch.accept":
+                data, current = manager.accept_branch(
+                    str(params["source"]), str(params.get("target", "main"))
+                )
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": current.revision}
+            elif method == "preview.compare":
+                from facut.render.compare import render_compare_previews
+                from facut.render.ffmpeg_backend import FFmpegBackend
+
+                data = render_compare_previews(
+                    manager,
+                    FFmpegBackend(state.config.tools.ffmpeg),
+                    before=str(params["before"]),
+                    after=str(params["after"]),
+                    output_dir=str(params["output_dir"]),
+                    changed_only=bool(params.get("changed_only", True)),
+                    padding=float(params.get("padding", 0.5)),
+                    height=int(params.get("height", 360)),
+                    fps=float(params.get("fps", 24)),
+                    hardware=str(params.get("hardware", "auto")),
+                    overwrite=bool(params.get("overwrite", False)),
+                )
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "qc.run":
+                from facut.qc.engine import QCEngine, resolve_qc_scope
+
+                target = Path(str(params["target"]))
+                scope, sources = resolve_qc_scope(target, project=state.project)
+                qc_report = QCEngine(
+                    ffmpeg=state.config.tools.ffmpeg,
+                    ffprobe=state.config.tools.ffprobe,
+                    expected_duration=params.get("expected_duration"),
+                ).run(
+                    scope,
+                    sources,
+                    contact_sheet=Path(str(params["contact_sheet"])) if params.get("contact_sheet") else None,
+                    overwrite=bool(params.get("overwrite", False)),
+                )
+                result = {"status": "success", "command": method, "data": qc_report.model_dump(mode="json"), "warnings": qc_report.warnings, "errors": [], "project_revision": manager.require_document().revision}
             elif method == "run":
                 dry_run = bool(params.pop("dry_run", False))
                 result = engine.run_batch(params, dry_run=dry_run)
