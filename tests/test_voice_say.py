@@ -68,6 +68,7 @@ def test_voice_say_returns_selection_and_never_modifies_timeline(tmp_path: Path)
 
     def fake_synthesize(profile, profile_directory, lines, output_directory, **kwargs):
         captured["lines"] = lines
+        captured["options"] = kwargs
         return {
             "status": "success", "provider": "fake", "model_version": "test",
             "profile_id": profile.id, "outputs": [], "warnings": [],
@@ -79,6 +80,8 @@ def test_voice_say_returns_selection_and_never_modifies_timeline(tmp_path: Path)
         "我跟你说，今天这里真的挺舒服。",
         tmp_path / "auditions",
         takes=2,
+        use_service=False,
+        service_options={"device": "cpu", "require_cuda": False},
         synthesize=fake_synthesize,
     )
     assert result["command"] == "voice.say"
@@ -86,3 +89,4 @@ def test_voice_say_returns_selection_and_never_modifies_timeline(tmp_path: Path)
     assert result["audition_required"] is True
     assert result["timeline_modified"] is False
     assert len(captured["lines"]) == 2
+    assert captured["options"] == {"device": "cpu", "require_cuda": False}

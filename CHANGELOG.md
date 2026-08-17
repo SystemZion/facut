@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.2 — 2026-08-17
+
+### Fixed
+
+- Unified one-shot and warm-service voice device selection. A configured CPU
+  PyTorch overlay now protects both paths when `device=auto`, while
+  `--require-cuda` and explicit `--device cuda` are never silently downgraded.
+- Rejected the contradictory `--device cpu --require-cuda` combination before
+  provider startup, preserved device requirements during one-shot fallback,
+  and prevented inherited CUDA-required environment flags from leaking into
+  CPU workers.
+- Isolated the frozen warm-service process from its parent PyInstaller
+  extraction directory so repeated service starts do not leave `_MEI` folders.
+- Kept generated PyInstaller spec files under the ignored build directory so
+  local absolute paths cannot overwrite the portable tracked release spec.
+- Added `device` and service-selection fields to narration and Agent schemas,
+  and reject undeclared parameters for the affected RPC actions.
+
 ## 0.7.1 — 2026-08-12
 
 ### Fixed

@@ -329,6 +329,13 @@ facut voice serve status --json
 
 `voice serve` 只绑定 `127.0.0.1`，使用随机令牌和本机状态文件。新版 CosyVoice provider 的 `--facut-voice-jsonl` 模式会在同一进程中保留模型；`--require-cuda` 下无法验证 CUDA 时直接失败，不静默回到 CPU。模型目录继续通过 `facut models link voice_model <path>` 独立配置，不进入 EXE 或 GitHub。
 
+没有 NVIDIA GPU 时，可在用户配置的 `[voice]` 段设置外部 CPU PyTorch
+`cpu_overlay`。此时 `--device auto` 会在一次性合成和常驻服务中统一选择
+CPU，避免断开 eGPU 后导入 CUDA 运行时崩溃；需要 GPU 时使用
+`--device cuda --require-cuda`，该组合绝不降级。`--device cpu` 与
+`--require-cuda` 互相矛盾，会在启动模型前返回参数错误。overlay、模型和
+个人声音样本始终位于用户配置的外部目录，不打入 EXE 或 GitHub。
+
 ## 声明式 Recipe
 
 ```powershell

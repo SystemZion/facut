@@ -16,7 +16,7 @@ from typing import Any
 # Respect an explicit CPU service before importing torch.  The normal default
 # remains CUDA when available.
 if os.environ.get("FACUT_VOICE_DEVICE", "auto").casefold() == "cpu":
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
     # A CUDA-enabled PyTorch build can crash during import when a Windows eGPU
     # is physically disconnected.  Keep the normal CUDA runtime untouched and
     # allow the installer to provide a small, explicit CPU wheel overlay for

@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from typing import Any
 
-from facut.exceptions import NotImplementedFacutError
+from facut.exceptions import InvalidArgumentError, NotImplementedFacutError
 
 from .models import VoiceProfile
 from .store import default_voice_home
@@ -119,15 +119,12 @@ def invoke_provider_request(
 ) -> dict[str, Any]:
     """Invoke a facut-voice-provider/1.0 executable once."""
 
-    requested_device = str(device).casefold()
-    if requested_device not in {"auto", "cuda", "cpu"}:
-        raise ValueError("Voice device must be auto, cuda, or cpu.")
     environment = os.environ.copy()
-    # A configured CPU overlay exists specifically to avoid importing a CUDA
-    # PyTorch build when an eGPU is disconnected. For one-shot synthesis,
-    # prefer that safe runtime in auto mode; callers can still request CUDA.
-    if requested_device == "auto" and environment.get("FACUT_CPU_TORCH_OVERLAY"):
-        requested_device = "cpu"
+    requested_device = resolve_voice_device(
+        device,
+        require_cuda=require_cuda,
+        environment=environment,
+    )
     environment["FACUT_VOICE_DEVICE"] = requested_device
     environment["FACUT_VOICE_REQUIRE_CUDA"] = "1" if require_cuda else "0"
 
@@ -154,6 +151,35 @@ def invoke_provider_request(
         return json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("Local voice provider returned invalid JSON.") from error
+
+
+def resolve_voice_device(
+    device: str,
+    *,
+    require_cuda: bool = False,
+    environment: dict[str, str] | None = None,
+) -> str:
+    """Resolve a safe provider device consistently for one-shot and service paths."""
+
+    requested_device = str(device).casefold()
+    if requested_device not in {"auto", "cuda", "cpu"}:
+        raise InvalidArgumentError("Voice device must be auto, cuda, or cpu.")
+    if requested_device == "cpu" and require_cuda:
+        raise InvalidArgumentError(
+            "Voice device cpu cannot be combined with --require-cuda.",
+            suggestion="Use --device cuda, or remove --require-cuda.",
+        )
+    current_environment = environment if environment is not None else os.environ
+    # A configured CPU overlay exists specifically to avoid importing a CUDA
+    # PyTorch build when an eGPU is disconnected. Prefer that safe runtime in
+    # auto mode, but never override an explicit CUDA requirement.
+    if (
+        requested_device == "auto"
+        and not require_cuda
+        and current_environment.get("FACUT_CPU_TORCH_OVERLAY")
+    ):
+        requested_device = "cpu"
+    return requested_device
 
 
 def provider_status(explicit: str | Path | None = None) -> dict[str, Any]:

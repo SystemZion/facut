@@ -58,6 +58,23 @@ def _error(request_id: Any, code: int, message: str, data: Any = None) -> dict[s
     return payload
 
 
+def _validate_declared_params(method: str, params: dict[str, Any]) -> None:
+    """Reject RPC parameters that are outside an action's published contract."""
+
+    schema = action_schema(method)["parameters"]
+    properties = set(schema.get("properties", {}))
+    unknown = sorted(set(params) - properties)
+    if unknown:
+        raise ValueError(
+            f"{method} received unknown parameter(s): {', '.join(unknown)}."
+        )
+    missing = sorted(set(schema.get("required", [])) - set(params))
+    if missing:
+        raise ValueError(
+            f"{method} requires parameter(s): {', '.join(missing)}."
+        )
+
+
 def serve_command(
     ctx: typer.Context,
     handshake: Annotated[
@@ -117,6 +134,8 @@ def serve_command(
             params = dict(request.get("params") or {})
             if not isinstance(params, dict):
                 raise ValueError("Request params must be an object.")
+            if method in {"voice.say", "narration.synthesize"}:
+                _validate_declared_params(method, params)
             if method == "ping":
                 result = {
                     "status": "ok",
@@ -420,6 +439,7 @@ def serve_command(
                     speed=float(params.get("speed", 1.0)),
                     intensity=float(params.get("intensity", 0.5)),
                     instruction=params.get("instruction"),
+                    device=str(params.get("device", "auto")),
                     require_cuda=bool(params.get("require_cuda", False)),
                     use_service=bool(params.get("use_service", True)),
                     provider=params.get("provider"),
@@ -527,7 +547,10 @@ def serve_command(
                     purpose=params.get("purpose"),
                     provider=params.get("provider"),
                     use_service=bool(params.get("use_service", True)),
-                    service_options={"require_cuda": bool(params.get("require_cuda", False))},
+                    service_options={
+                        "device": str(params.get("device", "auto")),
+                        "require_cuda": bool(params.get("require_cuda", False)),
+                    },
                 )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 for item, final_path in zip(data["outputs"], outputs, strict=True):

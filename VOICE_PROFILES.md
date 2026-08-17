@@ -58,6 +58,13 @@ facut voice serve start --device cuda --require-cuda
 facut voice say "今天我们出去走走。" --voice zion --style auto --takes 2 --output narration.wav
 ```
 
+设备选择规则：`auto` 默认使用可用运行时；配置 `[voice].cpu_overlay`
+后，`auto` 会优先使用隔离的 CPU PyTorch，以保护断开 eGPU 的 Windows
+环境。显式 `--device cuda --require-cuda` 要求真实 CUDA，失败时不会回退；
+显式 `--device cpu` 适合无 GPU 环境，但不能与 `--require-cuda` 同用。
+上述规则对 `voice say`、`voice synthesize`、`narration synthesize` 和
+`voice serve` 保持一致。
+
 `voice synthesize` 会根据语气选择匹配度更高的参考片段，去除参考音频首尾近静音，按语义切分长文并插入不同长度的句间停顿。默认 `natural-vlog` 使用 CosyVoice3 的自然语言指令控制；`--delivery reference` 可用于与旧式纯零样本生成进行 A/B 对比。
 
 `vlog-style-capsules-v1` 是可选增量录音，不替换已有原始样本。它包含自然、播音、聊天、搞笑、激动五条自由度较高的长句，总目标约 2 分钟；录音导入时同时保存 `category` 与 `delivery`，供后续确定性参考选择使用。

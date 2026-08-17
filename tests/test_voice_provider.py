@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from facut.exceptions import NotImplementedFacutError
+from facut.exceptions import InvalidArgumentError, NotImplementedFacutError
 from facut.voice import VoiceProfileStore, synthesize_with_provider
 from facut.voice.providers import invoke_provider_request
 
@@ -46,6 +46,32 @@ def test_one_shot_provider_auto_uses_configured_cpu_overlay(monkeypatch) -> None
 
     assert captured["FACUT_VOICE_DEVICE"] == "cpu"
     assert captured["FACUT_VOICE_REQUIRE_CUDA"] == "0"
+
+
+def test_one_shot_require_cuda_is_not_overridden_by_cpu_overlay(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(*_args, **kwargs):
+        captured.update(kwargs["env"])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "success", "outputs": []}),
+            stderr="",
+        )
+
+    monkeypatch.setenv("FACUT_CPU_TORCH_OVERLAY", "C:/facut/cpu")
+    monkeypatch.setattr("facut.voice.providers.subprocess.run", fake_run)
+    invoke_provider_request(
+        "provider", {"protocol": "test"}, device="auto", require_cuda=True
+    )
+
+    assert captured["FACUT_VOICE_DEVICE"] == "auto"
+    assert captured["FACUT_VOICE_REQUIRE_CUDA"] == "1"
+
+
+def test_explicit_cpu_and_require_cuda_fail_before_provider_start() -> None:
+    with pytest.raises(InvalidArgumentError, match="cannot be combined"):
+        invoke_provider_request("provider", {}, device="cpu", require_cuda=True)
 
 
 def test_provider_crash_without_stderr_is_actionable(monkeypatch) -> None:
