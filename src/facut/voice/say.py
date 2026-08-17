@@ -184,7 +184,7 @@ def synthesize_voice_say(
     )
     if synthesize is None:
         synthesize = synthesize_with_voice_service if use_service else synthesize_with_provider
-    options = dict(service_options or {}) if use_service else {}
+    options = dict(service_options or {})
     if provider is not None:
         options["provider"] = provider
     result = synthesize(

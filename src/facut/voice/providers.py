@@ -114,8 +114,22 @@ def invoke_provider_request(
     request: dict[str, Any],
     *,
     timeout: float = 300,
+    device: str = "auto",
+    require_cuda: bool = False,
 ) -> dict[str, Any]:
     """Invoke a facut-voice-provider/1.0 executable once."""
+
+    requested_device = str(device).casefold()
+    if requested_device not in {"auto", "cuda", "cpu"}:
+        raise ValueError("Voice device must be auto, cuda, or cpu.")
+    environment = os.environ.copy()
+    # A configured CPU overlay exists specifically to avoid importing a CUDA
+    # PyTorch build when an eGPU is disconnected. For one-shot synthesis,
+    # prefer that safe runtime in auto mode; callers can still request CUDA.
+    if requested_device == "auto" and environment.get("FACUT_CPU_TORCH_OVERLAY"):
+        requested_device = "cpu"
+    environment["FACUT_VOICE_DEVICE"] = requested_device
+    environment["FACUT_VOICE_REQUIRE_CUDA"] = "1" if require_cuda else "0"
 
     completed = subprocess.run(
         [str(executable), "--facut-voice-json"],
@@ -126,9 +140,16 @@ def invoke_provider_request(
         errors="replace",
         timeout=timeout,
         shell=False,
+        env=environment,
     )
     if completed.returncode:
-        raise RuntimeError(f"Local voice provider failed: {completed.stderr[-2000:]}")
+        detail = completed.stderr[-2000:].strip()
+        if not detail:
+            detail = (
+                f"provider exited with code {completed.returncode} while using "
+                f"device={requested_device}; the inference runtime may have crashed"
+            )
+        raise RuntimeError(f"Local voice provider failed: {detail}")
     try:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -166,6 +187,8 @@ def synthesize_with_provider(
     *,
     provider: str | Path | None = None,
     timeout: float = 300,
+    device: str = "auto",
+    require_cuda: bool = False,
 ) -> dict[str, Any]:
     status = provider_status(provider)
     if not status["available"]:
@@ -180,5 +203,11 @@ def synthesize_with_provider(
     request, destination = build_provider_request(
         profile, profile_directory, lines, output_directory
     )
-    payload = invoke_provider_request(status["executable"], request, timeout=timeout)
+    payload = invoke_provider_request(
+        status["executable"],
+        request,
+        timeout=timeout,
+        device=device,
+        require_cuda=require_cuda,
+    )
     return validate_provider_response(payload, destination, profile.id)
