@@ -224,6 +224,101 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             ["plan", "voice", "preview_dir"],
         ),
     },
+    "vlog.prepare": {
+        "summary": "Create complete baseline frame coverage and resumable external-vision inspection tasks.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": ["string", "null"]},
+                "proxy": {"enum": ["none", "auto"], "default": "auto"},
+                "batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+                "frames": {"type": "boolean", "default": True},
+            }
+        ),
+    },
+    "vlog.inspect.next": {
+        "summary": "Return the next bounded visual-inspection task and evidence.v2 schema.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.observe": {
+        "summary": "Validate and idempotently store external visual observations.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "observations": {"type": "array", "items": {"type": "object"}, "minItems": 1},
+                "task_id": {"type": ["string", "null"]},
+            },
+            ["observations"],
+        ),
+    },
+    "vlog.status": {
+        "summary": "Report coverage, evidence gaps, director stage, and the exact next command.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.plan": {
+        "summary": "Build three quality-first evidence-grounded StoryGraph candidates.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "style": {"type": "string", "default": "natural-vlog"},
+                "target_duration": {"type": "number", "minimum": 1, "default": 480},
+                "candidates": {"const": 3},
+            }
+        ),
+    },
+    "vlog.compare": {
+        "summary": "Compare candidate shot choices, duration, score, and unresolved gaps.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.refine": {
+        "summary": "Run deterministic continuity gates and select one candidate.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"candidate_id": {"type": "string", "minLength": 1}},
+            ["candidate_id"],
+        ),
+    },
+    "vlog.preview": {
+        "summary": "Render real 540p candidate previews without changing the saved timeline.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": ["string", "null"]},
+                "all_candidates": {"type": "boolean", "default": False},
+                "output_dir": {"type": "string", "minLength": 1},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["output_dir"],
+        ),
+    },
+    "vlog.build": {
+        "summary": "Commit one ready candidate and render an original-media platform delivery.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "output": {"type": "string", "minLength": 1},
+                "preset": {"type": "string", "default": "youtube-4k"},
+                "hardware": {"type": "string", "default": "auto"},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["candidate_id", "output"],
+        ),
+    },
     "clip.motion": {
         "summary": "Apply a deterministic digital camera-movement preset.",
         "mutates": True,
@@ -440,6 +535,159 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             {"profile": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}},
             ["profile", "name"],
         ),
+    },
+    "subtitle.transcribe": {
+        "summary": "Create a review-first word-timestamped transcript plan from active timeline media.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "output": {"type": "string", "minLength": 1},
+                "media": {"type": "array", "items": {"type": "string"}},
+                "model": {"type": ["string", "null"]},
+                "language": {"type": "string", "default": "zh"},
+                "speaker_diarization": {"type": "boolean", "default": False},
+                "word_timestamps": {"type": "boolean", "default": True},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["output"],
+        ),
+    },
+    "subtitle.apply": {
+        "summary": "Apply reviewed transcript cues with a readable installed font in one revision.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "string", "minLength": 1},
+                "approved_only": {"type": "boolean", "default": True},
+                "track": {"type": "string", "default": "S_DIALOGUE"},
+            },
+            ["plan"],
+        ),
+    },
+    "subtitle.glossary.add": {
+        "summary": "Add a project-specific person, place, attraction, or domain term.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"term": {"type": "string", "minLength": 1}, "type": {"type": "string", "default": "term"}},
+            ["term"],
+        ),
+    },
+    "typography.plan": {
+        "summary": "Match story sections to logical typography roles and real installed fonts.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({"language": {"type": "string", "default": "zh-CN"}}),
+    },
+    "typography.apply": {
+        "summary": "Apply the reviewed typography plan to compatible short-title overlays.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object({"plan": {"type": ["string", "null"]}}),
+    },
+    "font.scan": {
+        "summary": "Scan installed and user-registered fonts without copying them.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"refresh": {"type": "boolean", "default": False}}),
+    },
+    "font.register": {
+        "summary": "Register an external font reference and immutable license evidence.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "font_file": {"type": "string", "minLength": 1},
+                "license_file": {"type": "string", "minLength": 1},
+            },
+            ["font_file", "license_file"],
+        ),
+    },
+    "font.match": {
+        "summary": "Resolve a logical typography role to a real font with fallback evidence.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"role": {"type": "string", "minLength": 1}, "language": {"type": "string", "default": "zh-CN"}},
+            ["role"],
+        ),
+    },
+    "font.audit": {
+        "summary": "Detect missing font families and glyphs before final delivery.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"language": {"type": "string", "default": "zh-CN"}}),
+    },
+    "library.music.add": {
+        "summary": "Register local music with mood, beat, platform, and license evidence.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": "string", "minLength": 1},
+                "moods": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "platforms": {"type": "array", "items": {"type": "string"}},
+                "license_file": {"type": ["string", "null"]},
+                "analyze": {"type": "boolean", "default": True},
+            },
+            ["source"],
+        ),
+    },
+    "library.sfx.add": {
+        "summary": "Register a local sound effect with tags and license evidence.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": "string", "minLength": 1},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "platforms": {"type": "array", "items": {"type": "string"}},
+                "license_file": {"type": ["string", "null"]},
+            },
+            ["source"],
+        ),
+    },
+    "library.search": {
+        "summary": "Search local licensed music and SFX by mood, tag, kind, and platform.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "kind": {"type": ["string", "null"]},
+                "mood": {"type": ["string", "null"]},
+                "tag": {"type": ["string", "null"]},
+                "platform": {"type": ["string", "null"]},
+            }
+        ),
+    },
+    "library.audit": {
+        "summary": "Detect offline, unlicensed, or platform-ineligible library assets.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"platform": {"type": "string", "minLength": 1}}, ["platform"]),
+    },
+    "style.list": {
+        "summary": "List inspectable VLOG directing style packs.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "style.describe": {
+        "summary": "Describe one VLOG style's story, sound, typography, transition, and restraint rules.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"name": {"type": "string", "minLength": 1}}, ["name"]),
+    },
+    "style.validate": {
+        "summary": "Warn when the active timeline overuses transitions or effects for its style.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"name": {"type": "string", "minLength": 1}}, ["name"]),
     },
     "voice.alias.set": {
         "summary": "Add a globally unique human-readable alias to a voice profile.",

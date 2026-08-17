@@ -66,6 +66,7 @@ def main() -> int:
     parser.add_argument("source", nargs="?")
     parser.add_argument("model", nargs="?")
     parser.add_argument("--language")
+    parser.add_argument("--word-timestamps", action="store_true")
     parser.add_argument("--probe", action="store_true")
     arguments = parser.parse_args()
     dlls = _configure_cuda()
@@ -100,7 +101,9 @@ def main() -> int:
         local_files_only=True,
     )
     segments, info = whisper.transcribe(
-        str(Path(arguments.source).expanduser().resolve()), language=arguments.language
+        str(Path(arguments.source).expanduser().resolve()),
+        language=arguments.language,
+        word_timestamps=arguments.word_timestamps,
     )
     payload = {
         "source": str(Path(arguments.source).expanduser().resolve()),
@@ -117,6 +120,15 @@ def main() -> int:
                 "end": segment.end,
                 "text": segment.text.strip(),
                 "confidence": math.exp(segment.avg_logprob),
+                "words": [
+                    {
+                        "start": word.start,
+                        "end": word.end,
+                        "text": word.word,
+                        "confidence": word.probability,
+                    }
+                    for word in (segment.words or [])
+                ],
             }
             for segment in segments
         ],

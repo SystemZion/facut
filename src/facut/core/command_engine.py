@@ -134,6 +134,48 @@ class CommandEngine:
 
             parameters = {key: value for key, value in command.items() if key != "action"}
             return prepare_narration_apply(self.manager, **parameters)
+        if action == "vlog.apply":
+            from facut.vlog import candidate_document
+            from facut.vlog.models import StoryPlan
+
+            candidate_id = str(command.get("candidate_id", ""))
+            preset = str(command.get("preset", "youtube-4k"))
+            story_path = self.manager.project_dir / "cache" / "vlog" / "story.plan.json"
+            if not story_path.is_file():
+                raise CommandEngineError("VLOG StoryGraph plan was not found.")
+            plan = StoryPlan.model_validate_json(story_path.read_text(encoding="utf-8"))
+            candidate_plan = next(
+                (item for item in plan.candidates if item.id == candidate_id), None
+            )
+            severe = (
+                []
+                if candidate_plan is None
+                else [
+                    item
+                    for item in candidate_plan.unresolved_gaps
+                    if item.get("severity") == "error"
+                ]
+            )
+            if candidate_plan is None or not candidate_plan.segments or severe:
+                raise CommandEngineError(
+                    f'VLOG candidate "{candidate_id}" is not ready for an atomic Recipe.'
+                )
+            candidate_state, candidate = candidate_document(
+                self.manager.require_document(), self.manager.project_dir, candidate_id
+            )
+            return {
+                "action": "vlog.apply.prepared",
+                "candidate_id": candidate_id,
+                "preset": preset,
+                "candidate": candidate.model_dump(mode="json"),
+                "story": {
+                    "style": plan.style,
+                    "evidence_sha256": plan.evidence_sha256,
+                },
+                "tracks": [item.model_dump(mode="json") for item in candidate_state.tracks],
+                "transitions": [item.model_dump(mode="json") for item in candidate_state.transitions],
+                "markers": [item.model_dump(mode="json") for item in candidate_state.markers],
+            }
         return deepcopy(command)
 
     @staticmethod
@@ -200,6 +242,25 @@ class CommandEngine:
             from facut.intelligence.narration_plan import apply_prepared_narration
 
             return apply_prepared_narration(document, command)
+        if action == "vlog.apply.prepared":
+            from facut.core.models import Marker, Track, Transition
+
+            document.tracks = [Track.model_validate(item) for item in command["tracks"]]
+            document.transitions = [
+                Transition.model_validate(item) for item in command["transitions"]
+            ]
+            document.markers = [Marker.model_validate(item) for item in command["markers"]]
+            document.subtitle_cues = []
+            document.text_overlays = []
+            document.settings["vlog_director"] = {
+                "candidate_id": command["candidate_id"],
+                "strategy": command["candidate"]["strategy"],
+                "style": command["story"]["style"],
+                "evidence_sha256": command["story"]["evidence_sha256"],
+                "preset": command["preset"],
+            }
+            document.recompute_duration()
+            return document.settings["vlog_director"]
         handler = handlers.get(action)
         if handler is None:
             raise CommandEngineError(f"Unsupported action: {action}")

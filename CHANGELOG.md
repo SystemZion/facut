@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.8.0 — 2026-08-17
+
+### Vlog Director
+
+- Added a quality-first, resumable large-library workflow: `vlog prepare`,
+  `inspect next`, idempotent `observe`, three StoryGraph candidates, comparison,
+  refinement, proxy preview, one-command resume and original-media delivery.
+- Every playable non-duplicate source requires baseline external-AI evidence;
+  incomplete coverage stops with `REVIEW_REQUIRED` instead of silently dropping
+  footage. FACUT does not download or embed a local visual model.
+- Added evidence-addressed transition/effect/music intentions. Unsupported
+  comedy effects remain explicitly review-required and are never reported as
+  rendered.
+
+### Captions, typography and licensed media
+
+- Added review-first word-timestamp ASR plans, glossary support, optional local
+  diarization provider, readable caption wrapping, subtitle proofs and atomic
+  application of approved cues. Raw dialogue is retained separately from its
+  display formatting.
+- Added system-font scanning, logical font roles, license/hash records, CJK
+  glyph audits and content-adaptive typography plans. Existing Lingang title
+  templates are retained alongside science, humanities, comedy, cinematic,
+  warm-family and food variants.
+- Added a local music/SFX catalog with platform license audit and seven
+  inspectable VLOG style packs.
+- Final VLOG delivery now blocks missing fonts or glyphs and writes a full
+  decode/audio/video QC report next to the project render records.
+
+### Agent contract
+
+- Exposed VLOG, subtitle, typography, font, library and style operations through
+  schemas and loopback JSON-RPC. Long visual decisions remain the responsibility
+  of the calling multimodal AI and are stored as strict `evidence.v2` records.
+
 ## 0.7.2 — 2026-08-17
 
 ### Fixed

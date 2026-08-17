@@ -68,3 +68,23 @@ def recipe(ctx: typer.Context) -> None:
     from facut.recipe import recipe_json_schema
 
     _emit(ctx, "schema.recipe", recipe_json_schema())
+
+
+@schema_app.command("workflow")
+def workflow(ctx: typer.Context, name: str) -> None:
+    """Return a complete multi-step Agent workflow contract."""
+
+    if name.casefold() != "vlog":
+        raise typer.BadParameter('The available workflow is "vlog".')
+    from facut.vlog import vlog_workflow_schema
+
+    _emit(ctx, "schema.workflow", vlog_workflow_schema())
+
+
+@schema_app.command("subtitle-director")
+def subtitle_director(ctx: typer.Context) -> None:
+    """Return transcript review and caption plan schemas."""
+
+    from facut.subtitles import subtitle_director_schemas
+
+    _emit(ctx, "schema.subtitle-director", subtitle_director_schemas())

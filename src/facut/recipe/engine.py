@@ -164,6 +164,14 @@ class RecipeEngine:
         recipe: RecipeDocument, *, source_dir: Path, document: Any
     ) -> list[dict[str, Any]]:
         commands: list[dict[str, Any]] = []
+        if recipe.vlog is not None:
+            commands.append(
+                {
+                    "action": "vlog.apply",
+                    "candidate_id": recipe.vlog.candidate_id,
+                    "preset": recipe.vlog.preset,
+                }
+            )
         track_types: dict[str, str] = {
             track.id: track.type.value for track in document.tracks
         }

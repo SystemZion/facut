@@ -136,6 +136,58 @@ TEXT_TEMPLATES: dict[str, dict[str, Any]] = {
             "corner_radius": 26.0,
         },
     },
+    "science-location-panel": {
+        "description": "Geometric cyan location/title panel for science, astronomy, and modern architecture.",
+        "inherits": "lingang-cinematic-panel",
+        "parameters": {"accent_color": "#61E1FF", "panel_color": "#020A12B8"},
+    },
+    "humanities-panel": {
+        "description": "Restrained warm editorial panel for museums, history, and human stories.",
+        "inherits": "lingang-cinematic-warm",
+        "parameters": {"accent_color": "#D6B47A", "panel_color": "#17120DB0"},
+    },
+    "comedy-pop": {
+        "description": "High-contrast short reaction title; intended for pop-comedy animation.",
+        "renderer": "standard",
+        "x": "center",
+        "y": "68%",
+        "style": {
+            "font_size": 76.0,
+            "font_weight": "bold",
+            "color": "#FFF25C",
+            "stroke_color": "#171717",
+            "stroke_width": 4.0,
+            "shadow": 3.0,
+            "alignment": "center",
+            "safe_area": True,
+        },
+    },
+    "cinematic-title": {
+        "description": "Minimal large title for scenery, aerials, sunset, and reflective sequences.",
+        "renderer": "standard",
+        "x": "center",
+        "y": "32%",
+        "style": {
+            "font_size": 78.0,
+            "font_weight": "normal",
+            "color": "#FFFFFF",
+            "stroke_width": 0.0,
+            "shadow": 2.0,
+            "letter_spacing": 3.0,
+            "alignment": "center",
+            "safe_area": True,
+        },
+    },
+    "warm-reflection": {
+        "description": "Warm family/reflection title derived from the Lingang editorial system.",
+        "inherits": "lingang-cinematic-warm",
+        "parameters": {"accent_color": "#FFC468"},
+    },
+    "food-label": {
+        "description": "Warm compact food label with room for a handwritten-role font.",
+        "inherits": "lingang-cinematic-warm",
+        "parameters": {"accent_color": "#FF9E57", "panel_width_percent": 32.0},
+    },
 }
 
 

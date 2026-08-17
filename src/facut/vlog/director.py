@@ -1,0 +1,623 @@
+"""Persistent, evidence-backed VLOG preparation and StoryGraph planning."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from pydantic import TypeAdapter
+
+from facut.core.models import Clip, MediaKind, ProjectDocument, Track, TrackType
+from facut.core.project_manager import ProjectManager
+from facut.media.thumbnail import generate_thumbnail
+from facut.media.importer import SUPPORTED_EXTENSIONS
+from facut.media.proxy_manager import is_probable_proxy_path
+
+from .models import EvidenceObservation, StoryCandidate, StoryPlan, StorySegment
+
+
+QUALITY_WEIGHTS = {
+    "story_coherence": 0.25,
+    "shot_quality": 0.20,
+    "evidence_reliability": 0.20,
+    "continuity": 0.15,
+    "sound_value": 0.10,
+    "style_fit": 0.10,
+}
+
+STAGES: dict[str, tuple[str, ...]] = {
+    "opening": ("hook", "reaction", "arrival", "aerial", "日出", "开场"),
+    "setup": ("departure", "transport", "airport", "train", "出发", "抵达"),
+    "exploration": ("explore", "street", "food", "museum", "景点", "游览", "美食"),
+    "change": ("surprise", "problem", "fall", "lost", "意外", "摔倒", "迷路", "变化"),
+    "climax": ("climax", "reaction", "sunset", "aerial", "高潮", "惊喜"),
+    "reflection": ("farewell", "family", "night", "reflection", "告别", "回味", "全家福"),
+}
+
+
+def _root(project_dir: str | Path) -> Path:
+    path = Path(project_dir) / "cache" / "vlog"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
+    ) as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+        temporary = Path(stream.name)
+    os.replace(temporary, path)
+    return path
+
+
+def _read_json(path: Path, default: Any = None) -> Any:
+    if not path.is_file():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _sample_times(duration: float | None) -> list[float]:
+    if not duration or duration <= 0:
+        return [0.0]
+    if duration < 1.5:
+        return [max(0.0, duration * 0.5)]
+    margin = min(0.5, duration * 0.1)
+    return [margin, duration * 0.5, max(margin, duration - margin)]
+
+
+def import_source_resumable(
+    manager: ProjectManager,
+    source: str | Path,
+    *,
+    batch_size: int = 25,
+) -> dict[str, Any]:
+    """Import a large tree in committed batches and isolate individual failures."""
+
+    root = Path(source).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f'VLOG media root "{root}" was not found.')
+    files = sorted(
+        (
+            item.resolve()
+            for item in root.rglob("*")
+            if item.is_file()
+            and item.suffix.casefold() in SUPPORTED_EXTENSIONS
+            and not is_probable_proxy_path(item)
+        ),
+        key=lambda item: str(item).casefold(),
+    )
+    if not files:
+        raise ValueError("No supported original media files were found.")
+    existing = {
+        os.path.normcase(str(manager.resolve_path(item.path))): item
+        for item in manager.require_document().media
+    }
+    pending = [
+        item
+        for item in files
+        if os.path.normcase(str(item)) not in existing
+        or existing[os.path.normcase(str(item))].size != item.stat().st_size
+    ]
+    imported_ids: list[str] = []
+    failures: list[dict[str, Any]] = []
+    for offset in range(0, len(pending), max(1, batch_size)):
+        batch = pending[offset : offset + max(1, batch_size)]
+        try:
+            imported_ids.extend(
+                item.id for item in manager.import_paths(batch, recursive=False)
+            )
+        except Exception:
+            for path in batch:
+                try:
+                    imported_ids.extend(
+                        item.id for item in manager.import_paths([path], recursive=False)
+                    )
+                except Exception as error:
+                    failures.append(
+                        {
+                            "path": str(path),
+                            "reason": "import_failed",
+                            "error": str(error),
+                        }
+                    )
+        _write_json(
+            _root(manager.project_dir) / "import-state.json",
+            {
+                "version": "1.0",
+                "source": str(root),
+                "discovered": len(files),
+                "already_imported": len(files) - len(pending),
+                "completed_pending": min(offset + len(batch), len(pending)),
+                "imported_ids": imported_ids,
+                "failures": failures,
+            },
+        )
+    result = {
+        "source": str(root),
+        "discovered": len(files),
+        "already_imported": len(files) - len(pending),
+        "newly_imported": len(set(imported_ids)),
+        "failures": failures,
+    }
+    _write_json(_root(manager.project_dir) / "import-state.json", {"version": "1.0", **result})
+    return result
+
+
+def prepare_evidence_manifest(
+    manager: ProjectManager,
+    *,
+    ffmpeg: str | Path | None = None,
+    generate_frames: bool = True,
+    batch_size: int = 12,
+) -> dict[str, Any]:
+    """Create baseline frame coverage and resumable external-AI inspection tasks."""
+
+    document = manager.require_document()
+    root = _root(manager.project_dir)
+    frames_root = root / "frames"
+    existing = _read_json(root / "manifest.json", {})
+    previous = {item["media_id"]: item for item in existing.get("assets", [])}
+    assets: list[dict[str, Any]] = []
+    import_state = _read_json(root / "import-state.json", {"failures": []})
+    excluded: list[dict[str, Any]] = list(import_state.get("failures", []))
+    for asset in document.media:
+        if asset.kind not in {MediaKind.VIDEO, MediaKind.IMAGE}:
+            continue
+        original = manager.resolve_path(asset.path)
+        if not original.is_file() or original.stat().st_size <= 0:
+            excluded.append(
+                {"media_id": asset.id, "reason": "missing_or_empty", "path": asset.path}
+            )
+            continue
+        source = original
+        source_kind = "original"
+        if asset.proxy_path:
+            proxy = manager.resolve_path(asset.proxy_path)
+            if proxy.is_file() and proxy.stat().st_size > 0:
+                source = proxy
+                source_kind = "proxy"
+        cached = previous.get(asset.id)
+        if cached and cached.get("sha256") == asset.sha256 and all(
+            Path(item["path"]).is_file() for item in cached.get("representative_frames", [])
+        ):
+            assets.append(cached)
+            continue
+        representative: list[dict[str, Any]] = []
+        times = _sample_times(asset.technical.duration)
+        for index, at in enumerate(times, start=1):
+            output = frames_root / asset.id / f"baseline-{index:02d}.jpg"
+            if generate_frames and not output.is_file():
+                generate_thumbnail(
+                    source,
+                    output,
+                    at=at,
+                    width=480,
+                    ffmpeg=ffmpeg,
+                    overwrite=False,
+                )
+            representative.append(
+                {"at": round(at, 6), "path": str(output.resolve()), "exists": output.is_file()}
+            )
+        assets.append(
+            {
+                "media_id": asset.id,
+                "name": asset.original_name,
+                "kind": asset.kind.value,
+                "sha256": asset.sha256,
+                "duration": asset.technical.duration,
+                "width": asset.technical.width,
+                "height": asset.technical.height,
+                "rotation": asset.technical.rotation,
+                "creation_time": asset.technical.creation_time,
+                "location": {
+                    "latitude": asset.technical.latitude,
+                    "longitude": asset.technical.longitude,
+                },
+                "source_kind": source_kind,
+                "representative_frames": representative,
+                "baseline_coverage": "complete" if all(item["exists"] for item in representative) else "metadata_only",
+            }
+        )
+    fingerprint = hashlib.sha256(
+        json.dumps([(item["media_id"], item["sha256"]) for item in assets]).encode()
+    ).hexdigest()
+    manifest = {
+        "version": "2.0",
+        "project_revision": document.revision,
+        "document_fingerprint": fingerprint,
+        "quality_policy": "quality-first",
+        "assets": assets,
+        "excluded": excluded,
+    }
+    _write_json(root / "manifest.json", manifest)
+    observations = _read_json(root / "observations.json", {"observations": []})
+    observed_media = {item["media_id"] for item in observations.get("observations", [])}
+    tasks: list[dict[str, Any]] = []
+    pending_assets = [item for item in assets if item["media_id"] not in observed_media]
+    for offset in range(0, len(pending_assets), max(1, batch_size)):
+        batch = pending_assets[offset : offset + max(1, batch_size)]
+        task_id = f"inspect_{offset // max(1, batch_size) + 1:04d}"
+        tasks.append(
+            {
+                "task_id": task_id,
+                "status": "pending",
+                "purpose": "Baseline visual coverage. Inspect every supplied frame; request deeper evidence when uncertain.",
+                "assets": batch,
+                "required_output_schema": EvidenceObservation.model_json_schema(),
+                "minimum_observations": len(batch),
+            }
+        )
+    _write_json(root / "tasks.json", {"version": "1.0", "tasks": tasks})
+    return {
+        "manifest": str((root / "manifest.json").resolve()),
+        "asset_count": len(assets),
+        "excluded_count": len(excluded),
+        "pending_tasks": len(tasks),
+        "pending_assets": len(pending_assets),
+        "baseline_coverage": "complete" if all(item["baseline_coverage"] == "complete" for item in assets) else "partial",
+    }
+
+
+def next_inspection_task(project_dir: str | Path) -> dict[str, Any]:
+    root = _root(project_dir)
+    payload = _read_json(root / "tasks.json")
+    if payload is None:
+        raise FileNotFoundError("VLOG inspection tasks were not found. Run `facut vlog prepare` first.")
+    for task in payload["tasks"]:
+        if task["status"] == "pending":
+            return {**task, "remaining_tasks": sum(item["status"] == "pending" for item in payload["tasks"])}
+    return {"status": "complete", "remaining_tasks": 0, "assets": []}
+
+
+def ingest_observations(
+    document: ProjectDocument,
+    project_dir: str | Path,
+    payload: dict[str, Any],
+    *,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    root = _root(project_dir)
+    known = {item.id: item for item in document.media}
+    raw_items = payload.get("observations", payload.get("items"))
+    if not isinstance(raw_items, list):
+        raise ValueError('Observation input requires an "observations" list.')
+    adapter = TypeAdapter(list[EvidenceObservation])
+    observations = adapter.validate_python(raw_items)
+    for item in observations:
+        asset = known.get(item.media_id)
+        if asset is None:
+            raise ValueError(f'Observation references unknown media "{item.media_id}".')
+        duration = asset.technical.duration
+        if duration is not None and item.range.end > duration + 1e-6:
+            raise ValueError(
+                f'Observation {item.observation_id} exceeds media duration {duration:.3f}s.'
+            )
+    stored = _read_json(root / "observations.json", {"version": "2.0", "observations": []})
+    by_id = {item["observation_id"]: item for item in stored["observations"]}
+    inserted = 0
+    unchanged = 0
+    for item in observations:
+        serialized = item.model_dump(mode="json")
+        previous = by_id.get(item.observation_id)
+        if previous == serialized:
+            unchanged += 1
+        else:
+            by_id[item.observation_id] = serialized
+            inserted += 1
+    output = {"version": "2.0", "observations": sorted(by_id.values(), key=lambda item: item["observation_id"])}
+    _write_json(root / "observations.json", output)
+    tasks = _read_json(root / "tasks.json", {"version": "1.0", "tasks": []})
+    observed_media = {item.media_id for item in observations}
+    all_observed_media = {item["media_id"] for item in output["observations"]}
+    matched_task = None
+    for task in tasks["tasks"]:
+        task_media = {item["media_id"] for item in task["assets"]}
+        selected_task = task_id and task["task_id"] == task_id
+        inferred_task = not task_id and task_media and task_media <= observed_media
+        if (selected_task or inferred_task) and task_media <= all_observed_media:
+            task["status"] = "complete"
+            matched_task = task["task_id"]
+    _write_json(root / "tasks.json", tasks)
+    return {
+        "inserted_or_updated": inserted,
+        "unchanged": unchanged,
+        "observation_count": len(output["observations"]),
+        "completed_task": matched_task,
+        "remaining_tasks": sum(item["status"] == "pending" for item in tasks["tasks"]),
+        "path": str((root / "observations.json").resolve()),
+    }
+
+
+def director_status(project_dir: str | Path) -> dict[str, Any]:
+    root = _root(project_dir)
+    manifest = _read_json(root / "manifest.json", {"assets": [], "excluded": []})
+    tasks = _read_json(root / "tasks.json", {"tasks": []})
+    observations = _read_json(root / "observations.json", {"observations": []})
+    story = _read_json(root / "story.plan.json")
+    pending = [item for item in tasks["tasks"] if item["status"] == "pending"]
+    if not manifest["assets"]:
+        stage, next_command = "not_prepared", "facut vlog prepare <source>"
+    elif pending:
+        stage, next_command = "inspection", "facut vlog inspect next"
+    elif not story:
+        stage, next_command = "ready_to_plan", "facut vlog plan --style natural-vlog"
+    elif story.get("status") != "ready":
+        stage, next_command = "story_review", "facut vlog compare"
+    else:
+        stage, next_command = "ready_to_build", f"facut vlog build {story.get('selected_candidate_id') or '<candidate-id>'}"
+    return {
+        "stage": stage,
+        "asset_count": len(manifest["assets"]),
+        "excluded_count": len(manifest["excluded"]),
+        "observation_count": len(observations["observations"]),
+        "pending_tasks": len(pending),
+        "next_command": next_command,
+        "quality_policy": "quality-first",
+    }
+
+
+def _observation_text(item: EvidenceObservation) -> str:
+    return " ".join(
+        [item.summary, *item.entities, *item.actions, *item.tags, item.shot_type or "", item.daypart or "", item.location or ""]
+    ).casefold()
+
+
+def _stage(item: EvidenceObservation) -> str:
+    text = _observation_text(item)
+    scored = [(stage, sum(token.casefold() in text for token in tokens)) for stage, tokens in STAGES.items()]
+    selected, score = max(scored, key=lambda pair: pair[1])
+    return selected if score else "exploration"
+
+
+def _rank(item: EvidenceObservation, strategy: str, style: str) -> float:
+    audio = {"unknown": 0.35, "low": 0.2, "medium": 0.65, "high": 1.0}[item.original_audio_value]
+    style_text = _observation_text(item)
+    comedy = any(token in style_text for token in ("funny", "laugh", "fall", "搞笑", "笑", "摔倒", "意外"))
+    if strategy == "narrative":
+        value = item.confidence * 0.45 + item.quality * 0.3 + audio * 0.25
+    elif strategy == "immersive":
+        value = audio * 0.45 + item.quality * 0.35 + item.confidence * 0.2
+    else:
+        value = item.quality * 0.55 + item.confidence * 0.35 + audio * 0.1
+    if style == "comedy-vlog" and comedy:
+        value += 0.12
+    return min(value, 1.0)
+
+
+def _candidate(
+    observations: list[EvidenceObservation], strategy: str, target_duration: float, style: str
+) -> StoryCandidate:
+    stage_order = list(STAGES)
+    per_stage = max(2.0, target_duration / len(stage_order))
+    selected_ids: set[str] = set()
+    segments: list[StorySegment] = []
+    missing: list[str] = []
+    cursor = 0.0
+    for stage in stage_order:
+        candidates = [item for item in observations if _stage(item) == stage]
+        candidates.sort(key=lambda item: (-_rank(item, strategy, style), item.range.start))
+        used = 0.0
+        if not candidates:
+            missing.append(stage)
+        for item in candidates:
+            if item.observation_id in selected_ids or used >= per_stage:
+                continue
+            available = item.range.end - item.range.start
+            duration = min(available, max(1.5, min(8.0, per_stage - used)))
+            if duration <= 0:
+                continue
+            alternatives = [other.observation_id for other in candidates if other.observation_id != item.observation_id][:3]
+            score = _rank(item, strategy, style)
+            segments.append(
+                StorySegment(
+                    stage=stage,
+                    media_id=item.media_id,
+                    source_in=item.range.start,
+                    source_out=item.range.start + duration,
+                    timeline_start=cursor,
+                    duration=duration,
+                    observation_id=item.observation_id,
+                    reason=f"Selected for {stage} by {strategy} strategy; evidence score {score:.3f}.",
+                    confidence=item.confidence,
+                    evidence_frames=item.evidence_frames,
+                    preserve_original_audio=item.original_audio_value == "high",
+                    alternatives=alternatives,
+                )
+            )
+            selected_ids.add(item.observation_id)
+            cursor += duration
+            used += duration
+    mean_score = sum(_rank(item, strategy, style) for item in observations if item.observation_id in selected_ids)
+    mean_score = mean_score / max(1, len(selected_ids))
+    names = {"narrative": "叙事完整版", "immersive": "沉浸体验版", "visual": "视觉情绪版"}
+    observation_by_id = {item.observation_id: item for item in observations}
+    transitions = []
+    effects = []
+    for index, segment in enumerate(segments):
+        evidence = observation_by_id[segment.observation_id]
+        text = _observation_text(evidence)
+        if index:
+            previous = segments[index - 1]
+            transition = "hard-cut"
+            reason = "Hard cut preserves continuity and avoids decorative transitions."
+            if previous.stage != segment.stage:
+                transition, reason = "location-card", "Story stage changes; use a restrained chapter/location bridge."
+            elif (
+                evidence.camera_motion
+                and observation_by_id[previous.observation_id].camera_motion == evidence.camera_motion
+            ):
+                transition, reason = "movement-match", "Adjacent evidence supports a motion-related cut."
+            transitions.append(
+                {
+                    "between": [previous.observation_id, segment.observation_id],
+                    "type": transition,
+                    "reason": reason,
+                    "confidence": min(previous.confidence, segment.confidence),
+                    "render_status": "intent-only" if transition != "hard-cut" else "native",
+                }
+            )
+        comedic = any(token in text for token in ("funny", "laugh", "fall", "搞笑", "笑", "摔倒", "迷路", "失败"))
+        if style == "comedy-vlog" and comedic:
+            effect = "freeze-repeat" if any(token in text for token in ("fall", "摔倒", "失败")) else "punch-zoom"
+            effects.append(
+                {
+                    "observation_id": segment.observation_id,
+                    "effect": effect,
+                    "reason": "Evidence contains a complete comedic action or reaction.",
+                    "confidence": evidence.confidence,
+                    "fallback": "punch-zoom",
+                    "render_status": "review-required",
+                }
+            )
+    return StoryCandidate(
+        id=f"candidate-{strategy}",
+        name=names[strategy],
+        strategy=strategy,
+        score=round(max(0.0, mean_score - len(missing) * 0.04), 4),
+        estimated_duration=round(cursor, 6),
+        segments=segments,
+        missing_stages=missing,
+        unresolved_gaps=[{"code": "MISSING_STAGE", "stage": stage} for stage in missing],
+        continuity={"status": "review_required", "checked_fields": ["location", "daypart", "entities"]},
+        sound_strategy={"preserve_original_audio_segments": sum(item.preserve_original_audio for item in segments)},
+        subtitle_strategy={"dialogue": "readable-unified", "titles": "content-adaptive"},
+        polish_plan={
+            "transition_intents": transitions,
+            "effect_intents": effects,
+            "music_query": {
+                "mood": "playful" if style == "comedy-vlog" else "travel",
+                "license_required": True,
+                "selection_status": "library-match-required",
+            },
+            "sfx_queries": ["comedy,impact"] if effects else [],
+            "policy": "Intent records are reviewable; unsupported effects are never reported as rendered.",
+        },
+    )
+
+
+def build_story_candidates(
+    document: ProjectDocument,
+    project_dir: str | Path,
+    *,
+    style: str = "natural-vlog",
+    target_duration: float = 480.0,
+) -> StoryPlan:
+    from facut.styles import describe_style
+
+    describe_style(style)
+    root = _root(project_dir)
+    raw = _read_json(root / "observations.json", {"observations": []})
+    observations = TypeAdapter(list[EvidenceObservation]).validate_python(raw["observations"])
+    if not observations:
+        raise ValueError(
+            "No external visual observations are available. Complete VLOG inspection before planning."
+        )
+    manifest = _read_json(root / "manifest.json", {"assets": []})
+    observed_media = {item.media_id for item in observations}
+    uncovered = [item["media_id"] for item in manifest["assets"] if item["media_id"] not in observed_media]
+    if uncovered:
+        raise ValueError(
+            f"Visual coverage is incomplete for {len(uncovered)} asset(s); quality-first planning cannot skip them."
+        )
+    evidence_bytes = (root / "observations.json").read_bytes()
+    candidates = [
+        _candidate(observations, strategy, target_duration, style)
+        for strategy in ("narrative", "immersive", "visual")
+    ]
+    warnings = sorted(
+        {f"Candidate {item.id} lacks stage {stage}." for item in candidates for stage in item.missing_stages}
+    )
+    plan = StoryPlan(
+        project_revision=document.revision,
+        evidence_sha256=hashlib.sha256(evidence_bytes).hexdigest(),
+        style=style,
+        target_duration=target_duration,
+        candidates=candidates,
+        quality_weights=QUALITY_WEIGHTS,
+        warnings=warnings,
+    )
+    _write_json(root / "story.plan.json", plan.model_dump(mode="json"))
+    return plan
+
+
+def compare_story_candidates(project_dir: str | Path) -> dict[str, Any]:
+    raw = _read_json(_root(project_dir) / "story.plan.json")
+    if raw is None:
+        raise FileNotFoundError("Story plan was not found. Run `facut vlog plan` first.")
+    plan = StoryPlan.model_validate(raw)
+    sets = {item.id: {segment.observation_id for segment in item.segments} for item in plan.candidates}
+    differences: list[dict[str, Any]] = []
+    for left_index, left in enumerate(plan.candidates):
+        for right in plan.candidates[left_index + 1 :]:
+            differences.append(
+                {
+                    "left": left.id,
+                    "right": right.id,
+                    "shared": len(sets[left.id] & sets[right.id]),
+                    "only_left": sorted(sets[left.id] - sets[right.id]),
+                    "only_right": sorted(sets[right.id] - sets[left.id]),
+                    "duration_delta": round(left.estimated_duration - right.estimated_duration, 6),
+                    "score_delta": round(left.score - right.score, 4),
+                }
+            )
+    return {"style": plan.style, "candidates": [item.model_dump(mode="json") for item in plan.candidates], "differences": differences}
+
+
+def refine_story_candidate(project_dir: str | Path, candidate_id: str) -> StoryPlan:
+    path = _root(project_dir) / "story.plan.json"
+    plan = StoryPlan.model_validate(_read_json(path))
+    candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
+    if candidate is None:
+        raise ValueError(f'Unknown story candidate "{candidate_id}".')
+    severe = [item for item in candidate.unresolved_gaps if item.get("severity") == "error"]
+    candidate.continuity["status"] = "pass" if not severe else "review_required"
+    plan.selected_candidate_id = candidate_id
+    plan.status = "ready" if candidate.segments and not severe else "review_required"
+    _write_json(path, plan.model_dump(mode="json"))
+    return plan
+
+
+def candidate_document(
+    document: ProjectDocument, project_dir: str | Path, candidate_id: str
+) -> tuple[ProjectDocument, StoryCandidate]:
+    """Materialize one candidate into an isolated in-memory project document."""
+
+    raw = _read_json(_root(project_dir) / "story.plan.json")
+    if raw is None:
+        raise FileNotFoundError("Story plan was not found. Run `facut vlog plan` first.")
+    plan = StoryPlan.model_validate(raw)
+    candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
+    if candidate is None:
+        raise ValueError(f'Unknown story candidate "{candidate_id}".')
+    copy = document.model_copy(deep=True)
+    clips = [
+        Clip(
+            id=f"vlog_{candidate.strategy}_{index:04d}",
+            media_id=item.media_id,
+            track_id="V1",
+            timeline_start=item.timeline_start,
+            source_in=item.source_in,
+            source_out=item.source_out,
+            metadata={
+                "story_stage": item.stage,
+                "observation_id": item.observation_id,
+                "selection_reason": item.reason,
+                "preserve_original_audio": item.preserve_original_audio,
+            },
+        )
+        for index, item in enumerate(candidate.segments, start=1)
+    ]
+    copy.tracks = [Track(id="V1", name=f"VLOG {candidate.name}", type=TrackType.VIDEO, clips=clips)]
+    copy.transitions = []
+    copy.subtitle_cues = []
+    copy.text_overlays = []
+    copy.markers = []
+    copy.recompute_duration()
+    return copy, candidate

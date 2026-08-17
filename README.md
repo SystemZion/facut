@@ -5,7 +5,21 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.7.1` 稳定了 LRF/CutGraph 专业执行链路：拒绝旧版 FFmpeg、静态图片默认 5 秒并支持 `timeline add --duration`、响度只重编码音频且复用画面母版、AAC 真峰值带安全余量和封装后复测。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前开发版本 `0.8.0` 增加了质量优先的 Vlog Director：FACUT 为外部视觉 AI 生成可恢复的分层审片任务，保存严格证据，制作三版 StoryGraph，再确定性执行字幕、特色字体、声音包装、QC 和原片 4K 交付。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+
+最短工作流：
+
+```powershell
+facut vlog prepare D:\Trip --project D:\Trip-Project
+facut --project D:\Trip-Project vlog inspect next --json
+facut --project D:\Trip-Project vlog observe observations.json
+facut --project D:\Trip-Project vlog plan --style comedy-vlog --target-duration 480
+facut --project D:\Trip-Project vlog preview --all-candidates
+facut --project D:\Trip-Project vlog refine candidate-narrative --auto
+facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-4k -o D:\Trip-Final\final.mp4
+```
+
+`vlog run ... --auto` 也遵守同一质量门：缺少外部视觉观察或 ASR 中存在待复审词时返回 `REVIEW_REQUIRED`，不会伪造成功。字幕正文使用统一易读字体；科技、人文、风景、喜剧、家庭和美食标题通过逻辑字体角色匹配本机已授权字体，最终渲染前强制检查缺字。
 
 ## 安装
 
