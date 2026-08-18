@@ -63,17 +63,44 @@ def incremental_eligibility(project: ProjectDocument) -> tuple[bool, str | None]
     if not video_tracks:
         return False, "incremental cache requires an enabled base video track"
     video_tracks.sort(key=lambda item: item.order)
-    if project.transitions:
-        return False, "transitions cross segment boundaries"
     clips = sorted(
         (clip for clip in video_tracks[0].clips if clip.enabled),
         key=lambda item: item.timeline_start,
     )
-    expected = 0.0
-    for clip in clips:
-        if abs(clip.timeline_start - expected) > 1e-6:
-            return False, "timeline gaps require full graph rendering"
-        expected = clip.end
+    transition_pairs = {
+        (item.from_clip_id, item.to_clip_id): item
+        for item in project.transitions
+        if item.from_clip_id and item.to_clip_id
+    }
+    anchor_transitions = [
+        item
+        for item in project.transitions
+        if item.from_clip_id is None and item.to_clip_id is None
+    ]
+    if len(transition_pairs) + len(anchor_transitions) != len(project.transitions):
+        return False, "partially anchored transitions require full graph rendering"
+    base_track_id = video_tracks[0].id
+    if any(
+        item.track_id != base_track_id
+        or item.type not in {"fade-in", "fade-out"}
+        or item.at is None
+        for item in anchor_transitions
+    ):
+        return False, "unsupported timeline-anchored transitions require full graph rendering"
+    adjacent_pairs = {(left.id, right.id) for left, right in zip(clips, clips[1:])}
+    if any(pair not in adjacent_pairs for pair in transition_pairs):
+        return False, "non-adjacent transitions require full graph rendering"
+    if clips and abs(clips[0].timeline_start) > 1e-6:
+        return False, "timeline gaps require full graph rendering"
+    for previous, clip in zip(clips, clips[1:]):
+        transition = transition_pairs.get((previous.id, clip.id))
+        if transition is None:
+            if abs(clip.timeline_start - previous.end) > 1e-6:
+                return False, "timeline gaps or overlaps require full graph rendering"
+        else:
+            overlap = previous.end - clip.timeline_start
+            if abs(overlap - transition.duration) > 1 / project.project.fps + 1e-6:
+                return False, "transition overlap does not match its duration"
     return True, None
 
 
@@ -128,7 +155,7 @@ class IncrementalRenderer:
         return candidate
 
     def _segment_document(
-        self, project: ProjectDocument, clip_id: str
+        self, project: ProjectDocument, clip_ids: list[str]
     ) -> ProjectDocument:
         candidate = project.model_copy(deep=True)
         base_tracks = sorted(
@@ -142,11 +169,34 @@ class IncrementalRenderer:
             ),
             key=lambda item: item.order,
         )
-        base_clip = next(
-            clip for clip in base_tracks[0].clips if clip.id == clip_id
-        )
-        segment_start, segment_end = base_clip.timeline_start, base_clip.end
-        candidate.transitions = []
+        base_clips = [
+            clip for clip in base_tracks[0].clips if clip.id in set(clip_ids)
+        ]
+        segment_start = min(clip.timeline_start for clip in base_clips)
+        segment_end = max(clip.end for clip in base_clips)
+        selected_ids = set(clip_ids)
+        candidate.transitions = [
+            transition.model_copy(
+                update={
+                    "at": (
+                        None
+                        if transition.at is None
+                        else transition.at - segment_start
+                    )
+                }
+            )
+            for transition in candidate.transitions
+            if (
+                transition.from_clip_id in selected_ids
+                and transition.to_clip_id in selected_ids
+            )
+            or (
+                transition.from_clip_id is None
+                and transition.to_clip_id is None
+                and transition.at is not None
+                and segment_start <= transition.at < segment_end
+            )
+        ]
         selected_tracks = []
         for track in candidate.tracks:
             if track.type in {TrackType.SUBTITLE, TrackType.MASK}:
@@ -171,8 +221,9 @@ class IncrementalRenderer:
             if track.type not in {TrackType.VIDEO, TrackType.IMAGE, TrackType.AUDIO}:
                 continue
             if track is base_tracks[0]:
-                selected = [item for item in track.clips if item.id == clip_id]
-                selected[0].timeline_start = 0.0
+                selected = [item for item in track.clips if item.id in selected_ids]
+                for item in selected:
+                    item.timeline_start -= segment_start
             else:
                 selected = [
                     sliced
@@ -267,22 +318,40 @@ class IncrementalRenderer:
             (clip for clip in track.clips if clip.enabled),
             key=lambda item: item.timeline_start,
         )
+        transition_pairs = {
+            (item.from_clip_id, item.to_clip_id)
+            for item in project.transitions
+            if item.from_clip_id and item.to_clip_id
+        }
+        units: list[list[Clip]] = []
+        current_unit: list[Clip] = []
+        for clip in clips:
+            if not current_unit:
+                current_unit = [clip]
+                continue
+            if (current_unit[-1].id, clip.id) in transition_pairs:
+                current_unit.append(clip)
+            else:
+                units.append(current_unit)
+                current_unit = [clip]
+        if current_unit:
+            units.append(current_unit)
         segment_paths: list[Path] = []
         warnings: list[str] = []
         reused = 0
         encoder = "copy"
         selected_hardware = "cache"
-        for index, clip in enumerate(clips):
-            asset = project.find_media(clip.media_id)
-            assert asset is not None
-            source = Path(asset.path)
-            if not source.is_absolute():
-                source = (Path(project_dir) / source).resolve()
-            segment_document = self._segment_document(project, clip.id)
+        for index, unit in enumerate(units):
+            unit_start = min(clip.timeline_start for clip in unit)
+            unit_end = max(clip.end for clip in unit)
+            clip_ids = [clip.id for clip in unit]
+            segment_document = self._segment_document(project, clip_ids)
             parameters = {
                 "segment": {
                     "tracks": [item.model_dump(mode="json") for item in segment_document.tracks],
-                    "transitions": [],
+                    "transitions": [
+                        item.model_dump(mode="json") for item in segment_document.transitions
+                    ],
                     "subtitle_cues": [item.model_dump(mode="json") for item in segment_document.subtitle_cues],
                     "text_overlays": [item.model_dump(mode="json") for item in segment_document.text_overlays],
                     "settings": segment_document.settings,
@@ -329,15 +398,16 @@ class IncrementalRenderer:
                         {
                             "event": "progress",
                             "stage": "segment_cache",
-                            "progress": (index + 1) / len(clips),
-                            "out_time_seconds": clip.end,
+                            "progress": (index + 1) / len(units),
+                            "out_time_seconds": unit_end,
                             "frame": 0,
                             "fps": 0.0,
                             "speed": None,
                             "eta_seconds": None,
                             "segment_index": index,
                             "segment_cached": True,
-                            "clip_id": clip.id,
+                            "clip_id": clip_ids[0],
+                            "clip_ids": clip_ids,
                         }
                     )
             else:
@@ -352,12 +422,13 @@ class IncrementalRenderer:
                         {
                             **event,
                             "stage": "segment_render",
-                            "progress": (index + local) / len(clips),
-                            "out_time_seconds": clip.timeline_start
+                            "progress": (index + local) / len(units),
+                            "out_time_seconds": unit_start
                             + float(event.get("out_time_seconds", 0.0) or 0.0),
                             "segment_index": index,
                             "segment_cached": False,
-                            "clip_id": clip.id,
+                            "clip_id": clip_ids[0],
+                            "clip_ids": clip_ids,
                         }
                     )
 
@@ -474,7 +545,7 @@ class IncrementalRenderer:
             encoder=encoder,
             hardware=selected_hardware,
             warnings=warnings,
-            cached=reused == len(clips),
-            segments_total=len(clips),
+            cached=reused == len(units),
+            segments_total=len(units),
             segments_reused=reused,
         )

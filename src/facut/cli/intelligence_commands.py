@@ -276,6 +276,7 @@ def synthesize_narration_previews(
     speed: float = 1.0,
     intensity: float = 0.5,
     instruction: str | None = None,
+    device: str = "auto",
     require_cuda: bool = False,
     use_service: bool = True,
     provider: str | Path | None = None,
@@ -312,7 +313,7 @@ def synthesize_narration_previews(
             provider_lines.append(item)
             assignments.append((line, str(selection["selected_style"]), take_index))
     synthesize = synthesize_with_voice_service if use_service else synthesize_with_provider
-    options = {"require_cuda": require_cuda} if use_service else {}
+    options = {"device": device, "require_cuda": require_cuda}
     if provider is not None:
         options["provider"] = provider
     data = synthesize(
@@ -368,6 +369,7 @@ def narration_synthesize(
     speed: Annotated[float, typer.Option("--speed", min=0.5, max=2.0)] = 1.0,
     intensity: Annotated[float, typer.Option("--intensity", min=0.0, max=1.0)] = 0.5,
     instruction: Annotated[str | None, typer.Option("--instruction")] = None,
+    device: Annotated[str, typer.Option("--device")] = "auto",
     require_cuda: Annotated[bool, typer.Option("--require-cuda")] = False,
     use_service: Annotated[bool, typer.Option("--service/--no-service")] = True,
     provider: Annotated[Path | None, typer.Option("--provider")] = None,
@@ -384,6 +386,7 @@ def narration_synthesize(
             speed=speed,
             intensity=intensity,
             instruction=instruction,
+            device=device,
             require_cuda=require_cuda,
             use_service=use_service,
             provider=provider,

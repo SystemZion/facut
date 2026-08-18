@@ -414,7 +414,10 @@ def apply_prepared_narration(document: ProjectDocument, command: dict[str, Any])
                     "target_tracks": music_tracks,
                     "start": float(item["at"]),
                     "end": float(item["at"]) + float(item["source_out"]),
-                    "reduction_db": -12.0,
+                    # Keep VLOG music present under narration. A 12 dB drop
+                    # made otherwise natural voices feel pasted on top of the
+                    # film; 8 dB remains intelligible without erasing ambience.
+                    "reduction_db": -8.0,
                     "attack_ms": 100,
                     "release_ms": 500,
                     "narration_line_id": item["line_id"],

@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.8.1 — 2026-08-18
+
+- Registered atomic `vlog.apply` across Agent schema, batch, Recipe, and JSON-RPC surfaces.
+- Hardware `auto` now initializes listed encoders and skips unusable NVENC/AMF devices before selecting QSV or software.
+- Preserved text-template typography with `explicit option > template > system default` precedence.
+- Added same-subject event-chain evidence and deterministic incident/recovery ordering with review-required failures.
+- Recorded built/delivered VLOG outputs and QC state for accurate `vlog status` responses.
+- Extended incremental rendering to cache unchanged clips and connected transition units instead of always falling back to a full render.
+- Forced non-preset renders to the project's audio sample rate, preventing 48 kHz projects from inheriting 96 kHz camera audio.
+- Rendered timeline-anchored fade-in/out transitions on the completed picture and cached terminal fades with only their affected segment.
+- Replaced long independent-track delays with silence-prefix concatenation so music and narration survive still-image epilogues.
+- Added `--no-project-subtitles` for clean-master delivery without modifying editable subtitle or title tracks.
+- Classified short terminal fade silence separately from abnormal QC silence, while retaining the measured interval in reports.
+- Skipped NVENC initialization entirely in `auto` mode when no NVIDIA device is reported, allowing direct QSV selection.
+
+## 0.8.0 — 2026-08-17
+
+### Vlog Director
+
+- Added a quality-first, resumable large-library workflow: `vlog prepare`,
+  `inspect next`, idempotent `observe`, three StoryGraph candidates, comparison,
+  refinement, proxy preview, one-command resume and original-media delivery.
+- Every playable non-duplicate source requires baseline external-AI evidence;
+  incomplete coverage stops with `REVIEW_REQUIRED` instead of silently dropping
+  footage. FACUT does not download or embed a local visual model.
+- Added evidence-addressed transition/effect/music intentions. Unsupported
+  comedy effects remain explicitly review-required and are never reported as
+  rendered.
+
+### Captions, typography and licensed media
+
+- Added review-first word-timestamp ASR plans, glossary support, optional local
+  diarization provider, readable caption wrapping, subtitle proofs and atomic
+  application of approved cues. Raw dialogue is retained separately from its
+  display formatting.
+- Added system-font scanning, logical font roles, license/hash records, CJK
+  glyph audits and content-adaptive typography plans. Existing Lingang title
+  templates are retained alongside science, humanities, comedy, cinematic,
+  warm-family and food variants.
+- Added a local music/SFX catalog with platform license audit and seven
+  inspectable VLOG style packs.
+- Final VLOG delivery now blocks missing fonts or glyphs and writes a full
+  decode/audio/video QC report next to the project render records.
+
+### Agent contract
+
+- Exposed VLOG, subtitle, typography, font, library and style operations through
+  schemas and loopback JSON-RPC. Long visual decisions remain the responsibility
+  of the calling multimodal AI and are stored as strict `evidence.v2` records.
+
+## 0.7.2 — 2026-08-17
+
+### Fixed
+
+- Unified one-shot and warm-service voice device selection. A configured CPU
+  PyTorch overlay now protects both paths when `device=auto`, while
+  `--require-cuda` and explicit `--device cuda` are never silently downgraded.
+- Rejected the contradictory `--device cpu --require-cuda` combination before
+  provider startup, preserved device requirements during one-shot fallback,
+  and prevented inherited CUDA-required environment flags from leaking into
+  CPU workers.
+- Isolated the frozen warm-service process from its parent PyInstaller
+  extraction directory so repeated service starts do not leave `_MEI` folders.
+- Kept generated PyInstaller spec files under the ignored build directory so
+  local absolute paths cannot overwrite the portable tracked release spec.
+- Added `device` and service-selection fields to narration and Agent schemas,
+  and reject undeclared parameters for the affected RPC actions.
+
 ## 0.7.1 — 2026-08-12
 
 ### Fixed

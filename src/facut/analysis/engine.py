@@ -224,6 +224,7 @@ def transcribe_local(
     model_path: str | Path,
     language: str | None = None,
     external_python: str | Path | None = None,
+    word_timestamps: bool = False,
 ) -> dict[str, Any]:
     """Transcribe with a user-supplied local faster-whisper model directory."""
 
@@ -260,6 +261,7 @@ def transcribe_local(
                 str(Path(path).expanduser().resolve()),
                 str(model),
                 *(["--language", language] if language else []),
+                *(["--word-timestamps"] if word_timestamps else []),
             ],
             capture_output=True,
             text=True,
@@ -290,13 +292,24 @@ def transcribe_local(
         compute_type=compute_type,
         local_files_only=True,
     )
-    segments, info = whisper.transcribe(str(Path(path).resolve()), language=language)
+    segments, info = whisper.transcribe(
+        str(Path(path).resolve()), language=language, word_timestamps=word_timestamps
+    )
     items = [
         {
             "start": segment.start,
             "end": segment.end,
             "text": segment.text.strip(),
             "confidence": math.exp(segment.avg_logprob),
+            "words": [
+                {
+                    "start": word.start,
+                    "end": word.end,
+                    "text": word.word,
+                    "confidence": word.probability,
+                }
+                for word in (segment.words or [])
+            ],
         }
         for segment in segments
     ]

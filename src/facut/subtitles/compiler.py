@@ -33,7 +33,20 @@ class SubtitleCompiler:
     """Compile cues and overlays to a portable Advanced SubStation Alpha file."""
 
     def compile(self, document: ProjectDocument) -> SubtitleRenderPlan:
-        styles: list[TextStyle] = [TextStyle(font_size=52)]
+        caption_scale = document.project.height / 1080.0
+        styles: list[TextStyle] = [
+            TextStyle(
+                font_family="Source Han Sans SC",
+                font_size=52 * caption_scale,
+                font_weight="medium",
+                stroke_color="#000000",
+                stroke_width=2 * caption_scale,
+                shadow=1 * caption_scale,
+                alignment="center",
+                safe_area=True,
+                safe_margin_percent=5.0,
+            )
+        ]
         events: list[str] = []
         for cue in sorted(document.subtitle_cues, key=lambda item: (item.start, item.id)):
             style = cue.style or styles[0]

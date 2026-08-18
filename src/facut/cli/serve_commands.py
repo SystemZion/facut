@@ -58,6 +58,23 @@ def _error(request_id: Any, code: int, message: str, data: Any = None) -> dict[s
     return payload
 
 
+def _validate_declared_params(method: str, params: dict[str, Any]) -> None:
+    """Reject RPC parameters that are outside an action's published contract."""
+
+    schema = action_schema(method)["parameters"]
+    properties = set(schema.get("properties", {}))
+    unknown = sorted(set(params) - properties)
+    if unknown:
+        raise ValueError(
+            f"{method} received unknown parameter(s): {', '.join(unknown)}."
+        )
+    missing = sorted(set(schema.get("required", [])) - set(params))
+    if missing:
+        raise ValueError(
+            f"{method} requires parameter(s): {', '.join(missing)}."
+        )
+
+
 def serve_command(
     ctx: typer.Context,
     handshake: Annotated[
@@ -117,6 +134,17 @@ def serve_command(
             params = dict(request.get("params") or {})
             if not isinstance(params, dict):
                 raise ValueError("Request params must be an object.")
+            if method in {
+                "voice.say", "narration.synthesize", "vlog.prepare",
+                "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
+                "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
+                "subtitle.glossary.add", "typography.plan", "typography.apply",
+                "font.scan", "font.register", "font.match", "font.audit",
+                "vlog.preview", "vlog.build", "library.music.add", "library.sfx.add",
+                "library.search", "library.audit", "style.list", "style.describe",
+                "style.validate",
+            }:
+                _validate_declared_params(method, params)
             if method == "ping":
                 result = {
                     "status": "ok",
@@ -420,6 +448,7 @@ def serve_command(
                     speed=float(params.get("speed", 1.0)),
                     intensity=float(params.get("intensity", 0.5)),
                     instruction=params.get("instruction"),
+                    device=str(params.get("device", "auto")),
                     require_cuda=bool(params.get("require_cuda", False)),
                     use_service=bool(params.get("use_service", True)),
                     provider=params.get("provider"),
@@ -452,6 +481,291 @@ def serve_command(
                     "status": "success", "command": method, "data": data,
                     "warnings": [*plan.warnings, *plan.limitations], "errors": [],
                     "project_revision": manager.require_document().revision,
+                }
+            elif method in {
+                "vlog.prepare", "vlog.inspect.next", "vlog.observe", "vlog.status",
+                "vlog.plan", "vlog.compare", "vlog.refine",
+            }:
+                from facut.media.proxy_manager import ProxyManager
+                from facut.vlog import (
+                    build_story_candidates,
+                    compare_story_candidates,
+                    director_status,
+                    ingest_observations,
+                    import_source_resumable,
+                    next_inspection_task,
+                    prepare_evidence_manifest,
+                    refine_story_candidate,
+                )
+
+                if method == "vlog.prepare":
+                    source_value = params.get("source")
+                    if source_value:
+                        source = Path(str(source_value)).expanduser().resolve()
+                        import_source_resumable(manager, source)
+                    else:
+                        source = None
+                    if params.get("proxy", "auto") == "auto":
+                        ProxyManager(
+                            manager,
+                            ffmpeg=state.config.tools.ffmpeg,
+                            ffprobe=state.config.tools.ffprobe,
+                        ).scan(search_directories=[source] if source else None, link=True)
+                    data = prepare_evidence_manifest(
+                        manager,
+                        ffmpeg=state.config.tools.ffmpeg,
+                        generate_frames=bool(params.get("frames", True)),
+                        batch_size=int(params.get("batch_size", 12)),
+                    )
+                elif method == "vlog.inspect.next":
+                    data = next_inspection_task(manager.project_dir)
+                elif method == "vlog.observe":
+                    data = ingest_observations(
+                        manager.require_document(),
+                        manager.project_dir,
+                        {"observations": params["observations"]},
+                        task_id=params.get("task_id"),
+                    )
+                elif method == "vlog.status":
+                    data = director_status(manager.project_dir, manager.require_document())
+                elif method == "vlog.plan":
+                    data = build_story_candidates(
+                        manager.require_document(),
+                        manager.project_dir,
+                        style=str(params.get("style", "natural-vlog")),
+                        target_duration=float(params.get("target_duration", 480)),
+                    ).model_dump(mode="json")
+                elif method == "vlog.compare":
+                    data = compare_story_candidates(manager.project_dir)
+                else:
+                    data = refine_story_candidate(
+                        manager.project_dir, str(params["candidate_id"])
+                    ).model_dump(mode="json")
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": data.get("warnings", []) if isinstance(data, dict) else [],
+                    "errors": [], "project_revision": manager.require_document().revision,
+                }
+            elif method in {"vlog.apply", "vlog.preview", "vlog.build"}:
+                from facut.cli.vlog_commands import _build_and_render
+                from facut.render import FFmpegBackend
+                from facut.vlog import candidate_document, compare_story_candidates
+
+                if method == "vlog.apply":
+                    applied = CommandEngine(manager).run_batch(
+                        {
+                            "version": "1.0",
+                            "atomic": True,
+                            "actor": "agent",
+                            "intent": "Apply VLOG StoryGraph candidate",
+                            "commands": [
+                                {
+                                    "action": "vlog.apply",
+                                    "candidate_id": str(params["candidate_id"]),
+                                    "preset": str(params.get("preset", "youtube-4k")),
+                                }
+                            ],
+                        }
+                    )
+                    data = applied["data"]
+                elif method == "vlog.preview":
+                    comparison = compare_story_candidates(manager.project_dir)
+                    candidate_ids = [item["id"] for item in comparison["candidates"]]
+                    selected_ids = (
+                        candidate_ids
+                        if bool(params.get("all_candidates", False))
+                        else [str(params.get("candidate_id") or candidate_ids[0])]
+                    )
+                    outputs = []
+                    backend = FFmpegBackend(state.config.tools.ffmpeg)
+                    output_dir = Path(str(params["output_dir"])).expanduser().resolve()
+                    for candidate_id in selected_ids:
+                        document, candidate = candidate_document(
+                            manager.require_document(), manager.project_dir, candidate_id
+                        )
+                        rendered = backend.preview_range(
+                            document,
+                            manager.project_dir,
+                            output_dir / f"{candidate_id}.mp4",
+                            start=0,
+                            end=document.project.duration,
+                            height=540,
+                            fps=24,
+                            overwrite=bool(params.get("overwrite", False)),
+                        )
+                        outputs.append(
+                            {"candidate_id": candidate.id, "output": str(rendered.output), "duration": rendered.duration}
+                        )
+                    data = {"outputs": outputs, "saved_timeline_changed": False}
+                else:
+                    data, rendered = _build_and_render(
+                        manager,
+                        candidate_id=str(params["candidate_id"]),
+                        output=Path(str(params["output"])),
+                        preset=str(params.get("preset", "youtube-4k")),
+                        hardware=str(params.get("hardware", "auto")),
+                        overwrite=bool(params.get("overwrite", False)),
+                        ffmpeg=state.config.tools.ffmpeg,
+                    )
+                    data["warnings"] = rendered.warnings
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": data.pop("warnings", []), "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method in {"font.scan", "font.register", "font.match", "font.audit"}:
+                from facut.fonts import FontCatalog
+
+                catalog = FontCatalog()
+                if method == "font.scan":
+                    data = catalog.scan(refresh=bool(params.get("refresh", False)))
+                elif method == "font.register":
+                    data = catalog.register(
+                        str(params["font_file"]), license_file=str(params["license_file"])
+                    )
+                elif method == "font.match":
+                    data = catalog.match(
+                        str(params["role"]), language=str(params.get("language", "zh-CN"))
+                    )
+                else:
+                    data = catalog.audit_project(
+                        manager.require_document(), language=str(params.get("language", "zh-CN"))
+                    )
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method in {
+                "library.music.add", "library.sfx.add", "library.search", "library.audit",
+                "style.list", "style.describe", "style.validate",
+            }:
+                from facut.library import MediaLibrary
+                from facut.styles import describe_style, list_styles, validate_style_usage
+
+                if method in {"library.music.add", "library.sfx.add"}:
+                    kind = "music" if method == "library.music.add" else "sfx"
+                    data = MediaLibrary().add(
+                        str(params["source"]),
+                        kind=kind,
+                        tags=list(map(str, params.get("tags", []))),
+                        moods=list(map(str, params.get("moods", []))),
+                        platforms=list(map(str, params.get("platforms", []))),
+                        license_file=params.get("license_file"),
+                        ffmpeg=state.config.tools.ffmpeg,
+                        ffprobe=state.config.tools.ffprobe,
+                        analyze=bool(params.get("analyze", kind == "music")),
+                    )
+                elif method == "library.search":
+                    data = MediaLibrary().search(
+                        kind=params.get("kind"), mood=params.get("mood"),
+                        tag=params.get("tag"), platform=params.get("platform"),
+                    )
+                elif method == "library.audit":
+                    data = MediaLibrary().audit(str(params["platform"]))
+                elif method == "style.list":
+                    data = list_styles()
+                elif method == "style.describe":
+                    data = describe_style(str(params["name"]))
+                else:
+                    data = validate_style_usage(manager.require_document(), str(params["name"]))
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method in {"typography.plan", "typography.apply"}:
+                from facut.subtitles import apply_typography_plan, build_typography_plan
+
+                if method == "typography.plan":
+                    data = build_typography_plan(
+                        manager.project_dir, language=str(params.get("language", "zh-CN"))
+                    )
+                else:
+                    data = apply_typography_plan(manager, params.get("plan"))
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "subtitle.glossary.add":
+                from facut.subtitles import add_glossary_entry
+
+                data = add_glossary_entry(
+                    manager.project_dir, str(params["term"]), str(params.get("type", "term"))
+                )
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "subtitle.transcribe":
+                from facut.analysis.engine import transcribe_local
+                from facut.cli.subtitle_commands import _diarize
+                from facut.subtitles import build_transcript_plan, save_transcript_plan
+
+                destination = Path(str(params["output"])).expanduser().resolve()
+                if destination.exists() and not bool(params.get("overwrite", False)):
+                    raise FileExistsError(f'Output "{destination}" already exists; use overwrite.')
+                document = manager.require_document()
+                selected_ids = set(map(str, params.get("media", []))) or {
+                    clip.media_id
+                    for track in document.tracks
+                    if track.type.value in {"video", "audio"}
+                    for clip in track.clips
+                    if clip.enabled
+                }
+                model_path = (
+                    Path(str(params["model"]))
+                    if params.get("model")
+                    else state.config.models.resolve("srt_model")
+                )
+                transcripts = {}
+                for media_id in sorted(selected_ids):
+                    asset = document.find_media(media_id)
+                    if asset is None:
+                        raise ValueError(f'Unknown media "{media_id}".')
+                    transcripts[media_id] = transcribe_local(
+                        manager.resolve_path(asset.path),
+                        model_path=model_path,
+                        language=str(params.get("language", "zh")),
+                        external_python=state.config.tools.analysis_python,
+                        word_timestamps=bool(params.get("word_timestamps", True)),
+                    )
+                diarization = "disabled"
+                if bool(params.get("speaker_diarization", False)):
+                    transcripts = _diarize(transcripts)
+                    diarization = "provider"
+                plan = build_transcript_plan(
+                    document,
+                    manager.project_dir,
+                    transcripts,
+                    language=str(params.get("language", "zh")),
+                    model=Path(model_path).name,
+                    word_timestamps=bool(params.get("word_timestamps", True)),
+                    speaker_diarization=diarization,
+                )
+                save_transcript_plan(plan, destination)
+                data = plan.model_dump(mode="json")
+                data["output"] = str(destination)
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": plan.warnings, "errors": [],
+                    "project_revision": document.revision,
+                }
+            elif method == "subtitle.apply":
+                from facut.subtitles import apply_transcript_plan, load_transcript_plan
+
+                data = apply_transcript_plan(
+                    manager,
+                    load_transcript_plan(str(params["plan"])),
+                    approved_only=bool(params.get("approved_only", True)),
+                    track_id=str(params.get("track", "S_DIALOGUE")),
+                )
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": data["project_revision"],
                 }
             elif method == "narration.apply":
                 data = CommandEngine(manager).execute(
@@ -527,7 +841,10 @@ def serve_command(
                     purpose=params.get("purpose"),
                     provider=params.get("provider"),
                     use_service=bool(params.get("use_service", True)),
-                    service_options={"require_cuda": bool(params.get("require_cuda", False))},
+                    service_options={
+                        "device": str(params.get("device", "auto")),
+                        "require_cuda": bool(params.get("require_cuda", False)),
+                    },
                 )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 for item, final_path in zip(data["outputs"], outputs, strict=True):

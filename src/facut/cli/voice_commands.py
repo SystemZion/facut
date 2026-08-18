@@ -612,7 +612,7 @@ def voice_synthesize(
         store = VoiceProfileStore()
         profile = store.resolve(profile_id)
         synthesize = synthesize_with_voice_service if use_service else synthesize_with_provider
-        options = {"device": device, "require_cuda": require_cuda} if use_service else {}
+        options = {"device": device, "require_cuda": require_cuda}
         if provider is not None:
             options["provider"] = provider
         result = synthesize(

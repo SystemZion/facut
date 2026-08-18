@@ -152,6 +152,41 @@ def test_plan_round_trip_and_atomic_approved_only_apply(monkeypatch, tmp_path) -
     assert not restored.media
 
 
+def test_narration_apply_accepts_agent_audit_metadata(monkeypatch, tmp_path) -> None:
+    manager = ProjectManager.create(tmp_path / "project")
+    audio = tmp_path / "approved.wav"
+    _wav(audio)
+    monkeypatch.setattr(
+        "facut.intelligence.narration_plan.probe_media",
+        lambda *args, **kwargs: MediaTechnicalInfo(
+            duration=1,
+            audio_codec="pcm_s16le",
+            sample_rate=16000,
+            audio_channels=1,
+        ),
+    )
+    plan = NarrationPlan(
+        project_id=manager.require_document().project.id,
+        project_revision=0,
+        lines=[_line("approved", audio)],
+    )
+    path = save_narration_plan(plan, tmp_path / "narration.plan.json")
+
+    result = CommandEngine(manager).execute(
+        "narration.apply",
+        {
+            "plan_path": str(path),
+            "_actor": "agent",
+            "_intent": "Apply reviewed narration",
+        },
+    )
+
+    assert result["project_revision"] == 1
+    history = manager.require_document().history[-1]
+    assert history.actor == "agent"
+    assert history.intent == "Apply reviewed narration"
+
+
 def test_missing_preview_fails_before_mutation(tmp_path) -> None:
     manager = ProjectManager.create(tmp_path / "project")
     plan = NarrationPlan(

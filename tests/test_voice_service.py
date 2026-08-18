@@ -29,7 +29,7 @@ def _fake_provider(tmp_path: Path, *, device: str = "cuda") -> Path:
     script.write_text(
         textwrap.dedent(
             f"""
-            import json, pathlib, struct, sys, wave
+            import json, os, pathlib, struct, sys, wave
 
             DEVICE = {device!r}
 
@@ -55,6 +55,8 @@ def _fake_provider(tmp_path: Path, *, device: str = "cuda") -> Path:
                     "compute_type": "float16" if DEVICE == "cuda" else "float32",
                     "cuda": DEVICE == "cuda", "gpu": "Fake GPU" if DEVICE == "cuda" else None,
                     "vram": {{"allocated_mib": 12.0}} if DEVICE == "cuda" else None,
+                    "requested_device": os.environ.get("FACUT_VOICE_DEVICE"),
+                    "require_cuda_env": os.environ.get("FACUT_VOICE_REQUIRE_CUDA"),
                     "persistent": True}}), flush=True)
                 for raw in sys.stdin:
                     request = json.loads(raw)
@@ -169,6 +171,55 @@ def test_provider_process_does_not_inherit_facut_python_runtime_paths(
         server.close()
 
 
+def test_service_auto_uses_cpu_overlay_and_clears_parent_cuda_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACUT_CPU_TORCH_OVERLAY", str(tmp_path / "cpu-overlay"))
+    monkeypatch.setenv("FACUT_VOICE_REQUIRE_CUDA", "1")
+    server = VoiceServiceServer(
+        _fake_provider(tmp_path, device="cpu"),
+        state_path=tmp_path / "cpu-overlay.json",
+        idle_timeout=30,
+    )
+    try:
+        assert server.runtime.worker.device == "cpu"
+        assert server.runtime.worker.ready["requested_device"] == "cpu"
+        assert server.runtime.worker.ready["require_cuda_env"] == "0"
+    finally:
+        server.close()
+
+
+def test_service_oneshot_fallback_preserves_requested_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from facut.voice.service import ProviderWorker
+
+    captured = {}
+
+    def fake_invoke(_executable, _payload, **kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "outputs": []}
+
+    worker = ProviderWorker(tmp_path / "provider", device="cuda")
+    worker.mode = "oneshot"
+    monkeypatch.setattr("facut.voice.service.invoke_provider_request", fake_invoke)
+
+    worker.request({"protocol": "test"}, timeout=12.5)
+
+    assert captured == {"timeout": 12.5, "device": "cuda", "require_cuda": False}
+
+
+def test_frozen_daemon_uses_an_independent_pyinstaller_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from facut.voice import service
+
+    monkeypatch.setattr(service.sys, "frozen", True, raising=False)
+    environment = service._daemon_environment()
+
+    assert environment["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
 def test_require_cuda_rejects_an_already_running_cpu_service(tmp_path: Path) -> None:
     state = tmp_path / "cpu-running.json"
     server = VoiceServiceServer(
@@ -181,6 +232,29 @@ def test_require_cuda_rejects_an_already_running_cpu_service(tmp_path: Path) -> 
             start_voice_service(
                 provider=_fake_provider(tmp_path),
                 require_cuda=True,
+                state_path=state,
+            )
+    finally:
+        stop_voice_service(state_path=state)
+        thread.join(timeout=5)
+
+
+def test_explicit_device_rejects_an_already_running_service_on_another_device(
+    tmp_path: Path,
+) -> None:
+    from facut.voice.service import VoiceServiceError
+
+    state = tmp_path / "device-mismatch.json"
+    server = VoiceServiceServer(
+        _fake_provider(tmp_path, device="cpu"), state_path=state, idle_timeout=30
+    )
+    thread = server.start_background()
+    _wait_for_state(state)
+    try:
+        with pytest.raises(VoiceServiceError, match="not the requested cuda"):
+            start_voice_service(
+                provider=_fake_provider(tmp_path),
+                device="cuda",
                 state_path=state,
             )
     finally:

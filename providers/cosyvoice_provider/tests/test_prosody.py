@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from facut_cosyvoice_provider.cli import (
     _instruction,
+    _generation_seed,
     _output_path,
     _pause_seconds,
     _split_for_prosody,
@@ -53,3 +54,12 @@ def test_cache_key_changes_with_delivery_and_candidate(tmp_path) -> None:
         tmp_path, "voice_TEST", 0, "你好。", {**base, "candidate_index": 1}
     )
     assert len({first, second, third}) == 3
+
+
+def test_generation_seed_is_stable_and_candidate_specific() -> None:
+    base = {"delivery": "natural", "candidate_index": 0, "speed": 0.94}
+    first = _generation_seed("voice_TEST", "你好。", base)
+    repeated = _generation_seed("voice_TEST", "你好。", dict(base))
+    alternate = _generation_seed("voice_TEST", "你好。", {**base, "candidate_index": 1})
+    assert first == repeated
+    assert first != alternate

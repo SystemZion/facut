@@ -28,6 +28,7 @@ from .providers import (
     build_provider_request,
     invoke_provider_request,
     provider_status,
+    resolve_voice_device,
     validate_provider_response,
 )
 from .store import default_voice_home
@@ -40,6 +41,21 @@ MAX_REQUEST_BYTES = 4 * 1024 * 1024
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _daemon_environment() -> dict[str, str]:
+    """Build an isolated environment for the long-lived service process."""
+
+    environment = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        # A one-file PyInstaller child otherwise reuses the parent's _MEI
+        # extraction directory. The short-lived CLI then cannot remove it,
+        # and the daemon has no owner left to clean it after shutdown.
+        environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    else:
+        source_paths = [item for item in sys.path if item and Path(item).exists()]
+        environment["PYTHONPATH"] = os.pathsep.join(source_paths)
+    return environment
 
 
 class VoiceServiceError(FacutError):
@@ -101,10 +117,8 @@ class ProviderWorker:
         allow_oneshot_fallback: bool = True,
         stderr_path: str | Path | None = None,
     ) -> None:
-        if device not in {"auto", "cuda", "cpu"}:
-            raise ValueError("Voice service device must be auto, cuda, or cpu.")
         self.executable = str(Path(executable).expanduser().resolve())
-        self.device = device
+        self.device = resolve_voice_device(device, require_cuda=require_cuda)
         self.require_cuda = require_cuda
         self.startup_timeout = startup_timeout
         self.allow_oneshot_fallback = allow_oneshot_fallback
@@ -174,8 +188,7 @@ class ProviderWorker:
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
         environment["FACUT_VOICE_DEVICE"] = self.device
-        if self.require_cuda:
-            environment["FACUT_VOICE_REQUIRE_CUDA"] = "1"
+        environment["FACUT_VOICE_REQUIRE_CUDA"] = "1" if self.require_cuda else "0"
         if self.stderr_path:
             self.stderr_path.parent.mkdir(parents=True, exist_ok=True)
             self._stderr_stream = self.stderr_path.open("a", encoding="utf-8")
@@ -239,7 +252,13 @@ class ProviderWorker:
     def request(self, payload: dict[str, Any], *, timeout: float = 300.0) -> dict[str, Any]:
         with self._lock:
             if self.mode == "oneshot":
-                return invoke_provider_request(self.executable, payload, timeout=timeout)
+                return invoke_provider_request(
+                    self.executable,
+                    payload,
+                    timeout=timeout,
+                    device=self.device,
+                    require_cuda=self.require_cuda,
+                )
             if self.mode != "persistent" or self.process is None or self.process.stdin is None:
                 raise RuntimeError("Voice provider worker is not running.")
             if self.process.poll() is not None:
@@ -542,6 +561,7 @@ def start_voice_service(
 ) -> dict[str, Any]:
     """Launch a hidden service process and wait for its authenticated status."""
 
+    resolved_device = resolve_voice_device(device, require_cuda=require_cuda)
     current = voice_service_status(state_path=state_path)
     if current.get("running"):
         if require_cuda and (
@@ -551,6 +571,19 @@ def start_voice_service(
                 "The running voice service has not confirmed CUDA execution.",
                 suggestion="Stop it, then start again with `--device cuda --require-cuda`.",
                 details={"service_status": current},
+            )
+        if str(device).casefold() != "auto" and current.get("device") != resolved_device:
+            raise VoiceServiceError(
+                f"The running voice service uses {current.get('device') or 'an unknown device'}, "
+                f"not the requested {resolved_device} device.",
+                suggestion=(
+                    "Stop the service, then start it again with "
+                    f"`facut voice serve start --device {resolved_device}`."
+                ),
+                details={
+                    "requested_device": resolved_device,
+                    "service_status": current,
+                },
             )
         return {**current, "already_running": True}
     provider_info = provider_status(provider)
@@ -573,7 +606,7 @@ def start_voice_service(
         "--provider",
         str(provider_info["executable"]),
         "--device",
-        device,
+        resolved_device,
         "--idle-timeout",
         str(idle_timeout),
         "--port",
@@ -584,10 +617,7 @@ def start_voice_service(
     ]
     log_path = target.parent / "voice-service.log"
     log_stream = log_path.open("a", encoding="utf-8")
-    environment = os.environ.copy()
-    if not getattr(sys, "frozen", False):
-        source_paths = [item for item in sys.path if item and Path(item).exists()]
-        environment["PYTHONPATH"] = os.pathsep.join(source_paths)
+    environment = _daemon_environment()
     process = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
@@ -676,6 +706,7 @@ def synthesize_with_voice_service(
 ) -> dict[str, Any]:
     """Synthesize through the warm daemon and retain provider output validation."""
 
+    resolved_device = resolve_voice_device(device, require_cuda=require_cuda)
     state = _read_state(state_path)
     current = voice_service_status(state_path=state_path)
     if not state or not current.get("running"):
@@ -686,7 +717,7 @@ def synthesize_with_voice_service(
             )
         start_voice_service(
             provider=provider,
-            device=device,
+            device=resolved_device,
             require_cuda=require_cuda,
             idle_timeout=idle_timeout,
             state_path=state_path,
@@ -701,6 +732,19 @@ def synthesize_with_voice_service(
             "The running voice service has not confirmed CUDA execution.",
             suggestion="Stop it, then start again with `--device cuda --require-cuda`.",
             details={"service_status": current},
+        )
+    if str(device).casefold() != "auto" and current.get("device") != resolved_device:
+        raise VoiceServiceError(
+            f"The running voice service uses {current.get('device') or 'an unknown device'}, "
+            f"not the requested {resolved_device} device.",
+            suggestion=(
+                "Stop the service, then start it again with "
+                f"`facut voice serve start --device {resolved_device}`."
+            ),
+            details={
+                "requested_device": resolved_device,
+                "service_status": current,
+            },
         )
     assert state is not None
     request, destination = build_provider_request(

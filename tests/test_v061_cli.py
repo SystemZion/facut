@@ -6,6 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from facut.cli.main import app
+from facut.cli.intelligence_commands import synthesize_narration_previews
 from facut.core.project_manager import ProjectManager
 from facut.intelligence.narration_plan import (
     NarrationCandidate,
@@ -115,6 +116,58 @@ def test_narration_review_requires_preview_and_updates_plan(tmp_path) -> None:
     assert updated.lines[0].selected_preview_id == "preview_1"
 
 
+def test_narration_no_service_preserves_device_and_cuda_options(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FACUT_VOICE_HOME", str(tmp_path / "voices"))
+    profile = _profile(VoiceProfileStore())
+    manager = ProjectManager.create(tmp_path / "project")
+    line = NarrationLine(
+        id="line_1",
+        clip_id="clip_1",
+        media_id="media_1",
+        timeline_range=NarrationTimeRange(start=0, end=2),
+        visual_summary="一家人在海边散步",
+        fact_confidence=0.9,
+        evidence={"provider": "test"},
+        candidates=[NarrationCandidate(id="candidate_1", text="今天慢慢走一走。")],
+    )
+    plan_path = save_narration_plan(
+        NarrationPlan(
+            project_id=manager.require_document().project.id,
+            project_revision=0,
+            lines=[line],
+        ),
+        tmp_path / "narration.plan.json",
+    )
+    captured = {}
+
+    def fake_provider(profile, profile_directory, lines, output_directory, **kwargs):
+        captured.update(kwargs)
+        output_root = Path(output_directory)
+        output_root.mkdir(parents=True, exist_ok=True)
+        outputs = []
+        for index, _line in enumerate(lines):
+            generated = output_root / f"generated-{index}.wav"
+            generated.write_bytes(b"RIFF-test")
+            outputs.append({"output": str(generated), "reference_sample_id": "sample_1"})
+        return {"status": "success", "outputs": outputs, "warnings": []}
+
+    monkeypatch.setattr(
+        "facut.cli.intelligence_commands.synthesize_with_provider", fake_provider
+    )
+    synthesize_narration_previews(
+        plan_path,
+        voice=profile.id,
+        preview_dir=tmp_path / "previews",
+        device="cuda",
+        require_cuda=True,
+        use_service=False,
+    )
+
+    assert captured == {"device": "cuda", "require_cuda": True}
+
+
 def test_new_agent_schemas_are_discoverable() -> None:
     runner = CliRunner()
     for action in (
@@ -144,6 +197,12 @@ def test_new_agent_schemas_are_discoverable() -> None:
     ):
         result = runner.invoke(app, ["--json", "schema", "action", action])
         assert result.exit_code == 0, (action, result.output)
+
+    voice_schema = json.loads(
+        runner.invoke(app, ["--json", "schema", "action", "voice.say"]).stdout
+    )["data"]["parameters"]["properties"]
+    assert voice_schema["device"]["enum"] == ["auto", "cuda", "cpu"]
+    assert "use_service" in voice_schema
 
 
 def test_run_exposes_agent_rpc_actions_in_explicit_non_atomic_batch(tmp_path) -> None:

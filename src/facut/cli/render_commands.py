@@ -384,6 +384,13 @@ def render_command(
             help="Burn an external ASS/SRT/VTT file; ASS karaoke tags are preserved.",
         ),
     ] = None,
+    project_subtitles: Annotated[
+        bool,
+        typer.Option(
+            "--project-subtitles/--no-project-subtitles",
+            help="Include or omit project subtitle cues and text overlays.",
+        ),
+    ] = True,
     sequence: Annotated[
         str | None,
         typer.Option("--sequence", help="Render a saved named sequence."),
@@ -401,6 +408,12 @@ def render_command(
             from facut.core.sequences import materialize_sequence
 
             document = materialize_sequence(document, sequence)
+        if not project_subtitles:
+            # Work on a render-only copy: the editable subtitle and text tracks
+            # remain in the project and its CutGraph history.
+            document = document.model_copy(deep=True)
+            document.subtitle_cues = []
+            document.text_overlays = []
         master_loudness = document.settings.get("audio", {}).get("master_loudness", {})
         if loudness is None and master_loudness:
             loudness = float(master_loudness.get("target_lufs", -14.0))
@@ -426,7 +439,11 @@ def render_command(
             # backend blocks HDR/Log sources until a real tone-map is supplied,
             # so this never silently relabels wide-gamut footage.
             color_space = "bt709"
-            audio_sample_rate = None
+            # A render without a delivery preset must still honour the project
+            # sample rate. Leaving this unset lets AAC inherit the filtergraph's
+            # highest input rate (for example 96 kHz camera audio), which makes
+            # otherwise valid 48 kHz projects produce the wrong deliverable.
+            audio_sample_rate = document.project.sample_rate
         audio_bitrate = audio_bitrate or "320k"
         fast_path = fast_path.strip().casefold()
         if fast_path not in {"auto", "off", "force"}:

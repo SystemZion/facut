@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $DistPath = Join-Path $ProjectRoot "dist"
 $BuildPath = Join-Path $ProjectRoot "build"
+$GeneratedSpecPath = Join-Path $BuildPath "generated-spec"
 $ResolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $BundledTools = Join-Path $ProjectRoot "vendor\ffmpeg"
 
@@ -44,9 +45,12 @@ if ($Clean) {
     }
 }
 
+New-Item -ItemType Directory -Force -Path $GeneratedSpecPath | Out-Null
+
 $PyInstallerArgs = @(
     "--noconfirm",
     "--clean",
+    "--specpath", $GeneratedSpecPath,
     "--onefile",
     "--console",
     "--name", "facut",

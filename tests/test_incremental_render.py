@@ -17,6 +17,7 @@ from facut.core.models import (
     SubtitleCue,
     Track,
     TrackType,
+    Transition,
 )
 from facut.render.ffmpeg_backend import FFmpegBackend
 from facut.render.incremental import IncrementalRenderer, incremental_eligibility
@@ -71,7 +72,7 @@ def test_incremental_eligibility_accepts_contiguous_simple_timeline() -> None:
     assert reason is None
 
 
-def test_incremental_eligibility_supports_subtitles_and_rejects_transitions() -> None:
+def test_incremental_eligibility_supports_subtitles_and_transition_units() -> None:
     project = _project()
     project.subtitle_cues.append(
         SubtitleCue(track_id="S1", start=0, end=1, text="caption")
@@ -79,8 +80,6 @@ def test_incremental_eligibility_supports_subtitles_and_rejects_transitions() ->
     eligible, reason = incremental_eligibility(project)
     assert eligible is True
     assert reason is None
-    from facut.core.models import Transition
-
     project.transitions.append(
         Transition(
             type="dissolve",
@@ -88,12 +87,32 @@ def test_incremental_eligibility_supports_subtitles_and_rejects_transitions() ->
             from_clip_id="c1",
             to_clip_id="c2",
             track_id="V1",
-            at=2,
+            at=1.5,
         )
     )
+    project.tracks[0].clips[1].timeline_start = 1.5
+    project.recompute_duration()
     eligible, reason = incremental_eligibility(project)
-    assert eligible is False
-    assert reason and "transition" in reason
+    assert eligible is True
+    assert reason is None
+
+
+def test_terminal_fade_is_cached_with_only_the_last_segment() -> None:
+    project = _project()
+    project.transitions.append(
+        Transition(type="fade-out", duration=0.5, track_id="V1", at=3.5)
+    )
+
+    eligible, reason = incremental_eligibility(project)
+    assert eligible is True
+    assert reason is None
+
+    renderer = object.__new__(IncrementalRenderer)
+    first = renderer._segment_document(project, ["c1"])
+    last = renderer._segment_document(project, ["c2"])
+    assert first.transitions == []
+    assert len(last.transitions) == 1
+    assert last.transitions[0].at == pytest.approx(1.5)
 
 
 def test_incremental_segment_slices_overlay_audio_and_subtitles(tmp_path: Path) -> None:
@@ -151,7 +170,7 @@ def test_incremental_segment_slices_overlay_audio_and_subtitles(tmp_path: Path) 
     )
     project.subtitle_cues.append(SubtitleCue(track_id="S1", start=1.5, end=2.5, text="caption"))
     renderer = object.__new__(IncrementalRenderer)
-    segment = renderer._segment_document(project, "c2")
+    segment = renderer._segment_document(project, ["c2"])
     overlay = next(track for track in segment.tracks if track.id == "V2").clips[0]
     music = next(track for track in segment.tracks if track.id == "A1").clips[0]
     assert overlay.timeline_start == 0

@@ -735,9 +735,26 @@ class GraphBuilder:
                     clip, clip.duration, self.project.project.sample_rate
                 )
             )
+            pre_delay_label = f"bgmpredelay{audio_index}"
+            filters.append(",".join(audio_chain) + f"[{pre_delay_label}]")
+            aligned_label = pre_delay_label
             if clip.timeline_start:
-                delay_ms = max(0, round(clip.timeline_start * 1000))
-                audio_chain.append(f"adelay={delay_ms}:all=1")
+                # Materialize the timeline gap as real samples. Very long
+                # ``adelay`` chains could lose the tail of an independent
+                # track once camera audio ended and the timeline continued
+                # with still images. A silence-prefix concat is deterministic
+                # for music, narration and SFX at any timeline position.
+                prefix_label = f"bgmprefix{audio_index}"
+                aligned_label = f"bgmaligned{audio_index}"
+                filters.append(
+                    f"anullsrc=r={self.project.project.sample_rate}:cl=stereo,"
+                    f"atrim=duration={_fmt(clip.timeline_start)}[{prefix_label}]"
+                )
+                filters.append(
+                    f"[{prefix_label}][{pre_delay_label}]"
+                    f"concat=n=2:v=0:a=1[{aligned_label}]"
+                )
+            post_chain: list[str] = []
             for duck in ducking_regions:
                 if audio_track.id not in set(duck.get("target_tracks") or []):
                     continue
@@ -757,15 +774,17 @@ class GraphBuilder:
                     f"if(lt(t\\,{_fmt(end + release)})\\,"
                     f"{_fmt(gain)}+(1-{_fmt(gain)})*(t-{_fmt(end)})/{_fmt(release)}\\,1))))"
                 )
-                audio_chain.append(f"volume='{expression}':eval=frame")
-            audio_chain.extend(
+                post_chain.append(f"volume='{expression}':eval=frame")
+            post_chain.extend(
                 [
                     f"apad=whole_dur={_fmt(current_duration)}",
                     f"atrim=duration={_fmt(current_duration)}",
                 ]
             )
             label = f"bgm{audio_index}"
-            filters.append(",".join(audio_chain) + f"[{label}]")
+            filters.append(
+                f"[{aligned_label}]" + ",".join(post_chain) + f"[{label}]"
+            )
             mix_labels.append(label)
         if len(mix_labels) > 1:
             filters.append(
@@ -805,6 +824,33 @@ class GraphBuilder:
                 f"[{current_v}]subtitles=filename='{_filter_path(subtitle_file)}'[vtext]"
             )
             current_v = "vtext"
+
+        # Timeline-anchored fades do not have a neighbouring clip and therefore
+        # cannot be represented by xfade. Apply them to the completed composite
+        # (including subtitles/text) so a terminal fade-out really reaches the
+        # project background instead of being silently ignored.
+        anchor_number = 0
+        for transition in sorted(
+            (
+                item
+                for item in self.project.transitions
+                if item.from_clip_id is None
+                and item.to_clip_id is None
+                and item.track_id == track.id
+                and item.type in {"fade-in", "fade-out"}
+            ),
+            key=lambda item: (item.at or 0.0, item.id),
+        ):
+            start = float(transition.at or 0.0)
+            fade_type = "in" if transition.type == "fade-in" else "out"
+            output_label = f"vanchorfade{anchor_number}"
+            filters.append(
+                f"[{current_v}]fade=t={fade_type}:st={_fmt(start)}:"
+                f"d={_fmt(transition.duration)}:color={self.project.project.background}"
+                f"[{output_label}]"
+            )
+            current_v = output_label
+            anchor_number += 1
 
         output_duration = current_duration
         if range_from is not None or range_to is not None:

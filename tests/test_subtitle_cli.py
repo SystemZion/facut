@@ -177,3 +177,23 @@ def test_lingang_template_is_discoverable_and_persisted(tmp_path) -> None:
     assert overlay["template"] == "lingang-cinematic-mint"
     assert overlay["subtitle"] == "同一条雪道，重新滑下"
     assert overlay["template_parameters"]["accent_color"] == "#74EFCB"
+    assert overlay["style"]["font_size"] == 46.0
+    assert overlay["style"]["safe_area"] is True
+
+
+def test_explicit_text_options_override_template(tmp_path) -> None:
+    project = tmp_path / "travel"
+    _json(runner.invoke(app, ["--json", "init", str(project)]))
+    result = _json(
+        runner.invoke(
+            app,
+            [
+                "--project", str(project), "--json", "text", "add",
+                "--text", "Override", "--at", "0", "--duration", "2s",
+                "--template", "lingang-main-title", "--font-size", "70",
+                "--no-safe-area",
+            ],
+        )
+    )
+    assert result["data"]["result"]["style"]["font_size"] == 70.0
+    assert result["data"]["result"]["style"]["safe_area"] is False

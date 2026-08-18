@@ -5,7 +5,21 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前版本 `0.7.1` 稳定了 LRF/CutGraph 专业执行链路：拒绝旧版 FFmpeg、静态图片默认 5 秒并支持 `timeline add --duration`、响度只重编码音频且复用画面母版、AAC 真峰值带安全余量和封装后复测。Windows 单文件发行版内置 FFmpeg/FFprobe，不依赖系统 Python。
+当前开发版本 `0.8.1` 稳定了质量优先的 Vlog Director：公开 Agent 可原子应用 StoryGraph，自动硬件选择会试跑编码器，事件链保持同一人物的“发生—恢复—结果”，标题模板遵循显式参数优先级，带转场时间线也能复用未变化渲染节点。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+
+最短工作流：
+
+```powershell
+facut vlog prepare D:\Trip --project D:\Trip-Project
+facut --project D:\Trip-Project vlog inspect next --json
+facut --project D:\Trip-Project vlog observe observations.json
+facut --project D:\Trip-Project vlog plan --style comedy-vlog --target-duration 480
+facut --project D:\Trip-Project vlog preview --all-candidates
+facut --project D:\Trip-Project vlog refine candidate-narrative --auto
+facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-4k -o D:\Trip-Final\final.mp4
+```
+
+`vlog run ... --auto` 也遵守同一质量门：缺少外部视觉观察或 ASR 中存在待复审词时返回 `REVIEW_REQUIRED`，不会伪造成功。字幕正文使用统一易读字体；科技、人文、风景、喜剧、家庭和美食标题通过逻辑字体角色匹配本机已授权字体，最终渲染前强制检查缺字。
 
 ## 安装
 
@@ -174,9 +188,10 @@ facut --project vlog clip speed clip_01 --curve speed.json
 ```powershell
 facut render -o final.mp4 --loudness -14 --true-peak -1 --lra 11
 facut render -o final.mp4 --burn-subtitle lyrics.ass
+facut render -o clean-master.mp4 --no-project-subtitles
 ```
 
-ASS 文件原样交给 libass，支持 `\\kf` 卡拉 OK 标签和系统用户字体。每次常规渲染都会把命令参数、滤镜图和 FFmpeg stderr 写到工程 `logs/render-*.log`；失败时终端显示末 20 行并返回日志路径。
+`--no-project-subtitles` 只影响本次输出，不修改工程中的字幕或标题。ASS 文件原样交给 libass，支持 `\\kf` 卡拉 OK 标签和系统用户字体。每次常规渲染都会把命令参数、滤镜图和 FFmpeg stderr 写到工程 `logs/render-*.log`；失败时终端显示末 20 行并返回日志路径。
 
 ## 转场、效果与插件
 
@@ -328,6 +343,13 @@ facut voice serve status --json
 `voice studio` 不要求预先创建声音 ID。首次打开可直接输入任意名称并确认本人/已授权关系；`quick` 为 3 条快速试录，`recommended` 为 8 条常见 VLOG 句型，`styles` 为 5 条风格胶囊。档案内部继续使用稳定 ID，命令可使用唯一 alias 或唯一显示名称；重名时返回 `VOICE_AMBIGUOUS`，不会猜测。
 
 `voice serve` 只绑定 `127.0.0.1`，使用随机令牌和本机状态文件。新版 CosyVoice provider 的 `--facut-voice-jsonl` 模式会在同一进程中保留模型；`--require-cuda` 下无法验证 CUDA 时直接失败，不静默回到 CPU。模型目录继续通过 `facut models link voice_model <path>` 独立配置，不进入 EXE 或 GitHub。
+
+没有 NVIDIA GPU 时，可在用户配置的 `[voice]` 段设置外部 CPU PyTorch
+`cpu_overlay`。此时 `--device auto` 会在一次性合成和常驻服务中统一选择
+CPU，避免断开 eGPU 后导入 CUDA 运行时崩溃；需要 GPU 时使用
+`--device cuda --require-cuda`，该组合绝不降级。`--device cpu` 与
+`--require-cuda` 互相矛盾，会在启动模型前返回参数错误。overlay、模型和
+个人声音样本始终位于用户配置的外部目录，不打入 EXE 或 GitHub。
 
 ## 声明式 Recipe
 

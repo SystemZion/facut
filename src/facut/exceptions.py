@@ -71,3 +71,10 @@ class DependencyMissingError(FacutError):
 class NotImplementedFacutError(FacutError):
     code = "NOT_IMPLEMENTED"
     exit_code = ExitCode.INVALID_ARGUMENT
+
+
+class ReviewRequiredError(FacutError):
+    """Automation stopped because evidence or an explicit review is still required."""
+
+    code = "REVIEW_REQUIRED"
+    exit_code = ExitCode.INVALID_ARGUMENT

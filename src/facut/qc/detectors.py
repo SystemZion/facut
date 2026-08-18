@@ -208,17 +208,34 @@ def check_silence(
                 "duration": media_duration - open_start,
             }
         )
-    status = QCStatus.WARNING if segments else QCStatus.PASS
+    terminal_fade_segments: list[dict[str, float]] = []
+    abnormal_segments: list[dict[str, float]] = []
+    for segment in segments:
+        is_short_terminal_fade = (
+            media_duration is not None
+            and segment["end"] >= media_duration - 0.1
+            and segment["duration"] <= 3.0
+        )
+        if is_short_terminal_fade:
+            terminal_fade_segments.append(segment)
+        else:
+            abnormal_segments.append(segment)
+    status = QCStatus.WARNING if abnormal_segments else QCStatus.PASS
     summary = (
-        f"Detected {len(segments)} silence segment(s)."
-        if segments
-        else "No silence segment met the configured threshold."
+        f"Detected {len(abnormal_segments)} silence segment(s)."
+        if abnormal_segments
+        else (
+            "Only an intentional short terminal fade was detected."
+            if terminal_fade_segments
+            else "No silence segment met the configured threshold."
+        )
     )
     return CheckResult(
         status=status,
         summary=summary,
         data={
-            "segments": segments,
+            "segments": abnormal_segments,
+            "terminal_fade_segments": terminal_fade_segments,
             "threshold_db": threshold_db,
             "minimum_duration_seconds": minimum_duration,
         },

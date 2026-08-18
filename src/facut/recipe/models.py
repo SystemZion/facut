@@ -84,6 +84,11 @@ class RecipeNarration(RecipeModel):
     allow_stale: bool = False
 
 
+class RecipeVlogDirector(RecipeModel):
+    candidate_id: str = Field(min_length=1)
+    preset: str = "youtube-4k"
+
+
 class RecipeRender(RecipeModel):
     output: str | None = None
     preset: str | None = None
@@ -98,6 +103,7 @@ class RecipeDocument(RecipeModel):
     transitions: list[RecipeTransition] = Field(default_factory=list)
     commands: list[dict[str, Any]] = Field(default_factory=list)
     narration: RecipeNarration | None = None
+    vlog: RecipeVlogDirector | None = None
     render: RecipeRender | None = None
     qc: dict[str, Any] | None = None
 
@@ -112,7 +118,7 @@ class RecipeDocument(RecipeModel):
         for command in self.commands:
             if not isinstance(command.get("action"), str) or not command["action"]:
                 raise ValueError("every recipe command requires a non-empty action")
-        if not any((self.tracks, self.clips, self.transitions, self.commands, self.narration, self.render, self.qc)):
+        if not any((self.tracks, self.clips, self.transitions, self.commands, self.narration, self.vlog, self.render, self.qc)):
             raise ValueError("recipe must declare at least one operation")
         return self
 
