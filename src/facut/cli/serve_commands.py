@@ -527,7 +527,7 @@ def serve_command(
                         task_id=params.get("task_id"),
                     )
                 elif method == "vlog.status":
-                    data = director_status(manager.project_dir)
+                    data = director_status(manager.project_dir, manager.require_document())
                 elif method == "vlog.plan":
                     data = build_story_candidates(
                         manager.require_document(),
@@ -546,12 +546,29 @@ def serve_command(
                     "warnings": data.get("warnings", []) if isinstance(data, dict) else [],
                     "errors": [], "project_revision": manager.require_document().revision,
                 }
-            elif method in {"vlog.preview", "vlog.build"}:
+            elif method in {"vlog.apply", "vlog.preview", "vlog.build"}:
                 from facut.cli.vlog_commands import _build_and_render
                 from facut.render import FFmpegBackend
                 from facut.vlog import candidate_document, compare_story_candidates
 
-                if method == "vlog.preview":
+                if method == "vlog.apply":
+                    applied = CommandEngine(manager).run_batch(
+                        {
+                            "version": "1.0",
+                            "atomic": True,
+                            "actor": "agent",
+                            "intent": "Apply VLOG StoryGraph candidate",
+                            "commands": [
+                                {
+                                    "action": "vlog.apply",
+                                    "candidate_id": str(params["candidate_id"]),
+                                    "preset": str(params.get("preset", "youtube-4k")),
+                                }
+                            ],
+                        }
+                    )
+                    data = applied["data"]
+                elif method == "vlog.preview":
                     comparison = compare_story_candidates(manager.project_dir)
                     candidate_ids = [item["id"] for item in comparison["candidates"]]
                     selected_ids = (

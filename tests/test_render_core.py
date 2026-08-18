@@ -17,6 +17,7 @@ from facut.core.models import (
     SubtitleCue,
     TextOverlay,
     TextStyle,
+    Transition,
 )
 from facut.core.timeline_engine import TimelineEngine
 from facut.render.cache import cache_key
@@ -118,12 +119,43 @@ def test_cache_key_changes_with_source_state(tmp_path: Path) -> None:
     assert first != second
 
 
+def test_timeline_anchor_fade_out_is_applied_to_completed_video(tmp_path: Path) -> None:
+    """A terminal fade without adjacent clips must not be silently ignored."""
+
+    for name in ("red.mp4", "blue.mp4"):
+        (tmp_path / name).write_bytes(b"placeholder")
+    document = _document(tmp_path)
+    document.transitions.append(
+        Transition(
+            type="fade-out",
+            duration=0.5,
+            track_id="V1",
+            at=3.0,
+        )
+    )
+
+    graph = GraphBuilder(document, tmp_path).build()
+
+    assert "fade=t=out:st=3:d=0.5:color=#000000" in graph.filter_complex
+
+
 def test_hardware_unavailable_falls_back() -> None:
     choice = choose_h264_encoder(
         "unused", "nvenc", encoders={"libx264"}
     )
     assert choice.encoder == "libx264"
     assert choice.warnings
+
+
+def test_hardware_auto_skips_listed_but_unusable_encoder() -> None:
+    choice = choose_h264_encoder(
+        "unused",
+        "auto",
+        encoders={"h264_nvenc", "h264_qsv", "libx264"},
+        usable_encoders={"h264_qsv"},
+    )
+    assert choice.encoder == "h264_qsv"
+    assert choice.hardware == "qsv"
 
 
 def test_graph_contains_real_xfade(tmp_path: Path) -> None:
@@ -155,7 +187,7 @@ def test_graph_compiles_narration_music_ducking_with_ramps(tmp_path: Path) -> No
     timeline = TimelineEngine(document)
     track = timeline.add_track("audio", "Music", "A_MUSIC")
     track.metadata["role"] = "music"
-    timeline.add_audio_clip("music", "A_MUSIC", source_out=3.5)
+    timeline.add_audio_clip("music", "A_MUSIC", at=0.5, source_out=3.0)
     document.settings["audio_ducking"] = [
         {
             "source_track": "A_NARRATION",
@@ -171,6 +203,9 @@ def test_graph_compiles_narration_music_ducking_with_ramps(tmp_path: Path) -> No
     assert "volume='if(lt(t\\,0.9)" in graph.filter_complex
     assert "1-(1-0.251" in graph.filter_complex
     assert "eval=frame" in graph.filter_complex
+    assert "anullsrc=r=48000:cl=stereo,atrim=duration=0.5[bgmprefix0]" in graph.filter_complex
+    assert "[bgmprefix0][bgmpredelay0]concat=n=2:v=0:a=1[bgmaligned0]" in graph.filter_complex
+    assert "adelay=" not in graph.filter_complex
 
 
 def test_keyframed_position_is_evaluated_by_overlay_not_pad(tmp_path: Path) -> None:

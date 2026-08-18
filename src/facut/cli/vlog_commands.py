@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -169,6 +170,28 @@ def _render_active(
         json.dumps(qc_report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    delivery = {
+        "status": "pass" if qc_report.status.value == "pass" else "review_required",
+        "output": str(Path(result.output).resolve()),
+        "preset": preset,
+        "hardware": result.hardware,
+        "encoder": result.encoder,
+        "duration": result.duration,
+        "qc_report": str(qc_path.resolve()),
+        "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+    def record_delivery(document):
+        director = document.settings.setdefault("vlog_director", {})
+        director["delivery"] = delivery
+        return delivery
+
+    manager.mutate(
+        "vlog.delivery.record",
+        f"Recorded VLOG delivery {Path(result.output).name}",
+        record_delivery,
+        command={"candidate_id": candidate_id, "output": str(result.output), "preset": preset},
+    )
     return {
         "candidate_id": candidate_id,
         "output": str(result.output),
@@ -178,6 +201,7 @@ def _render_active(
         "loudness": result.loudness,
         "font_audit": font_audit,
         "qc": {"status": qc_report.status.value, "report": str(qc_path.resolve())},
+        "delivery": delivery,
     }, result
 
 
@@ -380,7 +404,7 @@ def vlog_status(ctx: typer.Context) -> None:
         _emit(
             ctx,
             command,
-            director_status(manager.project_dir),
+            director_status(manager.project_dir, manager.require_document()),
             revision=manager.require_document().revision,
         )
     except Exception as error:

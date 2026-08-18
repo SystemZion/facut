@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import sys
 import time
@@ -33,7 +34,7 @@ import torchaudio
 
 PROTOCOL = "facut-voice-provider/1.0"
 MODEL_VERSION = "Fun-CosyVoice3-0.5B-2512"
-REFERENCE_PROCESSING_VERSION = "v2"
+REFERENCE_PROCESSING_VERSION = "v3-candidate-seed"
 STREAM_PROTOCOL = "facut-voice-provider-jsonl/1.0"
 _MODEL_CONTEXT: dict[str, Any] | None = None
 
@@ -75,7 +76,15 @@ REFERENCE_HINTS = {
     "comedy": ("delivery:comedy", "拿着三部手机", "不同的方向"),
     "excited": ("delivery:excited", "prompt_010", "快看", "真的到了", "开心"),
     "natural-vlog": ("prompt_002", "prompt_007", "刚走", "你觉得", "如果", "时候"),
-    "warm": ("prompt_004", "prompt_009", "prompt_010", "刚刚好", "有些", "孩子", "开心"),
+    "warm": (
+        "prompt_004",
+        "prompt_009",
+        "prompt_010",
+        "刚刚好",
+        "有些",
+        "孩子",
+        "开心",
+    ),
     "reflective": ("prompt_007", "prompt_009", "愿意", "瞬间", "真实"),
     "energetic": ("prompt_001", "prompt_010", "出发", "开心"),
     "documentary": ("prompt_003", "prompt_008", "现在是", "画面", "变化"),
@@ -99,14 +108,10 @@ def _configuration() -> dict[str, str]:
 def _paths() -> tuple[Path, Path, Path | None]:
     config = _configuration()
     runtime = Path(
-        os.environ.get("FACUT_COSYVOICE_RUNTIME")
-        or config.get("runtime")
-        or ""
+        os.environ.get("FACUT_COSYVOICE_RUNTIME") or config.get("runtime") or ""
     ).expanduser()
     model = Path(
-        os.environ.get("FACUT_COSYVOICE_MODEL")
-        or config.get("model")
-        or ""
+        os.environ.get("FACUT_COSYVOICE_MODEL") or config.get("model") or ""
     ).expanduser()
     wetext_value = os.environ.get("FACUT_COSYVOICE_WETEXT") or config.get("wetext")
     wetext = Path(wetext_value).expanduser() if wetext_value else None
@@ -158,12 +163,16 @@ def _select_reference(
             f"category:{sample.get('category') or ''} "
             f"{sample.get('original_name') or ''} {transcript}"
         )
-        score += sum(3.0 for hint in REFERENCE_HINTS.get(delivery, ()) if hint in searchable)
+        score += sum(
+            3.0 for hint in REFERENCE_HINTS.get(delivery, ()) if hint in searchable
+        )
         if peak >= 0.999:
             score -= 20
         candidates.append((float(score), path, transcript, str(sample.get("id") or "")))
     if not candidates:
-        raise ValueError("No 3-20 second voice sample with an exact transcript is available.")
+        raise ValueError(
+            "No 3-20 second voice sample with an exact transcript is available."
+        )
     _, source, transcript, sample_id = max(candidates, key=lambda item: item[0])
     derived = profile_directory / "derived" / "cosyvoice3"
     derived.mkdir(parents=True, exist_ok=True)
@@ -172,7 +181,9 @@ def _select_reference(
     if not reference.is_file():
         data, sample_rate = soundfile.read(source, dtype="float32", always_2d=True)
         mono = data.mean(axis=1)
-        mono = sosfilt(butter(2, 70, btype="highpass", fs=sample_rate, output="sos"), mono)
+        mono = sosfilt(
+            butter(2, 70, btype="highpass", fs=sample_rate, output="sos"), mono
+        )
         # Preserve breaths while removing only long, near-silent edges.
         peak = float(np.max(np.abs(mono)))
         activity_threshold = max(10 ** (-50 / 20), peak * 0.008)
@@ -216,12 +227,16 @@ def _instruction(line: dict[str, Any], delivery: str) -> str:
     custom = str(line.get("instruction") or "").strip()
     if len(custom) > 300:
         raise ValueError("Voice instruction must be 300 characters or fewer.")
-    guidance = " ".join(part for part in (DELIVERY_INSTRUCTIONS.get(delivery, ""), custom) if part)
+    guidance = " ".join(
+        part for part in (DELIVERY_INSTRUCTIONS.get(delivery, ""), custom) if part
+    )
     return f"You are a helpful assistant. {guidance}<|endofprompt|>"
 
 
 def _split_for_prosody(text: str, max_chars: int = 38) -> list[str]:
-    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])", text) if item.strip()]
+    sentences = [
+        item.strip() for item in re.split(r"(?<=[。！？!?；;])", text) if item.strip()
+    ]
     chunks: list[str] = []
     for sentence in sentences or [text]:
         if len(sentence) <= max_chars:
@@ -266,6 +281,24 @@ def _output_path(
     return directory / f"line-{index + 1:03d}-{digest}.wav"
 
 
+def _generation_seed(profile_id: str, text: str, line: dict[str, Any]) -> int:
+    """Return a stable, candidate-specific seed for reproducible audition takes."""
+
+    identity = {
+        "model": MODEL_VERSION,
+        "profile": profile_id,
+        "text": text,
+        "delivery": line.get("delivery"),
+        "instruction": line.get("instruction"),
+        "speed": line.get("speed", 1.0),
+        "candidate": line.get("candidate_index", 0),
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
+
+
 def _load_model_context() -> dict[str, Any]:
     """Load CosyVoice once per provider process and expose honest device state."""
 
@@ -280,9 +313,13 @@ def _load_model_context() -> dict[str, Any]:
     cuda_available = torch.cuda.is_available()
     require_cuda = os.environ.get("FACUT_VOICE_REQUIRE_CUDA") == "1"
     if require_cuda and not cuda_available:
-        raise RuntimeError("CUDA was required, but PyTorch cannot access a CUDA device.")
+        raise RuntimeError(
+            "CUDA was required, but PyTorch cannot access a CUDA device."
+        )
     if requested_device == "cuda" and not cuda_available:
-        raise RuntimeError("CUDA was requested, but PyTorch cannot access a CUDA device.")
+        raise RuntimeError(
+            "CUDA was requested, but PyTorch cannot access a CUDA device."
+        )
     device = "cuda" if cuda_available and requested_device != "cpu" else "cpu"
     matcha = runtime / "third_party" / "Matcha-TTS"
     sys.path.insert(0, str(runtime))
@@ -351,7 +388,11 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
         destination = _output_path(
             output_directory, str(profile.get("id")), index, text, line
         )
-        if not line.get("force") and destination.is_file() and destination.stat().st_size > 44:
+        if (
+            not line.get("force")
+            and destination.is_file()
+            and destination.stat().st_size > 44
+        ):
             info = soundfile.info(destination)
             outputs.append(
                 {
@@ -370,17 +411,29 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         started = time.perf_counter()
+        seed = _generation_seed(str(profile.get("id")), text, line)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if context["cuda"]:
+            torch.cuda.manual_seed_all(seed)
         with redirect_stdout(sys.stderr):
             parts: list[torch.Tensor] = []
             for segment_index, segment in enumerate(segments):
                 if delivery == "reference":
                     generated = model.inference_zero_shot(
-                        segment, prompt, str(reference), stream=False,
+                        segment,
+                        prompt,
+                        str(reference),
+                        stream=False,
                         speed=float(line.get("speed", 1.0)),
                     )
                 else:
                     generated = model.inference_instruct2(
-                        segment, instruction, str(reference), stream=False,
+                        segment,
+                        instruction,
+                        str(reference),
+                        stream=False,
                         speed=float(line.get("speed", 1.0)),
                     )
                 parts.extend(item["tts_speech"].detach().cpu() for item in generated)
@@ -391,7 +444,9 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError("CosyVoice3 returned no audio.")
         speech = torch.cat(parts, dim=1).squeeze(0).numpy()
         temporary = destination.with_suffix(".wav.tmp")
-        soundfile.write(temporary, speech, model.sample_rate, subtype="PCM_16", format="WAV")
+        soundfile.write(
+            temporary, speech, model.sample_rate, subtype="PCM_16", format="WAV"
+        )
         os.replace(temporary, destination)
         duration = speech.shape[0] / model.sample_rate
         outputs.append(
@@ -407,6 +462,7 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
                 "segments": segments,
                 "reference_sample_id": reference_sample_id,
                 "candidate_index": int(line.get("candidate_index", 0)),
+                "generation_seed": seed,
                 "timeline_range": line.get("timeline_range"),
             }
         )
@@ -440,7 +496,10 @@ def _stream_ready() -> dict[str, Any]:
 
 
 def _run_jsonl() -> None:
-    print(json.dumps(_stream_ready(), ensure_ascii=True, separators=(",", ":")), flush=True)
+    print(
+        json.dumps(_stream_ready(), ensure_ascii=True, separators=(",", ":")),
+        flush=True,
+    )
     for raw in sys.stdin:
         try:
             request = json.loads(raw)
@@ -450,14 +509,18 @@ def _run_jsonl() -> None:
         except Exception as error:
             print(
                 f"{error.__class__.__name__}: {error}\n"
-                + traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii"),
+                + traceback.format_exc()
+                .encode("ascii", "backslashreplace")
+                .decode("ascii"),
                 file=sys.stderr,
             )
             response = {
                 "status": "error",
                 "error": {"code": "VOICE_PROVIDER_FAILED", "message": str(error)},
             }
-        print(json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True)
+        print(
+            json.dumps(response, ensure_ascii=True, separators=(",", ":")), flush=True
+        )
 
 
 def main() -> None:
@@ -467,7 +530,9 @@ def main() -> None:
         except Exception as error:
             print(f"{error.__class__.__name__}: {error}", file=sys.stderr)
             print(
-                traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii"),
+                traceback.format_exc()
+                .encode("ascii", "backslashreplace")
+                .decode("ascii"),
                 file=sys.stderr,
             )
             raise SystemExit(1) from error

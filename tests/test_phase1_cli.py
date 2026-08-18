@@ -44,6 +44,21 @@ def test_version() -> None:
     assert result.stdout.strip().startswith("facut ")
 
 
+def test_render_help_exposes_clean_master_subtitle_switch() -> None:
+    result = runner.invoke(app, ["render", "--help"], terminal_width=160)
+    assert result.exit_code == 0
+    render_options = {
+        option
+        for parameter in get_command(app).commands["render"].params
+        for option in (
+            *getattr(parameter, "opts", ()),
+            *getattr(parameter, "secondary_opts", ()),
+        )
+    }
+    assert "--project-subtitles" in render_options
+    assert "--no-project-subtitles" in render_options
+
+
 def test_doctor_json_is_single_response() -> None:
     result = runner.invoke(app, ["doctor", "--json"])
     assert result.exit_code == 0, result.stdout

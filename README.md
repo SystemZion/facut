@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.8.0` 增加了质量优先的 Vlog Director：FACUT 为外部视觉 AI 生成可恢复的分层审片任务，保存严格证据，制作三版 StoryGraph，再确定性执行字幕、特色字体、声音包装、QC 和原片 4K 交付。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+当前开发版本 `0.8.1` 稳定了质量优先的 Vlog Director：公开 Agent 可原子应用 StoryGraph，自动硬件选择会试跑编码器，事件链保持同一人物的“发生—恢复—结果”，标题模板遵循显式参数优先级，带转场时间线也能复用未变化渲染节点。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
 
 最短工作流：
 
@@ -188,9 +188,10 @@ facut --project vlog clip speed clip_01 --curve speed.json
 ```powershell
 facut render -o final.mp4 --loudness -14 --true-peak -1 --lra 11
 facut render -o final.mp4 --burn-subtitle lyrics.ass
+facut render -o clean-master.mp4 --no-project-subtitles
 ```
 
-ASS 文件原样交给 libass，支持 `\\kf` 卡拉 OK 标签和系统用户字体。每次常规渲染都会把命令参数、滤镜图和 FFmpeg stderr 写到工程 `logs/render-*.log`；失败时终端显示末 20 行并返回日志路径。
+`--no-project-subtitles` 只影响本次输出，不修改工程中的字幕或标题。ASS 文件原样交给 libass，支持 `\\kf` 卡拉 OK 标签和系统用户字体。每次常规渲染都会把命令参数、滤镜图和 FFmpeg stderr 写到工程 `logs/render-*.log`；失败时终端显示末 20 行并返回日志路径。
 
 ## 转场、效果与插件
 

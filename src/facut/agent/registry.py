@@ -304,6 +304,18 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             ["output_dir"],
         ),
     },
+    "vlog.apply": {
+        "summary": "Atomically apply one ready StoryGraph candidate without rendering it.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "preset": {"type": "string", "default": "youtube-4k"},
+            },
+            ["candidate_id"],
+        ),
+    },
     "vlog.build": {
         "summary": "Commit one ready candidate and render an original-media platform delivery.",
         "mutates": True,

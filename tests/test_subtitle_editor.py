@@ -97,3 +97,15 @@ def test_lingang_template_compiles_vector_panel_and_bilingual_layers() -> None:
     assert "LOOK UP · THE SCALE CHANGES" in plan.content
     assert "FFE166" in plan.content  # ASS BGR form of #66E1FF.
     assert "Fontsize" in plan.content
+
+
+def test_default_caption_style_scales_for_4k_and_uses_cjk_font() -> None:
+    project = _project()
+    project.project.width = 3840
+    project.project.height = 2160
+    import_cues(project, "S1", [ParsedCue(1, 2, "上海天文馆")])
+
+    plan = SubtitleCompiler().compile(project)
+
+    assert "Style: Style0,Source Han Sans SC,104," in plan.content
+    assert ",4,2,2," in plan.content

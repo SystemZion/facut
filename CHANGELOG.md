@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.1 — 2026-08-18
+
+- Registered atomic `vlog.apply` across Agent schema, batch, Recipe, and JSON-RPC surfaces.
+- Hardware `auto` now initializes listed encoders and skips unusable NVENC/AMF devices before selecting QSV or software.
+- Preserved text-template typography with `explicit option > template > system default` precedence.
+- Added same-subject event-chain evidence and deterministic incident/recovery ordering with review-required failures.
+- Recorded built/delivered VLOG outputs and QC state for accurate `vlog status` responses.
+- Extended incremental rendering to cache unchanged clips and connected transition units instead of always falling back to a full render.
+- Forced non-preset renders to the project's audio sample rate, preventing 48 kHz projects from inheriting 96 kHz camera audio.
+- Rendered timeline-anchored fade-in/out transitions on the completed picture and cached terminal fades with only their affected segment.
+- Replaced long independent-track delays with silence-prefix concatenation so music and narration survive still-image epilogues.
+- Added `--no-project-subtitles` for clean-master delivery without modifying editable subtitle or title tracks.
+- Classified short terminal fade silence separately from abnormal QC silence, while retaining the measured interval in reports.
+- Skipped NVENC initialization entirely in `auto` mode when no NVIDIA device is reported, allowing direct QSV selection.
+
 ## 0.8.0 — 2026-08-17
 
 ### Vlog Director

@@ -335,14 +335,24 @@ def ingest_observations(
     }
 
 
-def director_status(project_dir: str | Path) -> dict[str, Any]:
+def director_status(
+    project_dir: str | Path, document: ProjectDocument | None = None
+) -> dict[str, Any]:
     root = _root(project_dir)
     manifest = _read_json(root / "manifest.json", {"assets": [], "excluded": []})
     tasks = _read_json(root / "tasks.json", {"tasks": []})
     observations = _read_json(root / "observations.json", {"observations": []})
     story = _read_json(root / "story.plan.json")
     pending = [item for item in tasks["tasks"] if item["status"] == "pending"]
-    if not manifest["assets"]:
+    applied = {} if document is None else document.settings.get("vlog_director", {})
+    delivery = applied.get("delivery", {}) if isinstance(applied, dict) else {}
+    if delivery.get("status") == "pass":
+        stage, next_command = "delivered", "facut qc <output>"
+    elif delivery:
+        stage, next_command = "built", "facut qc <output>"
+    elif applied.get("candidate_id"):
+        stage, next_command = "applied", "facut render --output <output>"
+    elif not manifest["assets"]:
         stage, next_command = "not_prepared", "facut vlog prepare <source>"
     elif pending:
         stage, next_command = "inspection", "facut vlog inspect next"
@@ -352,7 +362,7 @@ def director_status(project_dir: str | Path) -> dict[str, Any]:
         stage, next_command = "story_review", "facut vlog compare"
     else:
         stage, next_command = "ready_to_build", f"facut vlog build {story.get('selected_candidate_id') or '<candidate-id>'}"
-    return {
+    result = {
         "stage": stage,
         "asset_count": len(manifest["assets"]),
         "excluded_count": len(manifest["excluded"]),
@@ -361,6 +371,11 @@ def director_status(project_dir: str | Path) -> dict[str, Any]:
         "next_command": next_command,
         "quality_policy": "quality-first",
     }
+    if applied.get("candidate_id"):
+        result["candidate_id"] = applied["candidate_id"]
+    if delivery:
+        result["delivery"] = delivery
+    return result
 
 
 def _observation_text(item: EvidenceObservation) -> str:
@@ -370,6 +385,10 @@ def _observation_text(item: EvidenceObservation) -> str:
 
 
 def _stage(item: EvidenceObservation) -> str:
+    if item.story_role == "incident":
+        return "change"
+    if item.story_role in {"recovery", "outcome"}:
+        return "climax"
     text = _observation_text(item)
     scored = [(stage, sum(token.casefold() in text for token in tokens)) for stage, tokens in STAGES.items()]
     selected, score = max(scored, key=lambda pair: pair[1])
@@ -434,10 +453,206 @@ def _candidate(
             selected_ids.add(item.observation_id)
             cursor += duration
             used += duration
+    observation_by_id = {item.observation_id: item for item in observations}
+
+    # Explicit event chains are hard story constraints.  If an incident has a
+    # recovery/outcome, keep the complete same-subject sequence and replace an
+    # unrelated lower-ranked shot in that stage instead of dropping resolution.
+    chains: dict[str, list[EvidenceObservation]] = {}
+    for item in observations:
+        if item.event_chain:
+            chains.setdefault(item.event_chain, []).append(item)
+    required_chain_ids: set[str] = set()
+    for chain_items in chains.values():
+        roles = {item.story_role for item in chain_items}
+        if "incident" not in roles or not roles.intersection({"recovery", "outcome"}):
+            continue
+        ordered = sorted(
+            chain_items,
+            key=lambda item: (
+                item.event_order if item.event_order is not None else 10**9,
+                item.range.start,
+            ),
+        )
+        for evidence in ordered:
+            required_chain_ids.add(evidence.observation_id)
+            if evidence.observation_id in selected_ids:
+                continue
+            stage = _stage(evidence)
+            replaceable = [
+                segment
+                for segment in segments
+                if segment.stage == stage and segment.observation_id not in required_chain_ids
+            ]
+            if replaceable:
+                victim = min(
+                    replaceable,
+                    key=lambda segment: _rank(
+                        observation_by_id[segment.observation_id], strategy, style
+                    ),
+                )
+                segments.remove(victim)
+                selected_ids.discard(victim.observation_id)
+            duration = min(evidence.range.end - evidence.range.start, 8.0)
+            stage_candidates = [item for item in observations if _stage(item) == stage]
+            segments.append(
+                StorySegment(
+                    stage=stage,
+                    media_id=evidence.media_id,
+                    source_in=evidence.range.start,
+                    source_out=evidence.range.start + duration,
+                    timeline_start=0,
+                    duration=duration,
+                    observation_id=evidence.observation_id,
+                    reason=(
+                        f"Required event-chain beat {evidence.event_chain} "
+                        f"({evidence.story_role}, order {evidence.event_order})."
+                    ),
+                    confidence=evidence.confidence,
+                    evidence_frames=evidence.evidence_frames,
+                    preserve_original_audio=evidence.original_audio_value == "high",
+                    alternatives=[
+                        item.observation_id
+                        for item in stage_candidates
+                        if item.observation_id != evidence.observation_id
+                    ][:3],
+                )
+            )
+            selected_ids.add(evidence.observation_id)
+
+    # Stage quotas preserve the intended story shape, but sparse stages must
+    # not make a requested long-form edit silently come out much shorter. Once
+    # every stage has had its first pass and explicit event chains are complete,
+    # redistribute unused duration to the best remaining evidence. The final
+    # item is trimmed to the requested duration so downstream code never needs
+    # to pad or repeat footage merely to meet the requested runtime.
+    selected_duration = sum(segment.duration for segment in segments)
+    for segment in sorted(
+        segments,
+        key=lambda item: -_rank(observation_by_id[item.observation_id], strategy, style),
+    ):
+        remaining = target_duration - selected_duration
+        if remaining <= 1e-6:
+            break
+        evidence = observation_by_id[segment.observation_id]
+        maximum = min(evidence.range.end - evidence.range.start, 8.0)
+        extra = min(maximum - segment.duration, remaining)
+        if extra <= 0:
+            continue
+        segment.duration += extra
+        segment.source_out += extra
+        selected_duration += extra
+
+    required_chain_stages = {
+        _stage(observation_by_id[item_id]) for item_id in required_chain_ids
+    }
+    required_chain_subjects = {
+        observation_by_id[item_id].subject_id
+        for item_id in required_chain_ids
+        if observation_by_id[item_id].subject_id
+    }
+    remaining_evidence = [
+        item
+        for item in observations
+        if item.observation_id not in selected_ids
+        and not (
+            _stage(item) in required_chain_stages
+            and item.subject_id not in required_chain_subjects
+            and any(
+                token in _observation_text(item)
+                for token in ("reaction", "反应", "恢复", "recovery")
+            )
+        )
+    ]
+    remaining_evidence.sort(
+        key=lambda item: (
+            -_rank(item, strategy, style),
+            stage_order.index(_stage(item)),
+            item.range.start,
+        )
+    )
+    for evidence in remaining_evidence:
+        remaining = target_duration - selected_duration
+        if remaining <= 1e-6:
+            break
+        available = evidence.range.end - evidence.range.start
+        duration = min(available, 8.0, remaining)
+        if duration <= 0:
+            continue
+        stage = _stage(evidence)
+        stage_candidates = [item for item in observations if _stage(item) == stage]
+        segments.append(
+            StorySegment(
+                stage=stage,
+                media_id=evidence.media_id,
+                source_in=evidence.range.start,
+                source_out=evidence.range.start + duration,
+                timeline_start=0,
+                duration=duration,
+                observation_id=evidence.observation_id,
+                reason=(
+                    "Selected while redistributing unused story-stage duration; "
+                    f"evidence score {_rank(evidence, strategy, style):.3f}."
+                ),
+                confidence=evidence.confidence,
+                evidence_frames=evidence.evidence_frames,
+                preserve_original_audio=evidence.original_audio_value == "high",
+                alternatives=[
+                    item.observation_id
+                    for item in stage_candidates
+                    if item.observation_id != evidence.observation_id
+                ][:3],
+            )
+        )
+        selected_ids.add(evidence.observation_id)
+        selected_duration += duration
+
+    chain_order = {
+        item.observation_id: item.event_order if item.event_order is not None else 10**9
+        for items in chains.values()
+        for item in items
+    }
+    segments.sort(
+        key=lambda segment: (
+            stage_order.index(segment.stage),
+            chain_order.get(segment.observation_id, 10**8),
+            segment.source_in,
+        )
+    )
+    cursor = 0.0
+    for segment in segments:
+        segment.timeline_start = cursor
+        cursor += segment.duration
+
+    chain_issues: list[dict[str, Any]] = []
+    for chain_name, chain_items in chains.items():
+        roles = {item.story_role for item in chain_items}
+        if "incident" not in roles:
+            continue
+        subjects = {item.subject_id for item in chain_items if item.subject_id}
+        orders = [item.event_order for item in chain_items]
+        if not roles.intersection({"recovery", "outcome"}):
+            chain_issues.append(
+                {
+                    "code": "EVENT_CHAIN_INCOMPLETE",
+                    "severity": "error",
+                    "event_chain": chain_name,
+                    "message": "An incident has no recovery or outcome evidence.",
+                }
+            )
+        elif len(subjects) > 1 or any(order is None for order in orders) or len(set(orders)) != len(orders):
+            chain_issues.append(
+                {
+                    "code": "EVENT_CHAIN_AMBIGUOUS",
+                    "severity": "error",
+                    "event_chain": chain_name,
+                    "message": "Subject identity or event ordering is ambiguous.",
+                }
+            )
+
     mean_score = sum(_rank(item, strategy, style) for item in observations if item.observation_id in selected_ids)
     mean_score = mean_score / max(1, len(selected_ids))
     names = {"narrative": "叙事完整版", "immersive": "沉浸体验版", "visual": "视觉情绪版"}
-    observation_by_id = {item.observation_id: item for item in observations}
     transitions = []
     effects = []
     for index, segment in enumerate(segments):
@@ -484,8 +699,14 @@ def _candidate(
         estimated_duration=round(cursor, 6),
         segments=segments,
         missing_stages=missing,
-        unresolved_gaps=[{"code": "MISSING_STAGE", "stage": stage} for stage in missing],
-        continuity={"status": "review_required", "checked_fields": ["location", "daypart", "entities"]},
+        unresolved_gaps=[
+            *[{"code": "MISSING_STAGE", "stage": stage} for stage in missing],
+            *chain_issues,
+        ],
+        continuity={
+            "status": "review_required",
+            "checked_fields": ["location", "daypart", "entities", "subject_id", "event_chain"],
+        },
         sound_strategy={"preserve_original_audio_segments": sum(item.preserve_original_audio for item in segments)},
         subtitle_strategy={"dialogue": "readable-unified", "titles": "content-adaptive"},
         polish_plan={

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 
+from typer.testing import CliRunner
+
+from facut.cli.main import app
 from facut.core.models import MediaAsset, MediaKind, MediaTechnicalInfo
 from facut.core.project_manager import ProjectManager
 from facut.recipe import RecipeDocument, RecipeEngine
+from facut.agent import action_schema
 from facut.vlog import (
     build_story_candidates,
     compare_story_candidates,
@@ -130,6 +134,34 @@ def test_storygraph_builds_three_reviewable_candidates_and_comparison(tmp_path) 
     assert refined.status == "ready"
 
 
+def test_storygraph_redistributes_sparse_stage_duration(tmp_path) -> None:
+    manager = _manager(tmp_path, count=8)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=8)
+    ingest_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "observations": [
+                {
+                    "observation_id": f"obs_{index}",
+                    "media_id": f"media_{index}",
+                    "range": {"start": 0, "end": 10},
+                    "summary": "museum exploration detail",
+                    "tags": ["museum", "explore"],
+                    "quality": 0.9,
+                    "confidence": 0.9,
+                }
+                for index in range(8)
+            ]
+        },
+        task_id="inspect_0001",
+    )
+    plan = build_story_candidates(
+        manager.require_document(), manager.project_dir, target_duration=60
+    )
+    assert all(candidate.estimated_duration == 60 for candidate in plan.candidates)
+
+
 def test_story_planning_refuses_incomplete_visual_coverage(tmp_path) -> None:
     manager = _manager(tmp_path, count=2)
     prepare_evidence_manifest(manager, generate_frames=False, batch_size=2)
@@ -210,3 +242,147 @@ def test_ready_candidate_can_be_applied_atomically_from_recipe(tmp_path) -> None
     assert result["edit"]["project_revision"] == 2
     assert manager.require_document().settings["vlog_director"]["candidate_id"] == "candidate-narrative"
     assert manager.require_document().tracks[0].clips
+
+
+def test_ready_candidate_can_be_applied_atomically_from_cli_batch(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    manager.mutate("test.import", "Commit imported test media", lambda document: None)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=1)
+    ingest_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "observations": [
+                {
+                    "observation_id": "arrival",
+                    "media_id": "media_0",
+                    "range": {"start": 1, "end": 7},
+                    "summary": "抵达后的反应",
+                    "confidence": 0.95,
+                }
+            ]
+        },
+        task_id="inspect_0001",
+    )
+    build_story_candidates(manager.require_document(), manager.project_dir)
+    refine_story_candidate(manager.project_dir, "candidate-narrative")
+    batch = tmp_path / "apply.json"
+    batch.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "atomic": True,
+                "commands": [
+                    {"action": "vlog.apply", "candidate_id": "candidate-narrative"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        app,
+        ["--project", str(manager.project_dir), "--json", "run", str(batch)],
+    )
+    assert result.exit_code == 0, result.output
+    reloaded = ProjectManager(manager.project_dir)
+    reloaded.load()
+    assert reloaded.require_document().settings["vlog_director"]["candidate_id"] == "candidate-narrative"
+
+
+def test_vlog_apply_is_public_atomic_agent_action() -> None:
+    schema = action_schema("vlog.apply")
+    assert schema["rpc"] is True
+    assert schema["mutates"] is True
+    assert "candidate_id" in schema["parameters"]["required"]
+
+
+def test_event_chain_keeps_same_subject_incident_and_recovery(tmp_path) -> None:
+    manager = _manager(tmp_path, count=3)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=3)
+    ingest_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "observations": [
+                {
+                    "observation_id": "arrival",
+                    "media_id": "media_0",
+                    "range": {"start": 0, "end": 5},
+                    "summary": "抵达雪场",
+                    "tags": ["arrival"],
+                },
+                {
+                    "observation_id": "fall",
+                    "media_id": "media_1",
+                    "range": {"start": 1, "end": 5},
+                    "summary": "女士滑行后摔倒",
+                    "subject_id": "woman_01",
+                    "event_chain": "ski-fall-recovery",
+                    "event_order": 1,
+                    "story_role": "incident",
+                    "quality": 0.8,
+                },
+                {
+                    "observation_id": "recovery",
+                    "media_id": "media_1",
+                    "range": {"start": 6, "end": 11},
+                    "summary": "同一女士爬起来继续滑",
+                    "subject_id": "woman_01",
+                    "event_chain": "ski-fall-recovery",
+                    "event_order": 2,
+                    "story_role": "recovery",
+                    "quality": 0.3,
+                },
+                {
+                    "observation_id": "other-skier",
+                    "media_id": "media_2",
+                    "range": {"start": 2, "end": 10},
+                    "summary": "另一位滑雪者的高质量反应高潮",
+                    "tags": ["climax", "reaction"],
+                    "quality": 1.0,
+                    "confidence": 1.0,
+                },
+            ]
+        },
+        task_id="inspect_0001",
+    )
+    plan = build_story_candidates(
+        manager.require_document(), manager.project_dir, target_duration=18
+    )
+    for candidate in plan.candidates:
+        ids = [segment.observation_id for segment in candidate.segments]
+        assert "fall" in ids
+        assert "recovery" in ids
+        assert ids.index("fall") < ids.index("recovery")
+        assert "other-skier" not in ids
+
+
+def test_incomplete_event_chain_requires_review(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=1)
+    ingest_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "observations": [
+                {
+                    "observation_id": "fall",
+                    "media_id": "media_0",
+                    "range": {"start": 1, "end": 5},
+                    "summary": "女士摔倒",
+                    "subject_id": "woman_01",
+                    "event_chain": "ski-fall-recovery",
+                    "event_order": 1,
+                    "story_role": "incident",
+                }
+            ]
+        },
+        task_id="inspect_0001",
+    )
+    plan = build_story_candidates(manager.require_document(), manager.project_dir)
+    refined = refine_story_candidate(manager.project_dir, plan.candidates[0].id)
+    assert refined.status == "review_required"
+    assert any(
+        gap.get("code") == "EVENT_CHAIN_INCOMPLETE"
+        for gap in refined.candidates[0].unresolved_gaps
+    )

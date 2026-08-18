@@ -474,7 +474,7 @@ def run_command(
             "adjustment.add", "clip.split", "clip.trim", "clip.delete",
             "clip.motion", "clip.speed", "clip.speed_curve", "audio.process",
             "audio.crossfade", "audio.loudness", "transition.add",
-            "transition.remove", "narration.apply",
+            "transition.remove", "narration.apply", "vlog.apply",
         }
         has_project_edits = any(
             isinstance(command, dict) and command.get("action") in project_actions

@@ -40,6 +40,10 @@ class EvidenceObservation(VlogModel):
     quality: float = Field(default=0.5, ge=0, le=1)
     confidence: float = Field(default=0.5, ge=0, le=1)
     evidence_frames: list[int] = Field(default_factory=list)
+    subject_id: str | None = None
+    event_chain: str | None = None
+    event_order: int | None = Field(default=None, ge=0)
+    story_role: Literal["setup", "incident", "recovery", "outcome"] | None = None
     provider: str = "external-agent"
     warnings: list[str] = Field(default_factory=list)
 
@@ -105,6 +109,7 @@ def vlog_workflow_schema() -> dict[str, Any]:
             {"action": "vlog.plan", "default_candidates": 3},
             {"action": "vlog.compare"},
             {"action": "vlog.refine"},
+            {"action": "vlog.apply", "requires": "ready candidate"},
             {"action": "vlog.build", "requires": "ready candidate"},
         ],
         "evidence_schema": EvidenceObservation.model_json_schema(),

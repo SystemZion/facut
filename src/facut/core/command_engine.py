@@ -132,7 +132,11 @@ class CommandEngine:
         if action == "narration.apply":
             from facut.intelligence.narration_plan import prepare_narration_apply
 
-            parameters = {key: value for key, value in command.items() if key != "action"}
+            parameters = {
+                key: value
+                for key, value in command.items()
+                if key != "action" and not key.startswith("_")
+            }
             return prepare_narration_apply(self.manager, **parameters)
         if action == "vlog.apply":
             from facut.vlog import candidate_document

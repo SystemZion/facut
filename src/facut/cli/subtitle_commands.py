@@ -589,8 +589,7 @@ def text_add(
         template_parameters = dict(definition.get("parameters", {}))
         if accent_color is not None:
             template_parameters["accent_color"] = accent_color
-        style_values = {
-            **preset,
+        explicit_style = {
             "font_family": font,
             "font_size": font_size,
             "color": color,
@@ -602,8 +601,14 @@ def text_add(
             "letter_spacing": letter_spacing,
             "safe_area": safe_area,
         }
+        # TextStyle supplies the system defaults.  Feed it the resolved template
+        # first, then only values the caller actually supplied.  This preserves
+        # the public precedence contract: explicit option > template > default.
         style = TextStyle.model_validate(
-            {name: value for name, value in style_values.items() if value is not None}
+            {
+                **preset,
+                **{name: value for name, value in explicit_style.items() if value is not None},
+            }
         )
 
         def operation(candidate):
