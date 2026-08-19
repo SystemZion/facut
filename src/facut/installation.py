@@ -28,6 +28,16 @@ from facut.exceptions import InvalidArgumentError
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 DEFAULT_REPOSITORY = "SystemZion/facut"
+NATIVE_LIBRARY_PREFIXES = (
+    "avcodec-",
+    "avdevice-",
+    "avfilter-",
+    "avformat-",
+    "avutil-",
+    "swresample-",
+    "swscale-",
+)
+NATIVE_NOTICE_FILES = {"THIRD_PARTY_NOTICES.md", "FFMPEG_LICENSE.txt"}
 
 
 def default_install_directory() -> Path:
@@ -78,7 +88,7 @@ def _prioritize_path(entries: list[str], target: Path) -> tuple[list[str], bool]
     return updated, current_keys != updated_keys
 
 
-def _atomic_copy(source: Path, destination: Path) -> None:
+def _atomic_copy(source: Path, destination: Path, *, minimum_size: int = 1024 * 1024) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         dir=destination.parent, delete=False, suffix=".installing"
@@ -86,8 +96,8 @@ def _atomic_copy(source: Path, destination: Path) -> None:
         temporary = Path(stream.name)
     try:
         shutil.copy2(source, temporary)
-        if temporary.stat().st_size <= 1024 * 1024:
-            raise ValueError("FACUT executable is unexpectedly small.")
+        if temporary.stat().st_size <= minimum_size:
+            raise ValueError(f'Install source "{source.name}" is unexpectedly small.')
         last_error: PermissionError | None = None
         for _ in range(6):
             try:
@@ -104,6 +114,57 @@ def _atomic_copy(source: Path, destination: Path) -> None:
             os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _native_bundle_files(executable: Path) -> list[Path]:
+    """Return only the allowlisted native sidecar files beside an EXE."""
+
+    root = executable.parent
+    sidecar = root / ("facut-native.exe" if os.name == "nt" else "facut-native")
+    if not sidecar.is_file():
+        return []
+    files = [sidecar]
+    if os.name == "nt":
+        dlls = [
+            item
+            for item in root.glob("*.dll")
+            if item.name.casefold().startswith(NATIVE_LIBRARY_PREFIXES)
+        ]
+        present = {item.name.casefold().split("-", 1)[0] for item in dlls}
+        required = {prefix[:-1] for prefix in NATIVE_LIBRARY_PREFIXES}
+        missing = sorted(required - present)
+        if missing:
+            raise FileNotFoundError(
+                "FACUT Native bundle is incomplete; missing shared libraries: "
+                + ", ".join(missing)
+            )
+        files.extend(sorted(dlls, key=lambda item: item.name.casefold()))
+    files.extend(
+        root / name for name in sorted(NATIVE_NOTICE_FILES) if (root / name).is_file()
+    )
+    return files
+
+
+def _install_native_bundle(source_executable: Path, destination: Path) -> dict[str, Any]:
+    files = _native_bundle_files(source_executable)
+    if not files:
+        return {
+            "requested": True,
+            "installed": False,
+            "reason": "No adjacent facut-native sidecar was found; Python/FFmpeg fallback remains available.",
+            "files": [],
+        }
+    installed = []
+    for source in files:
+        target = destination / source.name
+        _atomic_copy(source, target, minimum_size=0)
+        installed.append(source.name)
+    return {
+        "requested": True,
+        "installed": True,
+        "executable": str(destination / files[0].name),
+        "files": installed,
+    }
 
 
 def add_to_user_path(directory: str | Path) -> dict[str, Any]:
@@ -170,14 +231,26 @@ def install_facut(
     model_directory: str | Path | None = None,
     exclude: list[str] | None = None,
     add_path: bool = True,
+    native: bool = True,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     source = resolve_install_source(executable)
     install_directory = Path(directory).expanduser().resolve() if directory else default_install_directory()
     destination = install_directory / _executable_name()
+    previous_manifest_path = install_directory / "install.json"
+    previous_manifest = (
+        json.loads(previous_manifest_path.read_text(encoding="utf-8"))
+        if previous_manifest_path.is_file()
+        else {}
+    )
     replaced = destination.exists() and not _same_path(source, destination)
     if not _same_path(source, destination):
         _atomic_copy(source, destination)
+    native_result = (
+        _install_native_bundle(source, install_directory)
+        if native
+        else {"requested": False, "installed": False, "files": []}
+    )
     exclusions = _normalize_exclusions(exclude or [])
 
     config = load_config()
@@ -210,11 +283,18 @@ def install_facut(
         "executable": str(destination),
         "models_directory": str(models_root),
         "models": [item["model"] for item in model_results],
+        "native": native_result,
     }
     manifest_path = install_directory / "install.json"
     temporary = manifest_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, manifest_path)
+    current_native_files = set(native_result.get("files") or [])
+    for stale_name in (previous_manifest.get("native") or {}).get("files", []):
+        if stale_name not in current_native_files:
+            stale = install_directory / Path(str(stale_name)).name
+            if stale.parent == install_directory and stale.name != destination.name:
+                stale.unlink(missing_ok=True)
     for stale in install_directory.glob("facut.exe.update-*"):
         stale.unlink(missing_ok=True)
     return {

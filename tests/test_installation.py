@@ -48,6 +48,41 @@ def test_install_replaces_executable_without_downloading_models(tmp_path: Path) 
     assert _installed_executable(install_dir).read_bytes() == replacement.read_bytes()
 
 
+def test_install_copies_complete_adjacent_native_bundle(tmp_path: Path) -> None:
+    source = _fake_executable(tmp_path / "bundle" / "facut.exe")
+    (source.parent / "facut-native.exe").write_bytes(b"native")
+    dll_names = [
+        "avcodec-62.dll", "avdevice-62.dll", "avfilter-11.dll",
+        "avformat-62.dll", "avutil-60.dll", "swresample-6.dll", "swscale-9.dll",
+    ]
+    for name in dll_names:
+        (source.parent / name).write_bytes(name.encode("ascii"))
+    (source.parent / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
+
+    result = install_facut(
+        executable=source,
+        directory=tmp_path / "installed",
+        exclude=["model"],
+        add_path=False,
+    )
+
+    assert result["native"]["installed"] is True
+    assert (tmp_path / "installed" / "facut-native.exe").read_bytes() == b"native"
+    assert set(dll_names).issubset(result["native"]["files"])
+
+
+def test_install_without_adjacent_native_bundle_keeps_python_fallback(tmp_path: Path) -> None:
+    source = _fake_executable(tmp_path / "bundle" / "facut.exe")
+    result = install_facut(
+        executable=source,
+        directory=tmp_path / "installed",
+        exclude=["model"],
+        add_path=False,
+    )
+    assert result["native"]["installed"] is False
+    assert "fallback" in result["native"]["reason"]
+
+
 def test_install_rejects_unknown_exclusion(tmp_path: Path) -> None:
     source = _fake_executable(tmp_path / "facut.exe")
     with pytest.raises(InvalidArgumentError):

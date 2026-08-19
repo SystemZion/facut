@@ -22,11 +22,99 @@ from facut.analysis import (
 from facut.cli.common import manager_for, public_error
 from facut.responses import success_response
 from facut.media.probe import probe_media
+from facut.media.importer import SUPPORTED_EXTENSIONS
 
 
 analyze_app = typer.Typer(
     help="Analyze quality, scenes, beats, speech, travel metadata, and song metadata."
 )
+
+
+@analyze_app.command("batch")
+def analyze_batch(
+    ctx: typer.Context,
+    folder: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+    engine: Annotated[str, typer.Option("--engine", help="auto, native, or python.")] = "auto",
+    mode: Annotated[str, typer.Option("--mode", help="fast or deep native sampling.")] = "fast",
+    output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+    full: Annotated[bool, typer.Option("--full", help="Return inline evidence instead of a compact file reference.")] = False,
+) -> None:
+    """Analyze a media tree with the persistent native sidecar when available."""
+
+    from facut.cli.main import emit
+
+    command = "analyze.batch"
+    try:
+        if engine not in {"auto", "native", "python"}:
+            raise ValueError("--engine must be auto, native, or python.")
+        if mode not in {"fast", "deep"}:
+            raise ValueError("--mode must be fast or deep.")
+        root = folder.expanduser().resolve()
+        files = [
+            item for item in sorted(root.rglob("*"), key=lambda path: str(path).casefold())
+            if item.is_file() and item.suffix.casefold() in SUPPORTED_EXTENSIONS
+        ]
+        if limit:
+            files = files[:limit]
+        if not files:
+            raise ValueError("No supported media files were found.")
+        cache = (output_directory or root / ".facut-native").expanduser().resolve()
+        native_path = None
+        native_warning: str | None = None
+        if engine != "python":
+            from facut.native import NativeClient, compact_batch_result, discover_native
+
+            native_path = discover_native()
+            if native_path:
+                try:
+                    data = NativeClient(native_path).batch_scan(
+                        (
+                            {"media_id": f"batch_{index:06d}", "path": str(path)}
+                            for index, path in enumerate(files, 1)
+                        ),
+                        output_directory=cache,
+                        mode=mode,
+                    )
+                    payload = data if full else compact_batch_result(data)
+                    payload.update({"engine": "native", "executable": str(native_path), "asset_count": len(files)})
+                    emit(_state(ctx), success_response(command, payload), human=f"Analyzed {len(files)} assets with FACUT Native.")
+                    return
+                except Exception as error:
+                    if engine == "native":
+                        raise
+                    native_warning = (
+                        "FACUT Native failed twice; the Python/FFmpeg fallback was used: "
+                        f"{error}"
+                    )
+            if engine == "native":
+                NativeClient()
+        results = []
+        state = _state(ctx)
+        for path in files:
+            try:
+                results.append(
+                    analyze_quality(
+                        path,
+                        ffmpeg=state.config.tools.ffmpeg,
+                        ffprobe=state.config.tools.ffprobe,
+                    )
+                )
+            except Exception as error:
+                results.append({"source": str(path), "status": "error", "error": str(error)})
+        emit(
+            state,
+            success_response(
+                command,
+                {"engine": "python", "asset_count": len(files), "results": results},
+                warnings=[native_warning or "FACUT Native was unavailable; the existing Python/FFmpeg path was used."]
+                if engine == "auto"
+                else [],
+            ),
+            human=f"Analyzed {len(files)} assets with the Python fallback.",
+        )
+    except Exception as error:
+        _abort(ctx, command, error)
 
 
 def _state(ctx: typer.Context):

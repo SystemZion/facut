@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -301,6 +301,8 @@ def vlog_prepare(
     proxy: Annotated[str, typer.Option("--proxy", help="none or auto-link existing LRF/proxies.")] = "auto",
     batch_size: Annotated[int, typer.Option("--batch-size", min=1, max=100)] = 12,
     frames: Annotated[bool, typer.Option("--frames/--metadata-only")] = True,
+    engine: Annotated[str, typer.Option("--engine", help="auto, native, or python.")] = "auto",
+    native_mode: Annotated[str, typer.Option("--native-mode", help="fast or deep.")] = "fast",
 ) -> None:
     """Import media, link existing proxies, and create complete baseline inspection tasks."""
 
@@ -309,6 +311,10 @@ def vlog_prepare(
         state = _state(ctx)
         if proxy not in {"none", "auto"}:
             raise ValueError("--proxy must be none or auto.")
+        if engine not in {"auto", "native", "python"}:
+            raise ValueError("--engine must be auto, native, or python.")
+        if native_mode not in {"fast", "deep"}:
+            raise ValueError("--native-mode must be fast or deep.")
         if project is not None:
             destination = project.expanduser().resolve()
             if (destination / "facut.json").is_file() or destination.name == "facut.json":
@@ -338,11 +344,49 @@ def vlog_prepare(
                 ffmpeg=state.config.tools.ffmpeg,
                 ffprobe=state.config.tools.ffprobe,
             ).scan(search_directories=[source] if source else None, link=True)
+        native_results = None
+        native_status: dict[str, Any] = {"requested": engine, "used": "python"}
+        native_warning: str | None = None
+        if engine != "python":
+            from facut.native import NativeClient, discover_native, scan_project_media
+
+            native_path = discover_native()
+            if native_path is not None:
+                try:
+                    native_payload = scan_project_media(manager, mode=native_mode, executable=native_path)
+                    native_results = {
+                        item["media_id"]: item
+                        for item in native_payload.get("results", [])
+                        if item.get("media_id")
+                    }
+                    native_status = {
+                        "requested": engine,
+                        "used": "native",
+                        "mode": native_mode,
+                        "executable": str(native_path),
+                        "task_id": native_payload.get("task_id"),
+                        "elapsed_seconds": native_payload.get("elapsed_seconds"),
+                    }
+                except Exception as error:
+                    if engine == "native":
+                        raise
+                    native_warning = (
+                        "FACUT Native failed twice; vlog preparation continued with the "
+                        f"Python/FFmpeg path: {error}"
+                    )
+                    native_status = {
+                        "requested": engine,
+                        "used": "python",
+                        "fallback_reason": str(error),
+                    }
+            elif engine == "native":
+                NativeClient()
         data = prepare_evidence_manifest(
             manager,
             ffmpeg=state.config.tools.ffmpeg,
             generate_frames=frames,
             batch_size=batch_size,
+            native_results=native_results,
         )
         data.update(
             {
@@ -350,10 +394,17 @@ def vlog_prepare(
                 "imported_media": imported.get("newly_imported", 0) if imported else 0,
                 "import_failures": imported.get("failures", []) if imported else [],
                 "proxy_results": proxy_results,
+                "analysis_engine": native_status,
                 "next_command": "facut vlog inspect next",
             }
         )
-        _emit(ctx, command, data, revision=manager.require_document().revision)
+        _emit(
+            ctx,
+            command,
+            data,
+            revision=manager.require_document().revision,
+            warnings=[native_warning] if native_warning else None,
+        )
     except Exception as error:
         _fail(ctx, command, error)
 

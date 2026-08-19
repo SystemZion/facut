@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.2 — 2026-08-19
+
+- Added the optional C++20 `facut-native` sidecar for persistent batch probing,
+  targeted representative-frame extraction, cached waveforms, lightweight
+  quality metrics and media fingerprints.
+- Added `native doctor`, `native benchmark` and `analyze batch`, plus native
+  acceleration in `vlog prepare` with explicit `auto/native/python` selection.
+- Kept the versioned JSONL boundary process-safe: one native crash is restarted
+  once, then `auto` reports the failure and uses the Python/FFmpeg path.
+- Added an allowlisted Windows x64 bundle and installer support for the native
+  executable, replaceable LGPL FFmpeg DLLs and third-party notices. Models,
+  user media, voice data and fonts remain outside the application package.
+- Kept the Python project engine, StoryGraph, Agent contract and final rendering
+  authoritative; the native layer is optional acceleration, not a second editor.
+
 ## 0.8.1 — 2026-08-18
 
 - Registered atomic `vlog.apply` across Agent schema, batch, Recipe, and JSON-RPC surfaces.

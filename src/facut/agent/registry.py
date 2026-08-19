@@ -234,7 +234,30 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "proxy": {"enum": ["none", "auto"], "default": "auto"},
                 "batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
                 "frames": {"type": "boolean", "default": True},
+                "engine": {"enum": ["auto", "native", "python"], "default": "auto"},
+                "native_mode": {"enum": ["fast", "deep"], "default": "fast"},
             }
+        ),
+    },
+    "native.doctor": {
+        "summary": "Verify the optional C++ sidecar, protocol, FFmpeg ABI, and features.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "analyze.batch": {
+        "summary": "Analyze a media tree with the persistent native sidecar or Python fallback.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "folder": {"type": "string", "minLength": 1},
+                "engine": {"enum": ["auto", "native", "python"], "default": "auto"},
+                "mode": {"enum": ["fast", "deep"], "default": "fast"},
+                "output_directory": {"type": ["string", "null"]},
+                "limit": {"type": ["integer", "null"], "minimum": 1},
+            },
+            ["folder"],
         ),
     },
     "vlog.inspect.next": {

@@ -257,6 +257,7 @@ from facut.cli.travel_commands import map_app, reframe_app  # noqa: E402
 from facut.cli.voice_commands import voice_app  # noqa: E402
 from facut.cli.recipe_commands import recipe_app  # noqa: E402
 from facut.cli.vlog_commands import vlog_app  # noqa: E402
+from facut.cli.native_commands import native_app  # noqa: E402
 from facut.cli.font_commands import font_app  # noqa: E402
 from facut.cli.typography_commands import typography_app  # noqa: E402
 from facut.cli.library_commands import library_app, style_app  # noqa: E402
@@ -305,6 +306,7 @@ app.add_typer(voice_app, name="voice")
 app.add_typer(recipe_app, name="recipe")
 app.add_typer(effect_app, name="effect")
 app.add_typer(vlog_app, name="vlog")
+app.add_typer(native_app, name="native")
 app.add_typer(font_app, name="font")
 app.add_typer(typography_app, name="typography")
 app.add_typer(library_app, name="library")

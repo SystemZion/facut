@@ -156,6 +156,7 @@ def prepare_evidence_manifest(
     ffmpeg: str | Path | None = None,
     generate_frames: bool = True,
     batch_size: int = 12,
+    native_results: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create baseline frame coverage and resumable external-AI inspection tasks."""
 
@@ -190,21 +191,38 @@ def prepare_evidence_manifest(
             assets.append(cached)
             continue
         representative: list[dict[str, Any]] = []
-        times = _sample_times(asset.technical.duration)
-        for index, at in enumerate(times, start=1):
-            output = frames_root / asset.id / f"baseline-{index:02d}.jpg"
-            if generate_frames and not output.is_file():
-                generate_thumbnail(
-                    source,
-                    output,
-                    at=at,
-                    width=480,
-                    ffmpeg=ffmpeg,
-                    overwrite=False,
+        native_result = (native_results or {}).get(asset.id)
+        if native_result and native_result.get("status") == "success":
+            representative = [
+                {
+                    "at": round(float(item.get("actual_seconds", item.get("requested_seconds", 0))), 6),
+                    "requested_at": round(float(item.get("requested_seconds", 0)), 6),
+                    "path": str(Path(item["frame"]).resolve()),
+                    "exists": Path(item["frame"]).is_file(),
+                    "quality": {
+                        "luminance_mean": item.get("luminance_mean"),
+                        "sharpness": item.get("sharpness"),
+                        "motion": item.get("motion"),
+                    },
+                }
+                for item in native_result.get("representative_frames", [])
+            ]
+        else:
+            times = _sample_times(asset.technical.duration)
+            for index, at in enumerate(times, start=1):
+                output = frames_root / asset.id / f"baseline-{index:02d}.jpg"
+                if generate_frames and not output.is_file():
+                    generate_thumbnail(
+                        source,
+                        output,
+                        at=at,
+                        width=480,
+                        ffmpeg=ffmpeg,
+                        overwrite=False,
+                    )
+                representative.append(
+                    {"at": round(at, 6), "path": str(output.resolve()), "exists": output.is_file()}
                 )
-            representative.append(
-                {"at": round(at, 6), "path": str(output.resolve()), "exists": output.is_file()}
-            )
         assets.append(
             {
                 "media_id": asset.id,
@@ -221,6 +239,9 @@ def prepare_evidence_manifest(
                     "longitude": asset.technical.longitude,
                 },
                 "source_kind": source_kind,
+                "analysis_engine": native_result.get("engine") if native_result else {"name": "python"},
+                "native_fingerprint": native_result.get("fingerprint") if native_result else None,
+                "waveform": native_result.get("waveform") if native_result else None,
                 "representative_frames": representative,
                 "baseline_coverage": "complete" if all(item["exists"] for item in representative) else "metadata_only",
             }

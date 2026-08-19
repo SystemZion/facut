@@ -143,6 +143,7 @@ def serve_command(
                 "vlog.preview", "vlog.build", "library.music.add", "library.sfx.add",
                 "library.search", "library.audit", "style.list", "style.describe",
                 "style.validate",
+                "native.doctor", "analyze.batch",
             }:
                 _validate_declared_params(method, params)
             if method == "ping":
@@ -156,6 +157,75 @@ def serve_command(
                 return
             elif method == "project.snapshot":
                 result = compact_project(manager.require_document())
+            elif method == "native.doctor":
+                from facut.native import NativeClient, discover_native
+
+                native_path = discover_native()
+                data = NativeClient(native_path).doctor()
+                data["executable"] = str(native_path) if native_path else None
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "analyze.batch":
+                from facut.analysis import analyze_quality
+                from facut.media.importer import SUPPORTED_EXTENSIONS
+                from facut.native import NativeClient, compact_batch_result, discover_native
+
+                engine_name = str(params.get("engine", "auto"))
+                mode = str(params.get("mode", "fast"))
+                folder = Path(str(params["folder"])).expanduser().resolve()
+                files = [
+                    item for item in sorted(folder.rglob("*"), key=lambda path: str(path).casefold())
+                    if item.is_file() and item.suffix.casefold() in SUPPORTED_EXTENSIONS
+                ]
+                if params.get("limit") is not None:
+                    files = files[: int(params["limit"])]
+                native_path = discover_native() if engine_name != "python" else None
+                warnings = []
+                if native_path:
+                    try:
+                        full_data = NativeClient(native_path).batch_scan(
+                            (
+                                {"media_id": f"batch_{index:06d}", "path": str(path)}
+                                for index, path in enumerate(files, 1)
+                            ),
+                            output_directory=Path(str(params.get("output_directory") or folder / ".facut-native")),
+                            mode=mode,
+                        )
+                        data = compact_batch_result(full_data)
+                        data.update({"engine": "native", "asset_count": len(files)})
+                    except Exception as error:
+                        if engine_name == "native":
+                            raise
+                        warnings.append(
+                            "FACUT Native failed twice; Python/FFmpeg fallback was used: "
+                            f"{error}"
+                        )
+                        native_path = None
+                elif engine_name == "native":
+                    NativeClient()
+                if not native_path and engine_name != "native":
+                    data = {
+                        "engine": "python",
+                        "asset_count": len(files),
+                        "results": [
+                            analyze_quality(
+                                path,
+                                ffmpeg=state.config.tools.ffmpeg,
+                                ffprobe=state.config.tools.ffprobe,
+                            )
+                            for path in files
+                        ],
+                    }
+                    if engine_name == "auto" and not warnings:
+                        warnings.append("FACUT Native was unavailable; Python/FFmpeg fallback was used.")
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": warnings, "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
             elif method == "agent.capabilities":
                 result = capabilities()
             elif method == "agent.schema":
@@ -499,6 +569,7 @@ def serve_command(
                 )
 
                 if method == "vlog.prepare":
+                    native_warnings = []
                     source_value = params.get("source")
                     if source_value:
                         source = Path(str(source_value)).expanduser().resolve()
@@ -511,12 +582,42 @@ def serve_command(
                             ffmpeg=state.config.tools.ffmpeg,
                             ffprobe=state.config.tools.ffprobe,
                         ).scan(search_directories=[source] if source else None, link=True)
+                    engine_name = str(params.get("engine", "auto"))
+                    native_mode = str(params.get("native_mode", "fast"))
+                    native_results = None
+                    if engine_name != "python":
+                        from facut.native import NativeClient, discover_native, scan_project_media
+
+                        native_path = discover_native()
+                        if native_path:
+                            try:
+                                native_payload = scan_project_media(
+                                    manager, mode=native_mode, executable=native_path
+                                )
+                                native_results = {
+                                    item["media_id"]: item
+                                    for item in native_payload.get("results", [])
+                                    if item.get("media_id")
+                                }
+                            except Exception as error:
+                                if engine_name == "native":
+                                    raise
+                                native_warnings.append(
+                                    "FACUT Native failed twice; vlog preparation used the "
+                                    f"Python/FFmpeg path: {error}"
+                                )
+                        elif engine_name == "native":
+                            NativeClient()
                     data = prepare_evidence_manifest(
                         manager,
                         ffmpeg=state.config.tools.ffmpeg,
                         generate_frames=bool(params.get("frames", True)),
                         batch_size=int(params.get("batch_size", 12)),
+                        native_results=native_results,
                     )
+                    data["analysis_engine"] = "native" if native_results is not None else "python"
+                    if native_warnings:
+                        data["warnings"] = [*data.get("warnings", []), *native_warnings]
                 elif method == "vlog.inspect.next":
                     data = next_inspection_task(manager.project_dir)
                 elif method == "vlog.observe":

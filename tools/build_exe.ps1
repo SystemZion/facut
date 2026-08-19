@@ -44,6 +44,8 @@ if ($Clean) {
         Remove-Item -LiteralPath $BuildPath -Recurse -Force
     }
 }
+if ($FFmpeg) { $FFmpeg = [System.IO.Path]::GetFullPath($FFmpeg) }
+if ($FFprobe) { $FFprobe = [System.IO.Path]::GetFullPath($FFprobe) }
 
 New-Item -ItemType Directory -Force -Path $GeneratedSpecPath | Out-Null
 

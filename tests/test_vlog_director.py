@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -50,6 +51,37 @@ def test_prepare_creates_complete_resumable_inspection_contract(tmp_path) -> Non
     assert task["minimum_observations"] == 2
     assert task["required_output_schema"]["additionalProperties"] is False
     assert director_status(manager.project_dir)["stage"] == "inspection"
+
+
+def test_prepare_manifest_accepts_native_frames_without_python_decode(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    frame = tmp_path / "native.jpg"
+    frame.write_bytes(b"jpeg")
+    native = {
+        "media_0": {
+            "status": "success",
+            "fingerprint": "abc123",
+            "engine": {"name": "facut-native", "version": "0.8.2", "mode": "fast"},
+            "waveform": {"peaks": []},
+            "representative_frames": [
+                {
+                    "requested_seconds": 0.5,
+                    "actual_seconds": 0.52,
+                    "frame": str(frame),
+                    "luminance_mean": 100.0,
+                    "sharpness": 7.5,
+                    "motion": 0.0,
+                }
+            ],
+        }
+    }
+    result = prepare_evidence_manifest(manager, generate_frames=False, native_results=native)
+    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+    item = manifest["assets"][0]
+    assert item["analysis_engine"]["name"] == "facut-native"
+    assert item["native_fingerprint"] == "abc123"
+    assert item["representative_frames"][0]["at"] == 0.52
+    assert item["baseline_coverage"] == "complete"
 
 
 def test_observations_are_strict_idempotent_and_complete_tasks(tmp_path) -> None:

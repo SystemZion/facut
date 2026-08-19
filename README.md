@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.8.1` 稳定了质量优先的 Vlog Director：公开 Agent 可原子应用 StoryGraph，自动硬件选择会试跑编码器，事件链保持同一人物的“发生—恢复—结果”，标题模板遵循显式参数优先级，带转场时间线也能复用未变化渲染节点。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+当前开发版本 `0.8.2` 在质量优先的 Vlog Director 旁增加了可选 C++ Native Accelerator：一次进程可批量读取大量素材的技术元数据、代表帧、波形和轻量质量指标。Python 仍负责工程、StoryGraph、Agent 协议与确定性渲染；原生进程失败会重启一次，`auto` 模式随后明确回退，不会伪造加速成功。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
 
 最短工作流：
 
@@ -23,7 +23,7 @@ facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-
 
 ## 安装
 
-Windows 普通用户可从 [GitHub Releases](https://github.com/SystemZion/facut/releases/latest) 下载单文件 `facut.exe`。源码开发需要 Python 3.11 或更高版本，以及可在 `PATH` 中找到的 FFmpeg/FFprobe。
+Windows 普通用户可从 [GitHub Releases](https://github.com/SystemZion/facut/releases/latest) 下载 `facut-windows-x64.zip`。解压后保留 `facut.exe`、`facut-native.exe`、FFmpeg DLL 和授权说明在同一目录；只下载单文件 `facut.exe` 仍可使用 Python/FFmpeg 回退。源码开发需要 Python 3.11 或更高版本，以及可在 `PATH` 中找到的 FFmpeg/FFprobe。
 
 首次下载 EXE 后可让 FACUT 安装自身、替换旧版并写入当前用户 PATH：
 
@@ -177,6 +177,14 @@ facut --project vlog clip motion clip_01 --preset slow-push --intensity 0.35
 facut --project vlog clip speed clip_01 --rate 2
 facut --project vlog clip speed clip_01 --reverse
 facut --project vlog clip speed clip_01 --curve speed.json
+```
+
+安装命令会自动复制同目录下完整的原生加速包；可用 `--no-native` 明确跳过。检查与批量测试：
+
+```powershell
+facut native doctor
+facut native benchmark D:\Trip --limit 20
+facut analyze batch D:\Trip --engine auto --mode fast
 ```
 
 速度曲线使用源片段相对秒数，支持 `step` 和确定性采样的 `linear`：`{"version":"1.0","mode":"linear","steps":8,"points":[{"at":0,"rate":1},{"at":2,"rate":2},{"at":4,"rate":0.75}]}`。曲线节点会进入缓存、Recipe 和 CutGraph；倒放同时反转画面与原音。

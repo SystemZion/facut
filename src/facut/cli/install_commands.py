@@ -54,6 +54,10 @@ def install_command(
         Path | None, typer.Option("--executable", hidden=True, help="Explicit built FACUT executable.")
     ] = None,
     add_path: Annotated[bool, typer.Option("--path/--no-path", help="Add the install directory to user PATH.")] = True,
+    native: Annotated[
+        bool,
+        typer.Option("--native/--no-native", help="Install the adjacent C++ accelerator bundle when present."),
+    ] = True,
 ) -> None:
     """Install FACUT, replacing an older EXE and optionally downloading models."""
 
@@ -74,11 +78,14 @@ def install_command(
             model_directory=model_directory,
             exclude=exclude or [],
             add_path=add_path,
+            native=native,
             progress=progress,
         )
         warnings = []
         if result["path"].get("changed"):
             warnings.append("PATH was updated; already-open terminals may need to be reopened.")
+        if native and not result["native"].get("installed"):
+            warnings.append(result["native"].get("reason", "FACUT Native was not installed."))
         _emit(ctx, "install", result, warnings=warnings)
     except Exception as error:
         _fail(ctx, "install", error)
