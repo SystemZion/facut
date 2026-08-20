@@ -8,8 +8,7 @@ from typing import Annotated
 import typer
 
 from facut.cli.common import public_error
-from facut.media.importer import SUPPORTED_EXTENSIONS
-from facut.native import NativeClient, compact_batch_result, discover_native
+from facut.native import NativeClient, collect_batch_inputs, compact_batch_result, discover_native
 from facut.responses import success_response
 
 
@@ -55,28 +54,29 @@ def native_benchmark(
     mode: Annotated[str, typer.Option("--mode")] = "fast",
     limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
     output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
+    jobs: Annotated[int, typer.Option("--jobs", min=1, max=8)] = 3,
 ) -> None:
     """Scan a bounded folder and report native throughput."""
 
     try:
         root = folder.expanduser().resolve()
-        files = [
-            item for item in sorted(root.rglob("*"), key=lambda path: str(path).casefold())
-            if item.is_file() and item.suffix.casefold() in SUPPORTED_EXTENSIONS
-        ]
-        if limit:
-            files = files[:limit]
-        if not files:
-            raise ValueError("No supported media files were found for the benchmark.")
         cache = output_directory or root / ".facut-native-benchmark"
+        inputs, collection = collect_batch_inputs(
+            root, output_directory=cache, limit=limit
+        )
+        if not inputs:
+            raise ValueError("No supported media files were found for the benchmark.")
         result = NativeClient().batch_scan(
-            ({"media_id": f"benchmark_{index:05d}", "path": str(path)} for index, path in enumerate(files, 1)),
+            inputs,
             output_directory=cache,
             mode=mode,
+            jobs=jobs,
         )
         data = compact_batch_result(result)
         elapsed = float(data.get("elapsed_seconds") or 0.0)
-        data["assets_per_second"] = len(files) / elapsed if elapsed > 0 else None
+        data["assets_per_second"] = len(inputs) / elapsed if elapsed > 0 else None
+        data["collection"] = collection
+        data["jobs"] = jobs
         _emit(ctx, "native.benchmark", data)
     except Exception as error:
         _fail(ctx, "native.benchmark", error)

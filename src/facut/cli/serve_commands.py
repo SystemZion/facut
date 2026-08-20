@@ -33,7 +33,6 @@ from facut.voice import (
     VoiceProfileStore,
     build_recording_plan,
     provider_status,
-    synthesize_with_provider,
     validate_voice_samples,
 )
 from facut.voice.say import synthesize_voice_say
@@ -45,6 +44,15 @@ def _write(payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
     )
     sys.stdout.flush()
+
+
+def _configure_stdio_utf8() -> None:
+    """Keep the Agent JSONL transport UTF-8 on Windows pipes and consoles."""
+
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def _success(request_id: Any, result: Any) -> dict[str, Any]:
@@ -86,6 +94,7 @@ def serve_command(
 
     from facut.cli.main import CliState
 
+    _configure_stdio_utf8()
     state: CliState = ctx.ensure_object(CliState)
     try:
         manager = manager_for(state)
@@ -170,32 +179,39 @@ def serve_command(
                 }
             elif method == "analyze.batch":
                 from facut.analysis import analyze_quality
-                from facut.media.importer import SUPPORTED_EXTENSIONS
-                from facut.native import NativeClient, compact_batch_result, discover_native
+                from facut.native import NativeClient, collect_batch_inputs, compact_batch_result, discover_native
 
                 engine_name = str(params.get("engine", "auto"))
                 mode = str(params.get("mode", "fast"))
                 folder = Path(str(params["folder"])).expanduser().resolve()
-                files = [
-                    item for item in sorted(folder.rglob("*"), key=lambda path: str(path).casefold())
-                    if item.is_file() and item.suffix.casefold() in SUPPORTED_EXTENSIONS
-                ]
-                if params.get("limit") is not None:
-                    files = files[: int(params["limit"])]
+                output_directory = Path(str(
+                    params.get("output_directory") or folder / ".facut-native"
+                )).expanduser().resolve()
+                inputs, collection = collect_batch_inputs(
+                    folder,
+                    output_directory=output_directory,
+                    limit=int(params["limit"]) if params.get("limit") is not None else None,
+                )
+                files = [Path(str(item["original_path"])) for item in inputs]
+                jobs = int(params.get("jobs", 3))
+                asset_timeout = float(params.get("asset_timeout", 180.0))
                 native_path = discover_native() if engine_name != "python" else None
                 warnings = []
                 if native_path:
                     try:
                         full_data = NativeClient(native_path).batch_scan(
-                            (
-                                {"media_id": f"batch_{index:06d}", "path": str(path)}
-                                for index, path in enumerate(files, 1)
-                            ),
-                            output_directory=Path(str(params.get("output_directory") or folder / ".facut-native")),
+                            inputs,
+                            output_directory=output_directory,
                             mode=mode,
+                            jobs=jobs,
+                            asset_timeout_seconds=asset_timeout,
                         )
                         data = compact_batch_result(full_data)
-                        data.update({"engine": "native", "asset_count": len(files)})
+                        data.update({
+                            "engine": "native", "asset_count": len(files),
+                            "collection": collection, "jobs": jobs,
+                            "asset_timeout_seconds": asset_timeout,
+                        })
                     except Exception as error:
                         if engine_name == "native":
                             raise
@@ -218,6 +234,7 @@ def serve_command(
                             )
                             for path in files
                         ],
+                        "collection": collection,
                     }
                     if engine_name == "auto" and not warnings:
                         warnings.append("FACUT Native was unavailable; Python/FFmpeg fallback was used.")

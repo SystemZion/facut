@@ -379,7 +379,7 @@ json audio_peaks(const std::filesystem::path& source, double window_seconds) {
     return {{"sample_rate", sample_rate}, {"channels", channels}, {"window_seconds", window_seconds}, {"peaks", peaks}};
 }
 
-std::string fingerprint(const std::filesystem::path& source) {
+std::string fingerprint_impl(const std::filesystem::path& source) {
     std::ifstream stream(source, std::ios::binary);
     if (!stream) {
         throw std::runtime_error("open source for fingerprint failed");
@@ -413,6 +413,38 @@ std::string fingerprint(const std::filesystem::path& source) {
 
 }  // namespace
 
+std::string media_fingerprint(const std::filesystem::path& source) {
+    return fingerprint_impl(source);
+}
+
+json read_checkpoint(const std::filesystem::path& checkpoint) {
+    std::ifstream stream(checkpoint, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error("open native checkpoint failed");
+    }
+    return json::parse(stream);
+}
+
+void write_checkpoint(const std::filesystem::path& checkpoint, const json& result) {
+    std::filesystem::create_directories(checkpoint.parent_path());
+    auto temporary = checkpoint;
+    temporary += ".tmp";
+    {
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        if (!stream) {
+            throw std::runtime_error("open native checkpoint output failed");
+        }
+        stream << result.dump();
+        stream.flush();
+        if (!stream) {
+            throw std::runtime_error("write native checkpoint failed");
+        }
+    }
+    std::error_code ignored;
+    std::filesystem::remove(checkpoint, ignored);
+    std::filesystem::rename(temporary, checkpoint);
+}
+
 json runtime_diagnostics() {
     return {
         {"available", true},
@@ -429,7 +461,11 @@ json runtime_diagnostics() {
     };
 }
 
-json scan_media(const std::filesystem::path& source, const ScanOptions& options) {
+json scan_media(
+    const std::filesystem::path& source,
+    const ScanOptions& options,
+    const std::string& known_fingerprint
+) {
     if (!std::filesystem::is_regular_file(source)) {
         throw std::runtime_error("media file does not exist");
     }
@@ -454,8 +490,10 @@ json scan_media(const std::filesystem::path& source, const ScanOptions& options)
             }
         }
     }
-    const auto media_fingerprint = fingerprint(source);
-    const auto asset_directory = options.output_directory / media_fingerprint.substr(0, 16);
+    const auto fingerprint_value = known_fingerprint.empty()
+        ? media_fingerprint(source)
+        : known_fingerprint;
+    const auto asset_directory = options.output_directory / fingerprint_value.substr(0, 16);
     std::filesystem::create_directories(asset_directory);
     const auto frames = sample_video(
         format.get(), video_index, sample_times, asset_directory, options.thumbnail_width
@@ -489,7 +527,7 @@ json scan_media(const std::filesystem::path& source, const ScanOptions& options)
         {"audio", audio_data},
         {"representative_frames", frames},
         {"waveform", audio_peaks(source, options.audio_window_seconds)},
-        {"fingerprint", media_fingerprint},
+        {"fingerprint", fingerprint_value},
         {"engine", {{"name", "facut-native"}, {"version", FACUT_NATIVE_VERSION}, {"mode", options.mode}}},
     };
 }

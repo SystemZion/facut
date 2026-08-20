@@ -256,6 +256,8 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "mode": {"enum": ["fast", "deep"], "default": "fast"},
                 "output_directory": {"type": ["string", "null"]},
                 "limit": {"type": ["integer", "null"], "minimum": 1},
+                "jobs": {"type": "integer", "minimum": 1, "maximum": 8, "default": 3},
+                "asset_timeout": {"type": "number", "exclusiveMinimum": 0, "default": 180},
             },
             ["folder"],
         ),

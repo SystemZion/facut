@@ -22,7 +22,6 @@ from facut.analysis import (
 from facut.cli.common import manager_for, public_error
 from facut.responses import success_response
 from facut.media.probe import probe_media
-from facut.media.importer import SUPPORTED_EXTENSIONS
 
 
 analyze_app = typer.Typer(
@@ -38,6 +37,8 @@ def analyze_batch(
     mode: Annotated[str, typer.Option("--mode", help="fast or deep native sampling.")] = "fast",
     output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
     limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+    jobs: Annotated[int, typer.Option("--jobs", min=1, max=8)] = 3,
+    asset_timeout: Annotated[float, typer.Option("--asset-timeout", min=1)] = 180.0,
     full: Annotated[bool, typer.Option("--full", help="Return inline evidence instead of a compact file reference.")] = False,
 ) -> None:
     """Analyze a media tree with the persistent native sidecar when available."""
@@ -51,15 +52,13 @@ def analyze_batch(
         if mode not in {"fast", "deep"}:
             raise ValueError("--mode must be fast or deep.")
         root = folder.expanduser().resolve()
-        files = [
-            item for item in sorted(root.rglob("*"), key=lambda path: str(path).casefold())
-            if item.is_file() and item.suffix.casefold() in SUPPORTED_EXTENSIONS
-        ]
-        if limit:
-            files = files[:limit]
-        if not files:
-            raise ValueError("No supported media files were found.")
         cache = (output_directory or root / ".facut-native").expanduser().resolve()
+        from facut.native import collect_batch_inputs
+
+        inputs, collection = collect_batch_inputs(root, output_directory=cache, limit=limit)
+        if not inputs:
+            raise ValueError("No supported original video or image files were found.")
+        files = [Path(str(item["original_path"])) for item in inputs]
         native_path = None
         native_warning: str | None = None
         if engine != "python":
@@ -69,15 +68,18 @@ def analyze_batch(
             if native_path:
                 try:
                     data = NativeClient(native_path).batch_scan(
-                        (
-                            {"media_id": f"batch_{index:06d}", "path": str(path)}
-                            for index, path in enumerate(files, 1)
-                        ),
+                        inputs,
                         output_directory=cache,
                         mode=mode,
+                        jobs=jobs,
+                        asset_timeout_seconds=asset_timeout,
                     )
                     payload = data if full else compact_batch_result(data)
-                    payload.update({"engine": "native", "executable": str(native_path), "asset_count": len(files)})
+                    payload.update({
+                        "engine": "native", "executable": str(native_path),
+                        "asset_count": len(files), "collection": collection,
+                        "jobs": jobs, "asset_timeout_seconds": asset_timeout,
+                    })
                     emit(_state(ctx), success_response(command, payload), human=f"Analyzed {len(files)} assets with FACUT Native.")
                     return
                 except Exception as error:
@@ -106,7 +108,10 @@ def analyze_batch(
             state,
             success_response(
                 command,
-                {"engine": "python", "asset_count": len(files), "results": results},
+                {
+                    "engine": "python", "asset_count": len(files),
+                    "results": results, "collection": collection,
+                },
                 warnings=[native_warning or "FACUT Native was unavailable; the existing Python/FFmpeg path was used."]
                 if engine == "auto"
                 else [],
