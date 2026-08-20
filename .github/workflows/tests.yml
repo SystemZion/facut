@@ -86,6 +86,12 @@ jobs:
           $ffRoot = (Get-ChildItem ffmpeg-sdk -Directory | Select-Object -First 1).FullName
           New-Item -ItemType Directory -Force native-smoke | Out-Null
           & "$ffRoot\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "testsrc2=size=640x360:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 2 -c:v mpeg4 -c:a aac native-smoke\sample.mp4
+          & "$ffRoot\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "color=c=blue:size=640x360" -frames:v 1 native-smoke\photo.jpg
           $env:FACUT_NATIVE = (Resolve-Path build\native-win64\facut-native.exe)
           python -m facut --json native doctor
           python -m facut --json analyze batch native-smoke --engine native --mode fast --output-directory native-smoke\results
+          $result = Get-Content -Raw -Encoding UTF8 native-smoke\results\native-results.json | ConvertFrom-Json
+          $photo = @($result.results | Where-Object { $_.format -eq "image2" })
+          if ($photo.Count -ne 1 -or @($photo[0].representative_frames).Count -ne 1) {
+            throw "FACUT Native did not produce one representative frame for the still image."
+          }

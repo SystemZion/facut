@@ -233,10 +233,14 @@ json sample_video(
     PacketPtr packet(av_packet_alloc());
     std::vector<std::uint8_t> previous;
     json samples = json::array();
+    const std::string format_name = format->iformat ? format->iformat->name : "";
+    const bool still_image = format_name.find("image2") != std::string::npos;
     for (std::size_t index = 0; index < sample_times.size(); ++index) {
         const auto target = sample_times[index];
-        const auto timestamp = static_cast<std::int64_t>(target / av_q2d(stream->time_base));
-        require_ffmpeg(av_seek_frame(format, stream_index, timestamp, AVSEEK_FLAG_BACKWARD), "seek sample");
+        if (!still_image) {
+            const auto timestamp = static_cast<std::int64_t>(target / av_q2d(stream->time_base));
+            require_ffmpeg(av_seek_frame(format, stream_index, timestamp, AVSEEK_FLAG_BACKWARD), "seek sample");
+        }
         avcodec_flush_buffers(decoder.get());
         bool found = false;
         while (av_read_frame(format, packet.get()) >= 0) {
@@ -476,7 +480,12 @@ json scan_media(
     const double duration = duration_seconds(format.get(), video);
     std::vector<double> sample_times;
     if (video) {
-        if (duration <= 1.0) {
+        const std::string format_name = format->iformat ? format->iformat->name : "";
+        if (format_name.find("image2") != std::string::npos) {
+            // Still-image demuxers expose a synthetic 0.04 s duration. Seeking to
+            // its midpoint can consume the only packet without returning a frame.
+            sample_times = {0.0};
+        } else if (duration <= 1.0) {
             sample_times = {std::max(0.0, duration * 0.5)};
         } else {
             const auto margin = std::min(0.5, duration * 0.1);

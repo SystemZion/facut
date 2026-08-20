@@ -113,8 +113,12 @@ int run_jsonl() {
                         bool cached = false;
                         if (std::filesystem::is_regular_file(checkpoint)) {
                             data = facut_native::read_checkpoint(checkpoint);
-                            cached = true;
-                        } else {
+                            const bool incomplete_still =
+                                data.value("format", std::string()) == "image2" &&
+                                data.value("representative_frames", json::array()).empty();
+                            cached = !incomplete_still;
+                        }
+                        if (!cached) {
                             data = facut_native::scan_media(source, options, fingerprint);
                             facut_native::write_checkpoint(checkpoint, data);
                         }
