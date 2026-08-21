@@ -4,7 +4,7 @@ import pytest
 
 from facut.core.command_engine import CommandEngineError
 from facut.core.project_manager import ProjectManager
-from facut.recipe import RecipeDocument, RecipeEngine, RecipeError
+from facut.recipe import RecipeDocument, RecipeEngine
 
 
 def test_recipe_plan_and_build_use_one_atomic_revision(tmp_path) -> None:

@@ -12,7 +12,7 @@ import typer
 from facut.cli.common import public_error
 from facut.core.models import MediaKind
 from facut.core.project_manager import ProjectManager
-from facut.media.proxy_manager import ProxyError, ProxyManager
+from facut.media.proxy_manager import ProxyManager
 from facut.responses import success_response
 
 

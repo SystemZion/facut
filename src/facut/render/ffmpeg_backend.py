@@ -10,7 +10,6 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-import re
 from typing import Any, Callable
 
 from facut.core.models import ProjectDocument

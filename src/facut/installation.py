@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 from platformdirs import user_data_path
 
 from facut import __version__
-from facut.config import AppConfig, ModelConfig, load_config, save_config
+from facut.config import AppConfig, load_config, save_config
 from facut.downloads import MODEL_CATALOG, ModelDownloader
 from facut.exceptions import InvalidArgumentError
 

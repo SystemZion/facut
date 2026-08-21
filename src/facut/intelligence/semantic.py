@@ -10,7 +10,7 @@ import re
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from facut.core.models import ProjectDocument
 

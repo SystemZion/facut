@@ -413,7 +413,6 @@ class GraphBuilder:
         for index in range(1, len(clips)):
             previous, clip = clips[index - 1], clips[index]
             transition = transitions.get((previous.id, clip.id))
-            overlap = previous.end - clip.timeline_start
             out_v, out_a = f"vc{index}", f"ac{index}"
             if transition is not None:
                 definition = transition_registry.get(transition.type)

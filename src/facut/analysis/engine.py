@@ -15,7 +15,7 @@ import shutil
 import sys
 from typing import Any
 
-from facut.exceptions import DependencyMissingError, NotImplementedFacutError
+from facut.exceptions import DependencyMissingError
 from facut.media.probe import probe_raw
 from facut.media.tools import find_executable, run_tool
 from facut.qc.engine import QCEngine, QCSource

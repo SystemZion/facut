@@ -218,7 +218,7 @@ def test_selector_alias_rename_and_ambiguous_display_name(tmp_path: Path) -> Non
         store.resolve("旅行旁白")
     assert ambiguous.value.code == "VOICE_AMBIGUOUS"
 
-    aliased = store.set_alias(first.id, "zion")
+    store.set_alias(first.id, "zion")
     assert store.resolve("ZION").id == first.id
     renamed = store.rename("zion", "Zion 自然口播")
     assert renamed.id == first.id

@@ -10,7 +10,7 @@ from typing import Annotated, Any
 import typer
 
 from facut.cli.common import public_error
-from facut.config import AppConfig, ModelConfig, load_config, save_config
+from facut.config import AppConfig, load_config, save_config
 from facut.installation import install_facut, update_facut
 from facut.responses import success_response
 

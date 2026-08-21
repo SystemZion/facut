@@ -18,7 +18,6 @@ from facut.intelligence import (
     generate_narration_plan,
     load_narration_plan,
     load_semantic_index,
-    prepare_narration_apply,
     save_narration_plan,
     search_semantic_index,
 )

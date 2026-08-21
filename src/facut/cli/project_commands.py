@@ -493,7 +493,6 @@ def run_command(
             if has_agent_actions
             else CommandEngine(manager).run_batch(payload, dry_run=dry_run)
         )
-        document = manager.require_document()
         _emit(ctx, "run", result["data"], f"[green]Applied {len(payload.get('commands', []))} command(s).[/green]", revision=result["project_revision"])
     except Exception as error:
         _abort(ctx, "run", error)

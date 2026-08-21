@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from facut.core.models import ProjectDocument, TrackType
+
+if TYPE_CHECKING:
+    from .narration_plan import NarrationPlan
 
 
 _ANGLES: tuple[tuple[set[str], str], ...] = (
@@ -194,11 +197,7 @@ def generate_narration_plan(
     adapter has been configured by the caller.
     """
 
-    from .narration_plan import (
-        NarrationPlan,
-        NarrationProviderNotConfigured,
-        narration_plan_from_suggestions,
-    )
+    from .narration_plan import NarrationProviderNotConfigured, narration_plan_from_suggestions
 
     if provider != "deterministic":
         raise NarrationProviderNotConfigured(

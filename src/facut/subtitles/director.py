@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from facut.core.models import ProjectDocument, SubtitleCue, TextStyle, Track, TrackType
 from facut.core.project_manager import ProjectManager
