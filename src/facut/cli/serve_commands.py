@@ -149,6 +149,8 @@ def serve_command(
                 "narration.synthesize", "vlog.prepare",
                 "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
                 "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
+                "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
+                "vlog.bible.show", "vlog.bible.import",
                 "subtitle.glossary.add", "typography.plan", "typography.apply",
                 "font.scan", "font.register", "font.match", "font.audit",
                 "vlog.preview", "vlog.build", "library.music.add", "library.sfx.add",
@@ -640,6 +642,8 @@ def serve_command(
             elif method in {
                 "vlog.prepare", "vlog.inspect.next", "vlog.observe", "vlog.status",
                 "vlog.plan", "vlog.compare", "vlog.refine",
+                "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
+                "vlog.bible.show", "vlog.bible.import",
             }:
                 from facut.media.proxy_manager import ProxyManager
                 from facut.vlog import (
@@ -648,9 +652,14 @@ def serve_command(
                     director_status,
                     ingest_observations,
                     import_source_resumable,
+                    load_trip_bible,
                     next_inspection_task,
+                    next_inbox_items,
                     prepare_evidence_manifest,
+                    rebuild_director_inbox,
                     refine_story_candidate,
+                    resolve_inbox_item,
+                    save_trip_bible,
                 )
 
                 if method == "vlog.prepare":
@@ -705,6 +714,25 @@ def serve_command(
                         data["warnings"] = [*data.get("warnings", []), *native_warnings]
                 elif method == "vlog.inspect.next":
                     data = next_inspection_task(manager.project_dir)
+                elif method == "vlog.inbox.next":
+                    data = next_inbox_items(
+                        manager.project_dir, limit=int(params.get("limit", 8))
+                    )
+                elif method == "vlog.inbox.list":
+                    data = rebuild_director_inbox(manager.project_dir)
+                elif method == "vlog.inbox.resolve":
+                    data = resolve_inbox_item(
+                        manager.project_dir, str(params["item_id"]),
+                        resolution=str(params["resolution"]),
+                    )
+                elif method == "vlog.bible.show":
+                    data = load_trip_bible(
+                        manager.project_dir,
+                        default_name=manager.require_document().project.name,
+                    ).model_dump(mode="json")
+                elif method == "vlog.bible.import":
+                    data = save_trip_bible(manager.project_dir, dict(params["bible"]))
+                    data["director_inbox"] = rebuild_director_inbox(manager.project_dir)
                 elif method == "vlog.observe":
                     data = ingest_observations(
                         manager.require_document(),

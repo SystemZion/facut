@@ -15,9 +15,14 @@ from facut.vlog import (
     compare_story_candidates,
     director_status,
     ingest_observations,
+    load_trip_bible,
+    next_inbox_items,
     next_inspection_task,
     prepare_evidence_manifest,
+    rebuild_director_inbox,
     refine_story_candidate,
+    resolve_inbox_item,
+    save_trip_bible,
 )
 
 
@@ -51,6 +56,79 @@ def test_prepare_creates_complete_resumable_inspection_contract(tmp_path) -> Non
     assert task["minimum_observations"] == 2
     assert task["required_output_schema"]["additionalProperties"] is False
     assert director_status(manager.project_dir)["stage"] == "inspection"
+    inbox = next_inbox_items(manager.project_dir, limit=2)
+    assert inbox["returned"] == 2
+    assert all(item["kind"] == "baseline" for item in inbox["items"])
+    assert inbox["items"][0]["priority"] >= inbox["items"][1]["priority"]
+
+
+def test_director_inbox_prioritizes_incomplete_event_chain_and_keeps_resolution(
+    tmp_path,
+) -> None:
+    manager = _manager(tmp_path, count=1)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=1)
+    ingest_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "observations": [{
+                "observation_id": "fall",
+                "media_id": "media_0",
+                "range": {"start": 1, "end": 5},
+                "summary": "女士摔倒，后续尚未确认",
+                "subject_id": "woman_01",
+                "event_chain": "ski-fall-recovery",
+                "event_order": 1,
+                "story_role": "incident",
+                "confidence": 0.9,
+            }]
+        },
+        task_id="inspect_0001",
+    )
+    inbox = rebuild_director_inbox(manager.project_dir)
+    assert inbox["items"][0]["kind"] == "continuity"
+    assert inbox["items"][0]["priority"] == 100
+    item_id = inbox["items"][0]["id"]
+    resolved = resolve_inbox_item(
+        manager.project_dir, item_id, resolution="已检查代理，原素材没有恢复镜头。"
+    )
+    assert resolved["item"]["status"] == "resolved"
+    rebuilt = rebuild_director_inbox(manager.project_dir)
+    assert next(item for item in rebuilt["items"] if item["id"] == item_id)["status"] == "resolved"
+
+
+def test_trip_bible_separates_confirmed_uncertain_and_rejected_claims(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    saved = save_trip_bible(
+        manager.project_dir,
+        {
+            "version": "1.0",
+            "trip_name": "西藏旅行",
+            "places": [{"id": "linzhi", "display_name": "林芝", "confirmed": True}],
+            "glossary": {"雅鲁藏布江大峡谷": "place"},
+            "facts": [
+                {
+                    "id": "weather",
+                    "statement": "当天有雨",
+                    "status": "uncertain",
+                    "source": "external-agent",
+                },
+                {
+                    "id": "arrival",
+                    "statement": "行程抵达林芝",
+                    "status": "confirmed",
+                    "source": "user",
+                },
+            ],
+            "forbidden_claims": ["未经证据确认具体海拔"],
+        },
+    )
+    assert saved["uncertain_fact_count"] == 1
+    bible = load_trip_bible(manager.project_dir)
+    assert bible.trip_name == "西藏旅行"
+    prepare_evidence_manifest(manager, generate_frames=False)
+    inbox = rebuild_director_inbox(manager.project_dir)
+    assert any(item["kind"] == "fact-review" for item in inbox["items"])
 
 
 def test_prepare_manifest_accepts_native_frames_without_python_decode(tmp_path) -> None:
@@ -326,6 +404,14 @@ def test_vlog_apply_is_public_atomic_agent_action() -> None:
     assert schema["rpc"] is True
     assert schema["mutates"] is True
     assert "candidate_id" in schema["parameters"]["required"]
+
+
+def test_director_inbox_and_trip_bible_are_public_agent_actions() -> None:
+    assert action_schema("vlog.inbox.next")["rpc"] is True
+    assert action_schema("vlog.inbox.resolve")["mutates"] is True
+    bible = action_schema("vlog.bible.import")
+    assert bible["rpc"] is True
+    assert "bible" in bible["parameters"]["required"]
 
 
 def test_event_chain_keeps_same_subject_incident_and_recovery(tmp_path) -> None:

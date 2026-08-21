@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Travel Director
+
+- Added a stable Director Inbox that prioritizes unobserved media, ambiguous
+  evidence, same-subject event-chain gaps and uncertain travel facts without
+  reducing mandatory baseline coverage.
+- Added the strict Trip Bible contract for reviewed people, places, dates,
+  glossary terms, confirmed/uncertain/rejected facts and forbidden claims.
+- Exposed Inbox and Trip Bible operations through CLI, workflow schema and
+  JSON-RPC with atomic files and auditable resolution notes.
+
 ## 0.8.2 — 2026-08-19
 
 - Added the optional C++20 `facut-native` sidecar for persistent batch probing,

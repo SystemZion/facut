@@ -41,8 +41,8 @@ FACUT 的主线是日常 VLOG、旅行、City Walk、亲子出行与周末记录
 
 ## 0.9 — Travel Director
 
-- Director Inbox 渐进式返回最值得 AI 查看的人物讲话、动作、反应和空镜，同时继续后台分析全素材。
-- Trip Bible 保存人物、地点、日期、专名、事件和不确定事实，约束字幕、口播和故事。
+- Director Inbox 基础闭环已实现：稳定优先级、低置信深审、事件链缺口、事实复审、显式解决记录；后续继续接入 ASR 讲话和空镜多样性信号。
+- Trip Bible 基础闭环已实现：人物、地点、日期、专名、确认/不确定/拒绝事实与禁用断言；后续将其约束贯穿字幕、口播和 StoryGraph。
 - StoryGraph 2 生成叙事、沉浸、视觉和生活流候选，并强制同一人物事件链完整有序。
 - Opening Lab/Ending Lab 在 CutGraph 分支生成多个开头和结尾，支持变化区间 A/B 审片。
 - Continuity Guard 检查地点、昼夜、动作方向、重复构图、B-roll 缺口和结尾硬停。

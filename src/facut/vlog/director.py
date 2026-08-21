@@ -276,6 +276,9 @@ def prepare_evidence_manifest(
             }
         )
     _write_json(root / "tasks.json", {"version": "1.0", "tasks": tasks})
+    from .context import rebuild_director_inbox
+
+    inbox = rebuild_director_inbox(manager.project_dir)
     return {
         "manifest": str((root / "manifest.json").resolve()),
         "asset_count": len(assets),
@@ -283,6 +286,7 @@ def prepare_evidence_manifest(
         "pending_tasks": len(tasks),
         "pending_assets": len(pending_assets),
         "baseline_coverage": "complete" if all(item["baseline_coverage"] == "complete" for item in assets) else "partial",
+        "director_inbox": {"pending": inbox["pending"], "path": inbox["path"]},
     }
 
 
@@ -346,6 +350,9 @@ def ingest_observations(
             task["status"] = "complete"
             matched_task = task["task_id"]
     _write_json(root / "tasks.json", tasks)
+    from .context import rebuild_director_inbox
+
+    inbox = rebuild_director_inbox(project_dir)
     return {
         "inserted_or_updated": inserted,
         "unchanged": unchanged,
@@ -353,6 +360,7 @@ def ingest_observations(
         "completed_task": matched_task,
         "remaining_tasks": sum(item["status"] == "pending" for item in tasks["tasks"]),
         "path": str((root / "observations.json").resolve()),
+        "director_inbox_pending": inbox["pending"],
     }
 
 
@@ -391,6 +399,16 @@ def director_status(
         "pending_tasks": len(pending),
         "next_command": next_command,
         "quality_policy": "quality-first",
+    }
+    from .context import load_trip_bible, rebuild_director_inbox
+
+    inbox = rebuild_director_inbox(project_dir)
+    bible = load_trip_bible(project_dir)
+    result["director_inbox"] = {"pending": inbox["pending"], "total": inbox["total"]}
+    result["trip_bible"] = {
+        "trip_name": bible.trip_name,
+        "confirmed_facts": sum(item.status == "confirmed" for item in bible.facts),
+        "uncertain_facts": sum(item.status == "uncertain" for item in bible.facts),
     }
     if applied.get("candidate_id"):
         result["candidate_id"] = applied["candidate_id"]

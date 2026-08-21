@@ -34,15 +34,24 @@ from facut.vlog import (
     director_status,
     ingest_observations,
     import_source_resumable,
+    load_trip_bible,
     next_inspection_task,
+    next_inbox_items,
     prepare_evidence_manifest,
+    rebuild_director_inbox,
     refine_story_candidate,
+    resolve_inbox_item,
+    save_trip_bible,
 )
 
 
 vlog_app = typer.Typer(help="Quality-first travel VLOG director workflow.")
 inspect_app = typer.Typer(help="Read resumable visual-inspection tasks for an external AI.")
+inbox_app = typer.Typer(help="Prioritize ambiguous, high-value and continuity review tasks.")
+bible_app = typer.Typer(help="Manage confirmed travel people, places, terms and facts.")
 vlog_app.add_typer(inspect_app, name="inspect")
+vlog_app.add_typer(inbox_app, name="inbox")
+vlog_app.add_typer(bible_app, name="bible")
 
 
 def _state(ctx: typer.Context):
@@ -290,6 +299,95 @@ def _auto_caption_and_typography(manager: ProjectManager, state, *, subtitle: st
         data["typography_plan"] = build_typography_plan(manager.project_dir)
         data["typography_apply"] = apply_typography_plan(manager)
     return data
+
+
+@inbox_app.command("next")
+def vlog_inbox_next(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=100)] = 8,
+) -> None:
+    """Return the highest-priority evidence tasks; never reduce baseline coverage."""
+
+    command = "vlog.inbox.next"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx, command, next_inbox_items(manager.project_dir, limit=limit),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@inbox_app.command("list")
+def vlog_inbox_list(ctx: typer.Context) -> None:
+    """List the complete stable Director Inbox queue."""
+
+    command = "vlog.inbox.list"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx, command, rebuild_director_inbox(manager.project_dir),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@inbox_app.command("resolve")
+def vlog_inbox_resolve(
+    ctx: typer.Context,
+    item_id: Annotated[str, typer.Argument()],
+    resolution: Annotated[str, typer.Option("--resolution")],
+) -> None:
+    """Resolve one review item with an auditable explanation."""
+
+    command = "vlog.inbox.resolve"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx, command,
+            resolve_inbox_item(manager.project_dir, item_id, resolution=resolution),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@bible_app.command("show")
+def vlog_bible_show(ctx: typer.Context) -> None:
+    """Show the facts allowed to constrain story, titles and narration."""
+
+    command = "vlog.bible.show"
+    try:
+        manager = manager_for(_state(ctx))
+        bible = load_trip_bible(
+            manager.project_dir, default_name=manager.require_document().project.name
+        )
+        _emit(
+            ctx, command, bible.model_dump(mode="json"),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@bible_app.command("import")
+def vlog_bible_import(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+) -> None:
+    """Validate and atomically replace the Trip Bible from reviewed JSON."""
+
+    command = "vlog.bible.import"
+    try:
+        manager = manager_for(_state(ctx))
+        payload = json.loads(source.expanduser().resolve().read_text("utf-8-sig"))
+        data = save_trip_bible(manager.project_dir, payload)
+        data["director_inbox"] = rebuild_director_inbox(manager.project_dir)
+        _emit(ctx, command, data, revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
 
 
 @vlog_app.command("prepare")

@@ -94,6 +94,8 @@ class StoryPlan(VlogModel):
 def vlog_workflow_schema() -> dict[str, Any]:
     """Machine-readable workflow contract used by independent AI agents."""
 
+    from .context import DirectorInboxItem, TripBible
+
     return {
         "version": "1.0",
         "quality_policy": {
@@ -104,6 +106,8 @@ def vlog_workflow_schema() -> dict[str, Any]:
         },
         "steps": [
             {"action": "vlog.prepare", "mutates_project": True},
+            {"action": "vlog.bible.import", "requires": "reviewed facts or an empty bible"},
+            {"action": "vlog.inbox.next", "repeat_until": "baseline and high-priority gaps resolved"},
             {"action": "vlog.inspect.next", "repeat_until": "pending_tasks == 0"},
             {"action": "vlog.observe", "idempotent_by": "observation_id"},
             {"action": "vlog.plan", "default_candidates": 3},
@@ -113,5 +117,7 @@ def vlog_workflow_schema() -> dict[str, Any]:
             {"action": "vlog.build", "requires": "ready candidate"},
         ],
         "evidence_schema": EvidenceObservation.model_json_schema(),
+        "director_inbox_schema": DirectorInboxItem.model_json_schema(),
+        "trip_bible_schema": TripBible.model_json_schema(),
         "story_plan_schema": StoryPlan.model_json_schema(),
     }

@@ -11,6 +11,8 @@
 
 ```powershell
 facut vlog prepare D:\Trip --project D:\Trip-Project
+facut --project D:\Trip-Project vlog bible import trip-bible.json
+facut --project D:\Trip-Project vlog inbox next --limit 8 --json
 facut --project D:\Trip-Project vlog inspect next --json
 facut --project D:\Trip-Project vlog observe observations.json
 facut --project D:\Trip-Project vlog plan --style comedy-vlog --target-duration 480
@@ -18,6 +20,8 @@ facut --project D:\Trip-Project vlog preview --all-candidates
 facut --project D:\Trip-Project vlog refine candidate-narrative --auto
 facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-4k -o D:\Trip-Final\final.mp4
 ```
+
+`Director Inbox` 不代替全素材覆盖：它只把未观察素材、低置信观察、同一人物事件链缺口和 Trip Bible 不确定事实按优先级送给 AI。`Trip Bible` 保存经确认的人物、地点、日期、专名和事实；只有 `confirmed` 事实可进入生成口播或标题，`uncertain` 会进入 Inbox，`rejected` 不得作为成片断言。
 
 `vlog run ... --auto` 也遵守同一质量门：缺少外部视觉观察或 ASR 中存在待复审词时返回 `REVIEW_REQUIRED`，不会伪造成功。字幕正文使用统一易读字体；科技、人文、风景、喜剧、家庭和美食标题通过逻辑字体角色匹配本机已授权字体，最终渲染前强制检查缺字。
 

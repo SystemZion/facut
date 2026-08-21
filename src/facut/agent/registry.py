@@ -239,6 +239,46 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             }
         ),
     },
+    "vlog.inbox.next": {
+        "summary": "Return the highest-priority truthful review tasks without reducing coverage.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8}}
+        ),
+    },
+    "vlog.inbox.list": {
+        "summary": "List the complete Director Inbox and stable review IDs.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.inbox.resolve": {
+        "summary": "Resolve one Director Inbox item with an auditable explanation.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "item_id": {"type": "string", "minLength": 1},
+                "resolution": {"type": "string", "minLength": 1},
+            },
+            ["item_id", "resolution"],
+        ),
+    },
+    "vlog.bible.show": {
+        "summary": "Read confirmed and uncertain trip context used to constrain generated claims.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.bible.import": {
+        "summary": "Validate and atomically replace a reviewed Trip Bible document.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"bible": {"type": "object", "additionalProperties": True}}, ["bible"]
+        ),
+    },
     "native.doctor": {
         "summary": "Verify the optional C++ sidecar, protocol, FFmpeg ABI, and features.",
         "mutates": False,
