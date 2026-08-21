@@ -33,7 +33,7 @@ from facut.voice import (
     VoiceProfileStore,
     build_recording_plan,
     provider_status,
-    validate_voice_samples,
+    validate_voice_profile,
 )
 from facut.voice.say import synthesize_voice_say
 from facut.voice.service import voice_service_status
@@ -144,7 +144,9 @@ def serve_command(
             if not isinstance(params, dict):
                 raise ValueError("Request params must be an object.")
             if method in {
-                "voice.say", "narration.synthesize", "vlog.prepare",
+                "voice.say", "voice.sample.propose", "voice.sample.list",
+                "voice.sample.show", "voice.sample.approve", "voice.sample.reject",
+                "narration.synthesize", "vlog.prepare",
                 "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
                 "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
                 "subtitle.glossary.add", "typography.plan", "typography.apply",
@@ -153,6 +155,8 @@ def serve_command(
                 "library.search", "library.audit", "style.list", "style.describe",
                 "style.validate",
                 "native.doctor", "analyze.batch",
+                "runtime.status", "runtime.cleanram", "runtime.warmup",
+                "runtime.autoload.configure",
             }:
                 _validate_declared_params(method, params)
             if method == "ping":
@@ -172,6 +176,47 @@ def serve_command(
                 native_path = discover_native()
                 data = NativeClient(native_path).doctor()
                 data["executable"] = str(native_path) if native_path else None
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.status":
+                from facut.runtime_control import autoload_status
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": autoload_status(), "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.cleanram":
+                from facut.runtime_control import clean_services
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": clean_services(
+                        params["services"], dry_run=bool(params.get("dry_run", False))
+                    ),
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.warmup":
+                from facut.runtime_control import warm_services
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": warm_services(params["services"]),
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.autoload.configure":
+                from facut.runtime_control import clean_services, configure_autoload
+
+                data = configure_autoload(
+                    str(params["service"]), enabled=bool(params["enabled"])
+                )
+                if not params["enabled"] and bool(params.get("stop_now", False)):
+                    data["stop"] = clean_services([str(params["service"])])
                 result = {
                     "status": "success", "command": method, "data": data,
                     "warnings": [], "errors": [],
@@ -999,6 +1044,41 @@ def serve_command(
                         temporary.unlink(missing_ok=True)
                     item["output"] = str(final_path)
                 result = {"status": "success", "command": method, "data": data, "warnings": data.get("warnings", []), "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.propose":
+                store = VoiceProfileStore()
+                candidate = store.propose_candidate(
+                    str(params["profile"]),
+                    str(params["source"]),
+                    transcript=params.get("transcript"),
+                    category=params.get("category"),
+                    delivery=params.get("delivery"),
+                    source_media_id=params.get("source_media_id"),
+                    source_start=params.get("source_start"),
+                    source_end=params.get("source_end"),
+                    identity_basis=str(params.get("identity_basis", "similarity")),
+                )
+                result = {"status": "success", "command": method, "data": {**candidate.public_dict(), "synthesis_eligible": False}, "warnings": ["Candidate audio is quarantined until the speaker is manually confirmed."], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.list":
+                store = VoiceProfileStore()
+                candidates = store.list_candidates(params.get("profile"))
+                if params.get("status") is not None:
+                    candidates = [item for item in candidates if item.status == params["status"]]
+                result = {"status": "success", "command": method, "data": {"count": len(candidates), "candidates": [item.public_dict() for item in candidates]}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.show":
+                candidate = VoiceProfileStore().get_candidate(str(params["candidate_id"]))
+                result = {"status": "success", "command": method, "data": candidate.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.approve":
+                candidate, profile = VoiceProfileStore().approve_candidate(
+                    str(params["candidate_id"]),
+                    speaker_confirmed=bool(params["speaker_confirmed"]),
+                    confirmation_statement=str(params["confirmation_statement"]),
+                )
+                result = {"status": "success", "command": method, "data": {"candidate": candidate.public_dict(), "profile_id": profile.id, "sample_count": len(profile.samples), "synthesis_eligible": True}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.reject":
+                candidate = VoiceProfileStore().reject_candidate(
+                    str(params["candidate_id"]), reason=str(params["reason"])
+                )
+                result = {"status": "success", "command": method, "data": candidate.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.import":
                 store = VoiceProfileStore()
                 profile = store.import_samples(
@@ -1010,13 +1090,20 @@ def serve_command(
             elif method == "voice.profile.validate":
                 store = VoiceProfileStore()
                 profile = store.resolve(str(params["profile_id"]))
-                data = validate_voice_samples(
+                data = validate_voice_profile(
+                    profile,
                     store.sample_paths(profile),
-                    recommended_total_seconds=float(params.get("recommended_seconds", 600)),
+                    recommended_total_seconds=float(params.get("recommended_seconds", 120)),
                 )
                 profile = store.set_status(
                     profile.id,
-                    {"pass": "ready", "warning": "warning", "fail": "invalid"}[data["status"]],
+                    (
+                        "invalid"
+                        if data["status"] == "fail"
+                        else "ready"
+                        if data["profile_assessment"]["synthesis_usable"]
+                        else "warning"
+                    ),
                 )
                 result = {"status": "success", "command": method, "data": {"profile_id": profile.id, "profile_status": profile.status, "report": data}, "warnings": [item["message"] for item in data["issues"]], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.delete":

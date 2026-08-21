@@ -333,7 +333,9 @@ facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --output 
 facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --delivery natural-vlog --takes 3 --output narration.wav
 facut --json voice styles
 facut voice record <VOICE_ID> --script vlog-style-capsules-v1
-facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,comedy,excited --output narration.wav
+facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,daily-chat,comedy,excited --output narration.wav
+facut voice sample propose candidate.wav --profile <VOICE_ID> --style daily-chat
+facut voice sample approve <CANDIDATE_ID> --speaker-confirmed --confirmation-statement "我确认这段录音属于该声音档案中的已授权本人。"
 facut voice studio
 facut voice studio --voice Zion --mode styles
 facut voice alias set Zion zion
@@ -344,13 +346,29 @@ facut voice serve status --json
 
 `voice record` 在 `127.0.0.1` 打开 FACUT 自带录音页，可选择麦克风、逐条朗读、试听、重录并在保存时执行 QC。浏览器把音频转换为 48 kHz、16-bit、单声道 PCM WAV，只发送给本机临时服务；完成后服务自动关闭。已有 PCM WAV 仍可通过 `voice profile import` 由 AI/CLI 批量导入。
 
-本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（聊天版）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
+本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（有组织的熟人聊天）、`daily-chat`（旅行现场随口交流）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
 
-原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 只增加 5 条、约 2 分钟风格参考；新样本会保存明确的风格标签，生成时优先匹配。未补录时五种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
+从视频中提取、仅凭“声音相似”判断的录音必须先通过 `voice sample propose` 进入隔离候选区。候选音频不会参与合成；只有用户用 `--speaker-confirmed` 明确确认它属于已授权本人后，`voice sample approve` 才会把副本加入档案。拒绝的候选保留审查证据，不会修改或删除源视频和原始 WAV。
+
+原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 增加 5 条、约 2 分钟风格参考；现场确认样本可进一步覆盖 `daily-chat`。新样本会保存明确的风格标签，生成时优先匹配。未补录时六种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
 
 `voice studio` 不要求预先创建声音 ID。首次打开可直接输入任意名称并确认本人/已授权关系；`quick` 为 3 条快速试录，`recommended` 为 8 条常见 VLOG 句型，`styles` 为 5 条风格胶囊。档案内部继续使用稳定 ID，命令可使用唯一 alias 或唯一显示名称；重名时返回 `VOICE_AMBIGUOUS`，不会猜测。
 
 `voice serve` 只绑定 `127.0.0.1`，使用随机令牌和本机状态文件。新版 CosyVoice provider 的 `--facut-voice-jsonl` 模式会在同一进程中保留模型；`--require-cuda` 下无法验证 CUDA 时直接失败，不静默回到 CPU。模型目录继续通过 `facut models link voice_model <path>` 独立配置，不进入 EXE 或 GitHub。
+
+FACUT 默认在普通命令启动后异步预热已配置的重服务，前台命令不等待模型加载；目前注册的可常驻重服务为 `voice`。可以精确选择要预热或释放的服务：
+
+```powershell
+facut autoload status
+facut autoload disable voice             # 以后不再自动预热，但不停止当前服务
+facut autoload disable voice --stop-now  # 同时释放当前语音模型内存
+facut autoload enable voice
+facut warmup --service voice
+facut cleanram --service voice
+facut cleanram --service all --dry-run
+```
+
+`cleanram` 强制要求 `--service`，避免误停所有后台任务；`all` 只代表 FACUT 已注册的可重建服务，不会结束任意系统进程。它不会删除模型、代理、缓存、声音样本或工程文件。自动预热失败仅写入本地运行时日志，不会阻断当前剪辑命令。`facut --version` 和这些生命周期命令走轻量启动入口，其余高频 Agent 编辑仍推荐使用 `facut serve` 的 JSON-RPC 常驻会话。
 
 没有 NVIDIA GPU 时，可在用户配置的 `[voice]` 段设置外部 CPU PyTorch
 `cpu_overlay`。此时 `--device auto` 会在一次性合成和常驻服务中统一选择

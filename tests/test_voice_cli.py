@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
+import struct
+import wave
 
 from typer.testing import CliRunner
 
@@ -65,6 +68,7 @@ def test_voice_styles_are_stable_and_agent_discoverable() -> None:
         "natural",
         "broadcast",
         "chat",
+        "daily-chat",
         "comedy",
         "excited",
     ]
@@ -130,3 +134,67 @@ def test_voice_profile_actions_work_over_persistent_agent_session(tmp_path, monk
     lines = [json.loads(line) for line in result.stdout.splitlines()]
     assert lines[1]["result"]["data"]["id"].startswith("voice_")
     assert lines[2]["result"]["data"]["count"] == 1
+
+
+def test_voice_candidate_cli_requires_explicit_speaker_confirmation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FACUT_VOICE_HOME", str(tmp_path / "voices"))
+    runner = CliRunner()
+    created = runner.invoke(
+        app,
+        [
+            "--json", "voice", "profile", "create", "Roger", "--speaker", "self",
+            "--consent", "self", "--consent-statement",
+            "I confirm this is my own voice and authorize local synthesis.",
+        ],
+    )
+    profile_id = json.loads(created.stdout)["data"]["id"]
+    source = tmp_path / "chat.wav"
+    with wave.open(str(source), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(48000)
+        frames = bytearray()
+        for index in range(round(3.1 * 48000)):
+            value = round(math.sin(2 * math.pi * 220 * index / 48000) * 6000)
+            frames.extend(struct.pack("<h", value))
+        stream.writeframes(frames)
+    proposed = runner.invoke(
+        app,
+        [
+            "--json", "voice", "sample", "propose", str(source),
+            "--profile", profile_id, "--delivery", "daily-chat",
+        ],
+    )
+    assert proposed.exit_code == 0, proposed.output
+    candidate_id = json.loads(proposed.stdout)["data"]["id"]
+    denied = runner.invoke(app, ["--json", "voice", "sample", "approve", candidate_id])
+    assert denied.exit_code != 0
+    approved = runner.invoke(
+        app,
+        [
+            "--json", "voice", "sample", "approve", candidate_id,
+            "--speaker-confirmed", "--confirmation-statement",
+            "I confirm this recording belongs to the authorized speaker.",
+        ],
+    )
+    assert approved.exit_code == 0, approved.output
+    assert json.loads(approved.stdout)["data"]["synthesis_eligible"] is True
+    project = tmp_path / "project"
+    assert runner.invoke(app, ["--json", "init", str(project)]).exit_code == 0
+    requests = "\n".join(
+        [
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "voice.sample.show",
+                    "params": {"candidate_id": candidate_id},
+                }
+            ),
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "shutdown"}),
+        ]
+    )
+    rpc = runner.invoke(app, ["--project", str(project), "serve"], input=requests + "\n")
+    rpc_lines = [json.loads(line) for line in rpc.stdout.splitlines()]
+    assert rpc.exit_code == 0, rpc.output
+    assert rpc_lines[1]["result"]["data"]["status"] == "approved"

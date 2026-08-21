@@ -20,8 +20,8 @@ from facut.voice import (
     configure_provider,
     provider_status,
     synthesize_with_provider,
+    validate_voice_profile,
     validate_voice_styles,
-    validate_voice_samples,
     voice_style_catalog,
 )
 from facut.voice.say import synthesize_voice_say
@@ -39,11 +39,13 @@ provider_app = typer.Typer(help="Inspect the configured local voice synthesis pr
 alias_app = typer.Typer(help="Manage stable human-readable voice aliases.")
 default_app = typer.Typer(help="Manage the default narration voice.")
 serve_app = typer.Typer(help="Keep the local voice model warm for fast synthesis.")
+sample_app = typer.Typer(help="Review quarantined voice samples before synthesis.")
 voice_app.add_typer(profile_app, name="profile")
 voice_app.add_typer(provider_app, name="provider")
 voice_app.add_typer(alias_app, name="alias")
 voice_app.add_typer(default_app, name="default")
 voice_app.add_typer(serve_app, name="serve")
+voice_app.add_typer(sample_app, name="sample")
 
 
 def _state(ctx: typer.Context):
@@ -174,20 +176,27 @@ def profile_validate(
     profile_id: Annotated[str, typer.Argument()],
     recommended_seconds: Annotated[
         float, typer.Option("--recommended-seconds", min=1)
-    ] = 600,
+    ] = 120,
 ) -> None:
     """Run bounded PCM quality checks for every stored voice sample."""
 
     try:
         store = VoiceProfileStore()
         profile = store.resolve(profile_id)
-        report = validate_voice_samples(
+        report = validate_voice_profile(
+            profile,
             store.sample_paths(profile),
             recommended_total_seconds=recommended_seconds,
         )
         profile = store.set_status(
             profile.id,
-            {"pass": "ready", "warning": "warning", "fail": "invalid"}[report["status"]],
+            (
+                "invalid"
+                if report["status"] == "fail"
+                else "ready"
+                if report["profile_assessment"]["synthesis_usable"]
+                else "warning"
+            ),
         )
         _emit(
             ctx,
@@ -197,6 +206,118 @@ def profile_validate(
         )
     except Exception as error:
         _fail(ctx, "voice.profile.validate", error)
+
+
+@sample_app.command("propose")
+def voice_sample_propose(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(help="PCM WAV candidate recording.")],
+    profile: Annotated[str, typer.Option("--profile", help="Target voice ID, alias, or name.")],
+    transcript: Annotated[str | None, typer.Option("--transcript")] = None,
+    category: Annotated[str | None, typer.Option("--category")] = None,
+    delivery: Annotated[str | None, typer.Option("--delivery", "--style")] = None,
+    source_media_id: Annotated[str | None, typer.Option("--source-media-id")] = None,
+    source_start: Annotated[float | None, typer.Option("--source-start", min=0)] = None,
+    source_end: Annotated[float | None, typer.Option("--source-end", min=0)] = None,
+    identity_basis: Annotated[str, typer.Option("--identity-basis")] = "similarity",
+) -> None:
+    """Quarantine a possible sample; it is not available to synthesis yet."""
+
+    try:
+        candidate = VoiceProfileStore().propose_candidate(
+            profile,
+            source,
+            transcript=transcript,
+            category=category,
+            delivery=delivery,
+            source_media_id=source_media_id,
+            source_start=source_start,
+            source_end=source_end,
+            identity_basis=identity_basis,
+        )
+        _emit(
+            ctx,
+            "voice.sample.propose",
+            {**candidate.public_dict(), "synthesis_eligible": False},
+            warnings=["Candidate audio is quarantined until the speaker is manually confirmed."],
+        )
+    except Exception as error:
+        _fail(ctx, "voice.sample.propose", error)
+
+
+@sample_app.command("list")
+def voice_sample_list(
+    ctx: typer.Context,
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+) -> None:
+    """List candidate recordings without exposing private absolute paths."""
+
+    try:
+        if status is not None and status not in {"pending", "approved", "rejected"}:
+            raise ValueError("Candidate status must be pending, approved, or rejected.")
+        candidates = VoiceProfileStore().list_candidates(profile)
+        if status is not None:
+            candidates = [item for item in candidates if item.status == status]
+        _emit(
+            ctx,
+            "voice.sample.list",
+            {"count": len(candidates), "candidates": [item.public_dict() for item in candidates]},
+        )
+    except Exception as error:
+        _fail(ctx, "voice.sample.list", error)
+
+
+@sample_app.command("show")
+def voice_sample_show(ctx: typer.Context, candidate_id: Annotated[str, typer.Argument()]) -> None:
+    try:
+        _emit(ctx, "voice.sample.show", VoiceProfileStore().get_candidate(candidate_id).public_dict())
+    except Exception as error:
+        _fail(ctx, "voice.sample.show", error)
+
+
+@sample_app.command("approve")
+def voice_sample_approve(
+    ctx: typer.Context,
+    candidate_id: Annotated[str, typer.Argument()],
+    speaker_confirmed: Annotated[bool, typer.Option("--speaker-confirmed")] = False,
+    confirmation_statement: Annotated[str, typer.Option("--confirmation-statement")] = "",
+) -> None:
+    """Approve only after confirming the authorized speaker's identity."""
+
+    try:
+        candidate, profile = VoiceProfileStore().approve_candidate(
+            candidate_id,
+            speaker_confirmed=speaker_confirmed,
+            confirmation_statement=confirmation_statement,
+        )
+        _emit(
+            ctx,
+            "voice.sample.approve",
+            {
+                "candidate": candidate.public_dict(),
+                "profile_id": profile.id,
+                "sample_count": len(profile.samples),
+                "synthesis_eligible": True,
+            },
+        )
+    except Exception as error:
+        _fail(ctx, "voice.sample.approve", error)
+
+
+@sample_app.command("reject")
+def voice_sample_reject(
+    ctx: typer.Context,
+    candidate_id: Annotated[str, typer.Argument()],
+    reason: Annotated[str, typer.Option("--reason")],
+) -> None:
+    """Reject a candidate without deleting its review evidence."""
+
+    try:
+        candidate = VoiceProfileStore().reject_candidate(candidate_id, reason=reason)
+        _emit(ctx, "voice.sample.reject", candidate.public_dict())
+    except Exception as error:
+        _fail(ctx, "voice.sample.reject", error)
 
 
 @profile_app.command("delete")

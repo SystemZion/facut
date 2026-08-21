@@ -92,6 +92,16 @@ class VoiceConfig(BaseModel):
     cpu_overlay: Path | None = None
 
 
+class RuntimeConfig(BaseModel):
+    """Background warm-service policy for low-latency interactive commands."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    autoload: bool = True
+    services: list[str] = Field(default_factory=lambda: ["voice"])
+    voice_idle_timeout: float = Field(default=600.0, ge=0)
+
+
 class AppConfig(BaseModel):
     """Validated global facut settings."""
 
@@ -103,6 +113,7 @@ class AppConfig(BaseModel):
     tools: ToolConfig = Field(default_factory=ToolConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     log_level: str = "INFO"
     temporary_directory: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()) / "facut")
 
@@ -179,6 +190,8 @@ def _toml_scalar(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_scalar(item) for item in value) + "]"
     text = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{text}"'
 
@@ -196,7 +209,7 @@ def serialize_config(config: AppConfig) -> str:
                 raw["tools"][key] = "auto"
     lines = [f'log_level = {_toml_scalar(raw["log_level"])}']
     lines.append(f'temporary_directory = {_toml_scalar(raw["temporary_directory"])}')
-    for section in ("render", "preview", "cache", "tools", "models", "voice"):
+    for section in ("render", "preview", "cache", "tools", "models", "voice", "runtime"):
         lines.extend(("", f"[{section}]"))
         lines.extend(
             f"{key} = {_toml_scalar(value)}"

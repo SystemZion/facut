@@ -15,7 +15,7 @@ import wave
 
 from platformdirs import user_data_path
 
-from .models import ConsentRecord, VoiceProfile, VoiceSample
+from .models import ConsentRecord, VoiceProfile, VoiceSample, VoiceSampleCandidate
 
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -164,6 +164,22 @@ class VoiceProfileStore:
 
     def _profile_file(self, profile_id: str) -> Path:
         return self._profile_dir(profile_id) / "profile.json"
+
+    def _candidate_file(self, profile_id: str, candidate_id: str) -> Path:
+        if not re.fullmatch(r"candidate_[A-Z0-9_]{4,64}", candidate_id):
+            raise ValueError(f'Invalid voice sample candidate ID "{candidate_id}".')
+        return self._profile_dir(profile_id) / "candidates" / f"{candidate_id}.json"
+
+    @staticmethod
+    def _atomic_write_model(destination: Path, payload: dict) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination.parent, delete=False, suffix=".tmp"
+        ) as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            temporary = Path(stream.name)
+        os.replace(temporary, destination)
 
     def _save(self, profile: VoiceProfile) -> None:
         destination = self._profile_file(profile.id)
@@ -390,6 +406,135 @@ class VoiceProfileStore:
             profile.status = "draft"
         self._save(profile)
         return profile
+
+    def propose_candidate(
+        self,
+        selector: str,
+        source_path: str | Path,
+        *,
+        transcript: str | None = None,
+        category: str | None = None,
+        delivery: str | None = None,
+        source_media_id: str | None = None,
+        source_start: float | None = None,
+        source_end: float | None = None,
+        identity_basis: str = "similarity",
+    ) -> VoiceSampleCandidate:
+        """Copy audio into quarantine without making it a synthesis reference."""
+
+        profile = self.resolve(selector)
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f'Voice candidate "{source}" was not found.')
+        if source.suffix.casefold() != ".wav":
+            raise ValueError("FACUT voice candidates must be PCM WAV files.")
+        if source_end is not None and source_start is not None and source_end <= source_start:
+            raise ValueError("Voice candidate source_end must be greater than source_start.")
+        digest = _hash_file(source)
+        for existing in self.list_candidates(profile.id):
+            if existing.sha256 == digest:
+                return existing
+        duration, rate, channels, width = _wave_info(source)
+        safe_name = _SAFE_NAME.sub("-", source.name).strip(".-") or "candidate.wav"
+        relative = f"candidates/audio/{digest[:16]}-{safe_name}"
+        destination = self._profile_dir(profile.id) / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+        candidate = VoiceSampleCandidate(
+            profile_id=profile.id,
+            sha256=digest,
+            stored_path=relative,
+            original_name=source.name,
+            size=source.stat().st_size,
+            duration=duration,
+            sample_rate=rate,
+            channels=channels,
+            sample_width=width,
+            transcript=transcript,
+            category=category,
+            delivery=delivery,
+            source_media_id=source_media_id,
+            source_start=source_start,
+            source_end=source_end,
+            identity_basis=identity_basis,
+        )
+        self._atomic_write_model(
+            self._candidate_file(profile.id, candidate.id),
+            candidate.model_dump(mode="json"),
+        )
+        return candidate
+
+    def list_candidates(self, selector: str | None = None) -> list[VoiceSampleCandidate]:
+        profiles = [self.resolve(selector)] if selector else self.list()
+        result: list[VoiceSampleCandidate] = []
+        for profile in profiles:
+            directory = self._profile_dir(profile.id) / "candidates"
+            for path in sorted(directory.glob("candidate_*.json")):
+                result.append(VoiceSampleCandidate.model_validate_json(path.read_text("utf-8")))
+        return sorted(result, key=lambda item: (item.proposed_at, item.id))
+
+    def get_candidate(self, candidate_id: str) -> VoiceSampleCandidate:
+        matches = [item for item in self.list_candidates() if item.id == candidate_id]
+        if len(matches) != 1:
+            raise FileNotFoundError(f'Voice sample candidate "{candidate_id}" was not found.')
+        return matches[0]
+
+    def approve_candidate(
+        self,
+        candidate_id: str,
+        *,
+        speaker_confirmed: bool,
+        confirmation_statement: str,
+    ) -> tuple[VoiceSampleCandidate, VoiceProfile]:
+        candidate = self.get_candidate(candidate_id)
+        if candidate.status != "pending":
+            raise ValueError(f'Voice sample candidate "{candidate_id}" is already {candidate.status}.')
+        statement = confirmation_statement.strip()
+        if not speaker_confirmed or len(statement) < 12:
+            raise PermissionError(
+                "Approving candidate audio requires --speaker-confirmed and a confirmation statement."
+            )
+        source = (self._profile_dir(candidate.profile_id) / candidate.stored_path).resolve()
+        profile_root = self._profile_dir(candidate.profile_id).resolve()
+        if profile_root not in source.parents or not source.is_file():
+            raise FileNotFoundError("Quarantined voice candidate audio is missing.")
+        profile = self.import_samples(
+            candidate.profile_id,
+            [source],
+            transcript=candidate.transcript,
+            category=candidate.category,
+            delivery=candidate.delivery,
+        )
+        candidate.status = "approved"
+        candidate.speaker_confirmed = True
+        candidate.confirmation_statement = statement
+        candidate.resolution_reason = (
+            "The user confirmed this recording belongs to the authorized speaker."
+        )
+        candidate.resolved_at = datetime.now(timezone.utc)
+        self._atomic_write_model(
+            self._candidate_file(candidate.profile_id, candidate.id),
+            candidate.model_dump(mode="json"),
+        )
+        return candidate, profile
+
+    def reject_candidate(self, candidate_id: str, *, reason: str) -> VoiceSampleCandidate:
+        candidate = self.get_candidate(candidate_id)
+        if candidate.status != "pending":
+            raise ValueError(f'Voice sample candidate "{candidate_id}" is already {candidate.status}.')
+        explanation = reason.strip()
+        if not explanation:
+            raise ValueError("Rejecting a voice candidate requires a reason.")
+        candidate.status = "rejected"
+        candidate.resolution_reason = explanation
+        candidate.resolved_at = datetime.now(timezone.utc)
+        self._atomic_write_model(
+            self._candidate_file(candidate.profile_id, candidate.id),
+            candidate.model_dump(mode="json"),
+        )
+        return candidate
 
     def sample_paths(self, profile: VoiceProfile) -> list[Path]:
         root = self._profile_dir(profile.id).resolve()

@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from facut.cli.main import app
 from facut.native.client import (
     NativeClient,
     NativeProtocolError,
@@ -111,6 +113,82 @@ def test_batch_scan_restarts_native_once(monkeypatch, tmp_path: Path) -> None:
     )
     assert calls == 2
     assert Path(result["result_file"]).is_file()
+
+
+def test_parallel_batch_progress_reports_rate_and_eta(monkeypatch, tmp_path: Path) -> None:
+    executable = tmp_path / "facut-native.exe"
+    executable.write_bytes(b"fake")
+    client = NativeClient(executable)
+
+    def completed(request, *, progress=None, timeout=None):
+        del progress, timeout
+        item = request["inputs"][0]
+        return {
+            "task_id": f"task-{item['media_id']}",
+            "results": [{"media_id": item["media_id"], "status": "success"}],
+            "events": [],
+        }
+
+    monkeypatch.setattr(client, "_run", completed)
+    events = []
+    client.batch_scan(
+        [
+            {"media_id": "media_01", "path": str(tmp_path / "one.mp4")},
+            {"media_id": "media_02", "path": str(tmp_path / "two.mp4")},
+        ],
+        output_directory=tmp_path / "results",
+        jobs=2,
+        progress=events.append,
+    )
+    assert [event["completed"] for event in events] == [1, 2]
+    assert events[-1]["eta_seconds"] == 0
+    assert events[-1]["assets_per_second"] > 0
+
+
+def test_batch_cli_streams_jsonl_progress(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    native = tmp_path / "facut-native.exe"
+    native.write_bytes(b"binary")
+
+    def fake_batch(self, inputs, *, output_directory, progress=None, **kwargs):
+        del self, kwargs
+        items = list(inputs)
+        assert progress is not None
+        progress({
+            "event": "progress", "stage": "native.batch_scan", "completed": 1,
+            "total": 1, "progress": 1.0, "media_id": items[0]["media_id"],
+            "elapsed_seconds": 0.1, "assets_per_second": 10.0, "eta_seconds": 0.0,
+        })
+        result_path = Path(output_directory) / "native-results.json"
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text("{}", encoding="utf-8")
+        return {
+            "task_id": "task-test", "result_file": str(result_path),
+            "elapsed_seconds": 0.1,
+            "results": [{"media_id": items[0]["media_id"], "status": "success"}],
+        }
+
+    monkeypatch.setattr("facut.native.discover_native", lambda: native)
+    monkeypatch.setattr("facut.native.NativeClient.batch_scan", fake_batch)
+    result = CliRunner().invoke(
+        app,
+        ["analyze", "batch", str(tmp_path), "--jsonl-progress", "--engine", "native"],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert lines[0]["event"] == "progress"
+    assert lines[0]["media_id"] == "batch_000001"
+    assert lines[-1]["status"] == "success"
+
+
+def test_collect_batch_inputs_scales_to_one_thousand_assets(tmp_path: Path) -> None:
+    for index in range(1000):
+        (tmp_path / f"clip-{index:04d}.mp4").write_bytes(b"media")
+    inputs, summary = collect_batch_inputs(tmp_path)
+    assert len(inputs) == 1000
+    assert summary["original_count"] == 1000
+    assert inputs[-1]["media_id"] == "batch_001000"
 
 
 def test_batch_failure_contract_warns_for_partial_results() -> None:

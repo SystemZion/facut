@@ -20,6 +20,9 @@ def test_help_lists_doctor_and_global_options() -> None:
     )
     assert result.exit_code == 0
     assert "doctor" in result.stdout
+    assert "cleanram" in result.stdout
+    assert "warmup" in result.stdout
+    assert "autoload" in result.stdout
     registered_options = {
         option
         for parameter in get_command(app).params

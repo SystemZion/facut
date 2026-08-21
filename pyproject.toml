@@ -27,7 +27,7 @@ dependencies = [
   "rich>=13.7,<15",
   # Typer 0.22+ currently truncates Rich option names in 80-column CI terminals.
   "typer>=0.12,<0.22",
-  "openpyxl>=3.1,<4",
+  "openpyxl>=3.1.5,<4",
   "opentimelineio>=0.18,<0.19",
   "Pillow>=11,<13",
   "fonttools>=4.53,<5",
@@ -48,7 +48,7 @@ analysis = [
 ]
 
 [project.scripts]
-facut = "facut.cli.main:main"
+facut = "facut.bootstrap:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/facut"]

@@ -25,6 +25,10 @@ _STYLE_SIGNALS: dict[str, tuple[tuple[str, float], ...]] = {
         ("我跟你说", 3.0), ("你看", 2.0), ("你觉得", 2.5), ("咱们", 1.8),
         ("有没有", 1.3), ("吧", 0.5), ("？", 0.7),
     ),
+    "daily-chat": (
+        ("其实", 1.7), ("反正", 2.0), ("怎么说", 2.5), ("还挺", 1.8),
+        ("有点", 1.2), ("你看人家", 2.8), ("亲自来", 2.0),
+    ),
     "broadcast": (
         ("现在是", 2.5), ("接下来", 2.0), ("位于", 2.0), ("开放时间", 2.5),
         ("公里", 1.4), ("分钟", 1.0), ("入口", 1.0), ("建议", 1.0),
@@ -51,6 +55,8 @@ def classify_auto_style(text: str, *, purpose: str | None = None) -> dict[str, A
         "info": "broadcast",
         "direct-address": "chat",
         "conversation": "chat",
+        "daily-chat": "daily-chat",
+        "on-location-conversation": "daily-chat",
         "mishap": "comedy",
         "humor": "comedy",
         "arrival": "excited",
@@ -121,7 +127,9 @@ def build_say_lines(
         if selected not in VOICE_STYLE_PRESETS:
             # Legacy styles remain provider-compatible, while `voice say` keeps
             # its public automatic choices to the five stable presets.
-            raise ValueError("voice say supports natural, broadcast, chat, comedy, excited, or auto.")
+            raise ValueError(
+                "voice say supports natural, broadcast, chat, daily-chat, comedy, excited, or auto."
+            )
         selection = {
             "requested_style": selected,
             "selected_style": selected,

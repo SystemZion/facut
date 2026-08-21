@@ -267,6 +267,11 @@ from facut.cli.install_commands import (  # noqa: E402
     models_app,
     update_command,
 )
+from facut.cli.runtime_commands import (  # noqa: E402
+    autoload_app,
+    cleanram_command,
+    warmup_command,
+)
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -315,6 +320,9 @@ app.command("download")(download_command)
 app.command("install")(install_command)
 app.command("update")(update_command)
 app.add_typer(models_app, name="models")
+app.command("cleanram")(cleanram_command)
+app.command("warmup")(warmup_command)
+app.add_typer(autoload_app, name="autoload")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,22 @@
   user media, voice data and fonts remain outside the application package.
 - Kept the Python project engine, StoryGraph, Agent contract and final rendering
   authoritative; the native layer is optional acceleration, not a second editor.
+- Added continuous `analyze batch --jsonl-progress` events with current media,
+  completion rate and ETA; per-asset timeouts and failures remain isolated.
+- Added the public `daily-chat` delivery across CLI, Agent schema, JSON-RPC and
+  CosyVoice reference selection.
+- Added a quarantine/review/approve workflow for audio found in source videos.
+  Similarity alone never makes a recording synthesis-eligible; explicit
+  same-speaker confirmation is required and raw files remain unchanged.
+- Voice validation now separates file quality, synthesis usability and optional
+  style coverage instead of treating a fixed ten-minute target as one verdict.
+- Added default non-blocking background warmup for registered heavy services,
+  with per-service `autoload`, `warmup`, and explicit `cleanram --service`
+  controls. RAM cleanup never removes models, media caches, or recordings.
+- Added a lightweight console bootstrap for version and runtime lifecycle
+  commands; background warmup failure never blocks the requested edit command.
+- Exposed runtime status, warmup, selective cleanup and autoload configuration
+  to the Agent schema and JSON-RPC session.
 
 ## 0.8.1 — 2026-08-18
 

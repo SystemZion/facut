@@ -15,6 +15,7 @@ from facut.voice.store import VoiceProfileStore
         ("今天我们出来随便走走。", "natural"),
         ("现在是下午四点，接下来前往观景平台。", "broadcast"),
         ("我跟你说，你看这里是不是特别舒服？", "chat"),
+        ("其实这里还挺舒服的，反正我们就慢慢走。", "daily-chat"),
         ("结果我们三个人又走错路了，真的有点尴尬。", "comedy"),
         ("快看，真的到了！眼前的景色太壮观了！", "excited"),
     ],
@@ -40,6 +41,14 @@ def test_say_lines_create_distinct_audition_candidates() -> None:
     assert all(item["delivery"] == "natural" for item in lines)
     assert all(item["speed"] == 1.05 for item in lines)
     assert "句尾放松" in lines[0]["instruction"]
+
+
+def test_daily_chat_is_an_explicit_audition_style() -> None:
+    lines, selection = build_say_lines(
+        "这里比照片里看起来大多了。", style="daily-chat", takes=2
+    )
+    assert selection["selected_style"] == "daily-chat"
+    assert [item["delivery"] for item in lines] == ["daily-chat", "daily-chat"]
 
 
 @pytest.mark.parametrize(

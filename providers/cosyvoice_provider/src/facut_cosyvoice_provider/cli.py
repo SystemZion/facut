@@ -34,7 +34,7 @@ import torchaudio
 
 PROTOCOL = "facut-voice-provider/1.0"
 MODEL_VERSION = "Fun-CosyVoice3-0.5B-2512"
-REFERENCE_PROCESSING_VERSION = "v3-candidate-seed"
+REFERENCE_PROCESSING_VERSION = "v4-daily-chat"
 STREAM_PROTOCOL = "facut-voice-provider-jsonl/1.0"
 _MODEL_CONTEXT: dict[str, Any] | None = None
 
@@ -50,6 +50,10 @@ DELIVERY_INSTRUCTIONS = {
     "chat": (
         "请像面对熟悉的朋友聊天一样表达，口语化、松弛，允许轻微思考和自然呼吸。"
         "不要朗读腔，句子之间有真实交流感。"
+    ),
+    "daily-chat": (
+        "请用旅行现场随口交流的方式表达，像刚看到眼前事物后自然说出来。"
+        "保留真实的轻重音、短暂停顿和少量口语感；不要朗读腔，不要把每句话组织得过分完整。"
     ),
     "comedy": (
         "请用轻松俏皮、带一点真实笑意和反差感的口吻表达。"
@@ -73,6 +77,10 @@ REFERENCE_HINTS = {
     "natural": ("delivery:natural", "prompt_002", "prompt_007", "刚走", "如果"),
     "broadcast": ("delivery:broadcast", "prompt_003", "prompt_008", "现在是", "接下来"),
     "chat": ("delivery:chat", "prompt_002", "prompt_006", "我跟你说", "你看", "你觉得"),
+    "daily-chat": (
+        "delivery:daily-chat", "category:conversation", "chat0", "反正", "你看人家",
+        "亲自来", "看运气", "one way",
+    ),
     "comedy": ("delivery:comedy", "拿着三部手机", "不同的方向"),
     "excited": ("delivery:excited", "prompt_010", "快看", "真的到了", "开心"),
     "natural-vlog": ("prompt_002", "prompt_007", "刚走", "你觉得", "如果", "时候"),

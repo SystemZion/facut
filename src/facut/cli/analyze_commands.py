@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -39,6 +40,10 @@ def analyze_batch(
     limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
     jobs: Annotated[int, typer.Option("--jobs", min=1, max=8)] = 3,
     asset_timeout: Annotated[float, typer.Option("--asset-timeout", min=1)] = 180.0,
+    jsonl_progress: Annotated[
+        bool,
+        typer.Option("--jsonl-progress", help="Stream machine-readable progress events."),
+    ] = False,
     full: Annotated[bool, typer.Option("--full", help="Return inline evidence instead of a compact file reference.")] = False,
 ) -> None:
     """Analyze a media tree with the persistent native sidecar when available."""
@@ -47,6 +52,22 @@ def analyze_batch(
 
     command = "analyze.batch"
     try:
+        state = _state(ctx)
+        if jsonl_progress:
+            state.json_output = True
+
+        def report_progress(event: dict[str, Any]) -> None:
+            payload = {"command": command, **event}
+            if jsonl_progress:
+                typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            elif not state.quiet and not state.json_output and event.get("event") == "progress":
+                completed = int(event.get("completed", 0))
+                total = int(event.get("total", 0))
+                eta = float(event.get("eta_seconds", 0))
+                typer.echo(
+                    f"Analyzing {completed}/{total}: {event.get('media_id')} (ETA {eta:.0f}s)",
+                    err=True,
+                )
         if engine not in {"auto", "native", "python"}:
             raise ValueError("--engine must be auto, native, or python.")
         if mode not in {"fast", "deep"}:
@@ -78,6 +99,7 @@ def analyze_batch(
                         mode=mode,
                         jobs=jobs,
                         asset_timeout_seconds=asset_timeout,
+                        progress=report_progress,
                     )
                     payload = data if full else compact_batch_result(data)
                     payload.update({
@@ -106,8 +128,8 @@ def analyze_batch(
                 NativeClient()
         results = []
         failures = []
-        state = _state(ctx)
-        for path in files:
+        python_started = time.monotonic()
+        for index, path in enumerate(files, 1):
             try:
                 results.append(
                     analyze_quality(
@@ -120,6 +142,16 @@ def analyze_batch(
                 failure = {"source": str(path), "status": "error", "error": str(error)}
                 results.append(failure)
                 failures.append(failure)
+            elapsed = max(time.monotonic() - python_started, 1e-9)
+            rate = index / elapsed
+            report_progress({
+                "event": "progress", "stage": "python.batch_scan",
+                "completed": index, "total": len(files), "progress": index / len(files),
+                "media_id": inputs[index - 1]["media_id"],
+                "elapsed_seconds": round(elapsed, 3),
+                "assets_per_second": round(rate, 3),
+                "eta_seconds": round((len(files) - index) / rate, 3),
+            })
         from facut.native import batch_failure_warnings
 
         payload = {

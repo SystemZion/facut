@@ -355,15 +355,22 @@ class NativeClient:
                         }
                     completed_count += 1
                     if progress:
+                        elapsed = max(time.monotonic() - started, 1e-9)
+                        assets_per_second = completed_count / elapsed
+                        remaining = len(input_list) - completed_count
                         with callback_lock:
                             progress(
                                 {
                                     "event": "progress",
                                     "stage": "native.batch_scan",
+                                    "status": results_by_id[media_id].get("status", "unknown"),
                                     "completed": completed_count,
                                     "total": len(input_list),
                                     "progress": completed_count / len(input_list),
                                     "media_id": media_id,
+                                    "elapsed_seconds": round(elapsed, 3),
+                                    "assets_per_second": round(assets_per_second, 3),
+                                    "eta_seconds": round(remaining / assets_per_second, 3),
                                 }
                             )
             result = {

@@ -8,6 +8,8 @@ import struct
 import wave
 from typing import Any
 
+from .models import VoiceProfile
+
 
 def _issue(code: str, severity: str, message: str) -> dict[str, str]:
     return {"code": code, "severity": severity, "message": message}
@@ -123,3 +125,50 @@ def validate_voice_samples(
         "files": files,
         "issues": issues,
     }
+
+
+def validate_voice_profile(
+    profile: VoiceProfile,
+    paths: list[str | Path],
+    *,
+    recommended_total_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """Add synthesis usability and per-style coverage to file-level PCM QC."""
+
+    report = validate_voice_samples(
+        paths, recommended_total_seconds=recommended_total_seconds
+    )
+    delivery_seconds: dict[str, float] = {}
+    usable_seconds = 0.0
+    for sample, file_report in zip(profile.samples, report["files"], strict=True):
+        duration = float(file_report["metrics"].get("duration_seconds", 0))
+        if file_report["status"] != "fail":
+            usable_seconds += duration
+            delivery = sample.delivery or "unlabelled"
+            delivery_seconds[delivery] = delivery_seconds.get(delivery, 0.0) + duration
+    public_styles = {"natural", "broadcast", "chat", "daily-chat", "comedy", "excited"}
+    covered = sorted(style for style in public_styles if delivery_seconds.get(style, 0) >= 3)
+    missing = sorted(public_styles - set(covered))
+    synthesis_usable = usable_seconds >= 30 and bool(covered)
+    report["profile_assessment"] = {
+        "synthesis_usable": synthesis_usable,
+        "quality_status": report["status"],
+        "coverage_status": "complete" if not missing else "partial",
+        "usable_duration_seconds": round(usable_seconds, 3),
+        "delivery_seconds": {
+            key: round(value, 3) for key, value in sorted(delivery_seconds.items())
+        },
+        "covered_styles": covered,
+        "missing_styles": missing,
+        "derived_reference_processing": {
+            "raw_samples_modified": False,
+            "normalization_peak_dbfs": -3.0,
+            "quiet_samples_deprioritized": True,
+        },
+        "recommendation": (
+            "Ready for synthesis; missing styles can be added later."
+            if synthesis_usable
+            else "Record at least 30 seconds of clean, style-labelled speech before synthesis."
+        ),
+    }
+    return report

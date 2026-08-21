@@ -245,6 +245,58 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "rpc": True,
         "parameters": _object({}),
     },
+    "runtime.status": {
+        "summary": "Inspect configured warm background services without loading media models.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "runtime.cleanram": {
+        "summary": "Stop explicitly selected warm services without deleting models or caches.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "services": {
+                    "type": "array",
+                    "items": {"enum": ["voice", "all"]},
+                    "minItems": 1,
+                    "uniqueItems": True,
+                },
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["services"],
+        ),
+    },
+    "runtime.warmup": {
+        "summary": "Load explicitly selected heavy services and wait for readiness.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "services": {
+                    "type": "array",
+                    "items": {"enum": ["voice", "all"]},
+                    "minItems": 1,
+                    "uniqueItems": True,
+                }
+            },
+            ["services"],
+        ),
+    },
+    "runtime.autoload.configure": {
+        "summary": "Enable or disable default background warmup for one service.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "service": {"enum": ["voice", "all"]},
+                "enabled": {"type": "boolean"},
+                "stop_now": {"type": "boolean", "default": False},
+            },
+            ["service", "enabled"],
+        ),
+    },
     "analyze.batch": {
         "summary": "Analyze a media tree with the persistent native sidecar or Python fallback.",
         "mutates": False,
@@ -573,6 +625,67 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             ["profile", "name"],
         ),
     },
+    "voice.sample.propose": {
+        "summary": "Quarantine possible speaker audio for identity review before synthesis.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": "string", "minLength": 1},
+                "profile": {"type": "string", "minLength": 1},
+                "transcript": {"type": ["string", "null"]},
+                "category": {"type": ["string", "null"]},
+                "delivery": {"type": ["string", "null"]},
+                "source_media_id": {"type": ["string", "null"]},
+                "source_start": {"type": ["number", "null"], "minimum": 0},
+                "source_end": {"type": ["number", "null"], "minimum": 0},
+                "identity_basis": {"enum": ["unknown", "similarity", "manual"], "default": "similarity"},
+            },
+            ["source", "profile"],
+        ),
+    },
+    "voice.sample.list": {
+        "summary": "List quarantined voice candidates and review state.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile": {"type": ["string", "null"]},
+                "status": {"enum": ["pending", "approved", "rejected", None]},
+            }
+        ),
+    },
+    "voice.sample.show": {
+        "summary": "Inspect one quarantined voice candidate.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"candidate_id": {"type": "string", "minLength": 1}}, ["candidate_id"]),
+    },
+    "voice.sample.approve": {
+        "summary": "Make candidate audio eligible after explicit same-speaker confirmation.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "speaker_confirmed": {"const": True},
+                "confirmation_statement": {"type": "string", "minLength": 12},
+            },
+            ["candidate_id", "speaker_confirmed", "confirmation_statement"],
+        ),
+    },
+    "voice.sample.reject": {
+        "summary": "Reject candidate audio while retaining review evidence.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1},
+            },
+            ["candidate_id", "reason"],
+        ),
+    },
     "subtitle.transcribe": {
         "summary": "Create a review-first word-timestamped transcript plan from active timeline media.",
         "mutates": False,
@@ -756,7 +869,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "text": {"type": "string", "minLength": 1},
                 "voice": {"type": ["string", "null"]},
                 "output": {"type": "string", "minLength": 1},
-                "style": {"enum": ["auto", "natural", "broadcast", "chat", "comedy", "excited"], "default": "auto"},
+                "style": {"enum": ["auto", "natural", "broadcast", "chat", "daily-chat", "comedy", "excited"], "default": "auto"},
                 "takes": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1},
                 "speed": {"type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0},
                 "intensity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5},
@@ -811,7 +924,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "parameters": _object(
             {
                 "profile_id": {"type": "string"},
-                "recommended_seconds": {"type": "number", "minimum": 1, "default": 600},
+                "recommended_seconds": {"type": "number", "minimum": 1, "default": 120},
             },
             ["profile_id"],
         ),
