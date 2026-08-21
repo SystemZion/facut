@@ -179,7 +179,13 @@ def serve_command(
                 }
             elif method == "analyze.batch":
                 from facut.analysis import analyze_quality
-                from facut.native import NativeClient, collect_batch_inputs, compact_batch_result, discover_native
+                from facut.native import (
+                    NativeClient,
+                    batch_failure_warnings,
+                    collect_batch_inputs,
+                    compact_batch_result,
+                    discover_native,
+                )
 
                 engine_name = str(params.get("engine", "auto"))
                 mode = str(params.get("mode", "fast"))
@@ -212,6 +218,7 @@ def serve_command(
                             "collection": collection, "jobs": jobs,
                             "asset_timeout_seconds": asset_timeout,
                         })
+                        warnings.extend(batch_failure_warnings(data))
                     except Exception as error:
                         if engine_name == "native":
                             raise
@@ -223,19 +230,35 @@ def serve_command(
                 elif engine_name == "native":
                     NativeClient()
                 if not native_path and engine_name != "native":
+                    results = []
+                    failures = []
+                    for path in files:
+                        try:
+                            results.append(
+                                analyze_quality(
+                                    path,
+                                    ffmpeg=state.config.tools.ffmpeg,
+                                    ffprobe=state.config.tools.ffprobe,
+                                )
+                            )
+                        except Exception as error:
+                            failure = {
+                                "source": str(path),
+                                "status": "error",
+                                "error": str(error),
+                            }
+                            results.append(failure)
+                            failures.append(failure)
                     data = {
                         "engine": "python",
                         "asset_count": len(files),
-                        "results": [
-                            analyze_quality(
-                                path,
-                                ffmpeg=state.config.tools.ffmpeg,
-                                ffprobe=state.config.tools.ffprobe,
-                            )
-                            for path in files
-                        ],
+                        "succeeded": len(files) - len(failures),
+                        "failed": len(failures),
+                        "failures": failures[:50],
+                        "results": results,
                         "collection": collection,
                     }
+                    warnings.extend(batch_failure_warnings(data))
                     if engine_name == "auto" and not warnings:
                         warnings.append("FACUT Native was unavailable; Python/FFmpeg fallback was used.")
                 result = {

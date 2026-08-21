@@ -9,9 +9,11 @@ import pytest
 from facut.native.client import (
     NativeClient,
     NativeProtocolError,
+    batch_failure_warnings,
     collect_batch_inputs,
     discover_native,
 )
+from facut.exceptions import MediaProbeError
 
 
 class _CaptureStringIO(StringIO):
@@ -111,6 +113,33 @@ def test_batch_scan_restarts_native_once(monkeypatch, tmp_path: Path) -> None:
     assert Path(result["result_file"]).is_file()
 
 
+def test_batch_failure_contract_warns_for_partial_results() -> None:
+    warnings = batch_failure_warnings(
+        {
+            "succeeded": 1,
+            "failed": 1,
+            "failures": [{"media_id": "media_bad", "error": "invalid"}],
+        }
+    )
+
+    assert warnings == [
+        "1 of 2 media assets failed analysis; inspect `data.failures` before treating the batch as complete."
+    ]
+
+
+def test_batch_failure_contract_rejects_all_failed_results() -> None:
+    with pytest.raises(MediaProbeError, match="All 2 media assets failed") as captured:
+        batch_failure_warnings(
+            {
+                "succeeded": 0,
+                "failed": 2,
+                "failures": [{"media_id": "media_bad", "error": "invalid"}],
+            }
+        )
+
+    assert captured.value.details["failures"][0]["media_id"] == "media_bad"
+
+
 def test_collect_batch_inputs_links_lrf_and_excludes_generated_output(
     tmp_path: Path,
 ) -> None:
@@ -119,7 +148,8 @@ def test_collect_batch_inputs_links_lrf_and_excludes_generated_output(
     photo = tmp_path / "DJI_0002_D.JPG"
     output = tmp_path / "成片" / "project" / "analysis"
     output.mkdir(parents=True)
-    for path in (original, proxy, photo, output / "frame_01.jpg"):
+    rendered = tmp_path / "成片" / "trip-final.mp4"
+    for path in (original, proxy, photo, output / "frame_01.jpg", rendered):
         path.write_bytes(b"media")
 
     inputs, summary = collect_batch_inputs(tmp_path, output_directory=output)
@@ -132,7 +162,7 @@ def test_collect_batch_inputs_links_lrf_and_excludes_generated_output(
     assert video["used_proxy"] is True
     assert summary["proxy_linked"] == 1
     assert summary["proxy_candidates_excluded"] == 1
-    assert summary["generated_files_excluded"] == 1
+    assert summary["generated_files_excluded"] == 2
 
 
 def test_collect_batch_inputs_excludes_versioned_analysis_and_project_tree(

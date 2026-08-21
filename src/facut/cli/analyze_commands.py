@@ -62,7 +62,12 @@ def analyze_batch(
         native_path = None
         native_warning: str | None = None
         if engine != "python":
-            from facut.native import NativeClient, compact_batch_result, discover_native
+            from facut.native import (
+                NativeClient,
+                batch_failure_warnings,
+                compact_batch_result,
+                discover_native,
+            )
 
             native_path = discover_native()
             if native_path:
@@ -80,7 +85,15 @@ def analyze_batch(
                         "asset_count": len(files), "collection": collection,
                         "jobs": jobs, "asset_timeout_seconds": asset_timeout,
                     })
-                    emit(_state(ctx), success_response(command, payload), human=f"Analyzed {len(files)} assets with FACUT Native.")
+                    emit(
+                        _state(ctx),
+                        success_response(
+                            command,
+                            payload,
+                            warnings=batch_failure_warnings(payload),
+                        ),
+                        human=f"Analyzed {len(files)} assets with FACUT Native.",
+                    )
                     return
                 except Exception as error:
                     if engine == "native":
@@ -92,6 +105,7 @@ def analyze_batch(
             if engine == "native":
                 NativeClient()
         results = []
+        failures = []
         state = _state(ctx)
         for path in files:
             try:
@@ -103,18 +117,32 @@ def analyze_batch(
                     )
                 )
             except Exception as error:
-                results.append({"source": str(path), "status": "error", "error": str(error)})
+                failure = {"source": str(path), "status": "error", "error": str(error)}
+                results.append(failure)
+                failures.append(failure)
+        from facut.native import batch_failure_warnings
+
+        payload = {
+            "engine": "python",
+            "asset_count": len(files),
+            "succeeded": len(files) - len(failures),
+            "failed": len(failures),
+            "failures": failures[:50],
+            "results": results,
+            "collection": collection,
+        }
+        failure_warnings = batch_failure_warnings(payload)
+        fallback_warnings = (
+            [native_warning or "FACUT Native was unavailable; the existing Python/FFmpeg path was used."]
+            if engine == "auto"
+            else []
+        )
         emit(
             state,
             success_response(
                 command,
-                {
-                    "engine": "python", "asset_count": len(files),
-                    "results": results, "collection": collection,
-                },
-                warnings=[native_warning or "FACUT Native was unavailable; the existing Python/FFmpeg path was used."]
-                if engine == "auto"
-                else [],
+                payload,
+                warnings=fallback_warnings + failure_warnings,
             ),
             human=f"Analyzed {len(files)} assets with the Python fallback.",
         )

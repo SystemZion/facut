@@ -2,6 +2,7 @@
 
 from .client import (
     NativeClient,
+    batch_failure_warnings,
     collect_batch_inputs,
     compact_batch_result,
     discover_native,
@@ -10,6 +11,7 @@ from .client import (
 
 __all__ = [
     "NativeClient",
+    "batch_failure_warnings",
     "collect_batch_inputs",
     "compact_batch_result",
     "discover_native",

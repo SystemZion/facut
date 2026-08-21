@@ -16,7 +16,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from facut.exceptions import DependencyMissingError, FacutError
+from facut.exceptions import DependencyMissingError, FacutError, MediaProbeError
 
 
 PROTOCOL_VERSION = 1
@@ -26,8 +26,14 @@ _GENERATED_DIRECTORY_NAMES = {
     ".facut-native-benchmark",
     "analysis",
     "cache",
+    "deliverables",
+    "exports",
+    "final",
+    "output",
+    "outputs",
     "previews",
     "renders",
+    "成片",
 }
 
 
@@ -409,6 +415,26 @@ def compact_batch_result(result: dict[str, Any]) -> dict[str, Any]:
             len((item.get("waveform") or {}).get("peaks") or []) for item in succeeded
         ),
     }
+
+
+def batch_failure_warnings(summary: dict[str, Any]) -> list[str]:
+    """Expose partial failures and reject batches where no asset was analyzed."""
+
+    succeeded = int(summary.get("succeeded") or 0)
+    failed = int(summary.get("failed") or 0)
+    if failed <= 0:
+        return []
+    failures = list(summary.get("failures") or [])
+    if succeeded <= 0:
+        raise MediaProbeError(
+            f"All {failed} media assets failed analysis.",
+            suggestion="Inspect the input files and `details.failures`, then retry the failed assets.",
+            details={"failures": failures[:50]},
+        )
+    return [
+        f"{failed} of {succeeded + failed} media assets failed analysis; "
+        "inspect `data.failures` before treating the batch as complete."
+    ]
 
 
 def collect_batch_inputs(
