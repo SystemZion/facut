@@ -56,6 +56,15 @@ def _fail(ctx: typer.Context, command: str, error: Exception) -> None:
     fail(_state(ctx), command, public_error(error))
 
 
+def _trip_fact_policy(manager) -> dict:
+    from facut.vlog import load_trip_bible, trip_bible_fact_policy
+
+    bible = load_trip_bible(
+        manager.project_dir, default_name=manager.require_document().project.name
+    )
+    return trip_bible_fact_policy(bible)
+
+
 @semantic_app.command("index")
 def semantic_index(
     ctx: typer.Context,
@@ -159,6 +168,7 @@ def narration_suggest(
             language=language,
             max_lines=max_lines,
             minimum_confidence=minimum_confidence,
+            fact_policy=_trip_fact_policy(manager),
         )
         _emit(
             ctx,
@@ -199,6 +209,7 @@ def narration_generate(
             provider=provider,
             max_lines=max_lines,
             minimum_confidence=minimum_confidence,
+            fact_policy=_trip_fact_policy(manager),
         )
         saved = save_narration_plan(plan, destination)
         data = plan.model_dump(mode="json")

@@ -791,9 +791,19 @@ def build_story_candidates(
         _candidate(observations, strategy, target_duration, style)
         for strategy in ("narrative", "immersive", "visual")
     ]
+    from .context import load_trip_bible, trip_bible_fact_policy
+
+    bible = load_trip_bible(project_dir, default_name=document.project.name)
+    fact_policy = trip_bible_fact_policy(bible)
+    for candidate in candidates:
+        candidate.polish_plan["trip_bible"] = fact_policy
     warnings = sorted(
         {f"Candidate {item.id} lacks stage {stage}." for item in candidates for stage in item.missing_stages}
     )
+    if fact_policy["withheld_uncertain_facts"]:
+        warnings.append(
+            f"Trip Bible withholds {len(fact_policy['withheld_uncertain_facts'])} uncertain fact(s) from generated claims."
+        )
     plan = StoryPlan(
         project_revision=document.revision,
         evidence_sha256=hashlib.sha256(evidence_bytes).hexdigest(),

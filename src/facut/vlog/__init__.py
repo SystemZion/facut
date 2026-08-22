@@ -20,6 +20,7 @@ from .context import (
     rebuild_director_inbox,
     resolve_inbox_item,
     save_trip_bible,
+    trip_bible_fact_policy,
 )
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     "rebuild_director_inbox",
     "resolve_inbox_item",
     "save_trip_bible",
+    "trip_bible_fact_policy",
     "vlog_workflow_schema",
 ]

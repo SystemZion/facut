@@ -239,6 +239,7 @@ def test_storygraph_builds_three_reviewable_candidates_and_comparison(tmp_path) 
     assert len(comparison["differences"]) == 3
     assert all("transition_intents" in item.polish_plan for item in plan.candidates)
     assert all(item.polish_plan["music_query"]["license_required"] for item in plan.candidates)
+    assert all("trip_bible" in item.polish_plan for item in plan.candidates)
     refined = refine_story_candidate(manager.project_dir, "candidate-narrative")
     assert refined.selected_candidate_id == "candidate-narrative"
     assert refined.status == "ready"

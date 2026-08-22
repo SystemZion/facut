@@ -132,6 +132,7 @@ class NarrationPlan(PlanModel):
     style: str = "natural-vlog"
     language: str = "zh-CN"
     lines: list[NarrationLine] = Field(default_factory=list)
+    fact_policy: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
@@ -186,6 +187,7 @@ def narration_plan_from_suggestions(
         style=str(suggestions.get("style") or "natural-vlog"),
         language=str(suggestions.get("language") or "zh-CN"),
         lines=lines,
+        fact_policy=dict(suggestions.get("fact_policy") or {}),
         warnings=list(suggestions.get("warnings") or []),
         limitations=list(suggestions.get("limitations") or []),
     )

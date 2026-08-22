@@ -619,6 +619,8 @@ def serve_command(
                     "project_revision": manager.require_document().revision,
                 }
             elif method == "narration.generate":
+                from facut.vlog import load_trip_bible, trip_bible_fact_policy
+
                 output = Path(str(params["output"])).expanduser().resolve()
                 if output.exists() and not bool(params.get("overwrite", False)):
                     raise FileExistsError(f'Output "{output}" already exists; use overwrite=true.')
@@ -630,6 +632,12 @@ def serve_command(
                     provider=str(params.get("provider", "deterministic")),
                     max_lines=int(params.get("max_lines", 12)),
                     minimum_confidence=float(params.get("minimum_confidence", 0.55)),
+                    fact_policy=trip_bible_fact_policy(
+                        load_trip_bible(
+                            manager.project_dir,
+                            default_name=manager.require_document().project.name,
+                        )
+                    ),
                 )
                 save_narration_plan(plan, output)
                 data = plan.model_dump(mode="json")

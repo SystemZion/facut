@@ -114,6 +114,28 @@ def save_trip_bible(project_dir: str | Path, payload: dict[str, Any]) -> dict[st
     }
 
 
+def trip_bible_fact_policy(bible: TripBible) -> dict[str, Any]:
+    """Return the compact allow/withhold contract consumed by generators."""
+
+    return {
+        "trip_name": bible.trip_name,
+        "confirmed_people": [item.display_name for item in bible.people if item.confirmed],
+        "confirmed_places": [item.display_name for item in bible.places if item.confirmed],
+        "confirmed_dates": list(bible.dates),
+        "glossary": dict(bible.glossary),
+        "allowed_facts": [item.statement for item in bible.facts if item.status == "confirmed"],
+        "withheld_uncertain_facts": [
+            item.statement for item in bible.facts if item.status == "uncertain"
+        ],
+        "rejected_facts": [item.statement for item in bible.facts if item.status == "rejected"],
+        "forbidden_claims": list(bible.forbidden_claims),
+        "rule": (
+            "Generated narration and titles may assert only allowed_facts and confirmed names; "
+            "uncertain, rejected and forbidden claims must not be asserted."
+        ),
+    }
+
+
 def _item_id(kind: str, key: str) -> str:
     digest = hashlib.sha256(f"{kind}:{key}".encode()).hexdigest()[:12]
     return f"inbox_{digest}"

@@ -95,12 +95,19 @@ def test_generate_plan_is_strict_and_never_fakes_provider(tmp_path) -> None:
             ]
         },
         style="weekend-vlog",
+        fact_policy={
+            "allowed_facts": ["地点是林芝"],
+            "withheld_uncertain_facts": ["当天有雨"],
+            "rule": "Only confirmed facts may be asserted.",
+        },
     )
     assert plan.provider == "deterministic"
     assert plan.style == "weekend-vlog"
     assert plan.lines[0].status == NarrationLineStatus.DRAFT
     assert plan.lines[0].candidates[0].source == "deterministic"
     assert plan.lines[0].draft_text == plan.lines[0].selected_text
+    assert plan.fact_policy["allowed_facts"] == ["地点是林芝"]
+    assert plan.fact_policy["withheld_uncertain_facts"] == ["当天有雨"]
     with pytest.raises(NarrationProviderNotConfigured) as error:
         generate_narration_plan(document, {"observations": []}, provider="imaginary-llm")
     assert error.value.code == "PROVIDER_NOT_CONFIGURED"
