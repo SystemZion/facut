@@ -2,6 +2,8 @@ param(
     [string]$Python = "python",
     [string]$FFmpeg = "",
     [string]$FFprobe = "",
+    [ValidateSet("onedir", "onefile")]
+    [string]$Mode = "onedir",
     [switch]$Clean
 )
 
@@ -53,7 +55,6 @@ $PyInstallerArgs = @(
     "--noconfirm",
     "--clean",
     "--specpath", $GeneratedSpecPath,
-    "--onefile",
     "--console",
     "--name", "facut",
     "--paths", (Join-Path $ProjectRoot "src"),
@@ -78,6 +79,11 @@ $PyInstallerArgs = @(
     "--exclude-module", "pyarrow",
     "--collect-data", "facut"
 )
+if ($Mode -eq "onefile") {
+    $PyInstallerArgs += "--onefile"
+} else {
+    $PyInstallerArgs += @("--onedir", "--contents-directory", "facut_runtime")
+}
 $PyInstallerArgs += @(
     "--add-data",
     "$(Join-Path $ProjectRoot 'src\facut\analysis\asr_worker.py');facut_worker"
@@ -103,7 +109,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE"
 }
 
-$Exe = Join-Path $DistPath "facut.exe"
+$Exe = if ($Mode -eq "onefile") {
+    Join-Path $DistPath "facut.exe"
+} else {
+    Join-Path $DistPath "facut\facut.exe"
+}
 if (-not (Test-Path -LiteralPath $Exe)) {
     throw "Expected executable was not created: $Exe"
 }

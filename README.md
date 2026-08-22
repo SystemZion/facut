@@ -585,4 +585,4 @@ src/facut/
 └── responses.py      JSON 响应协议
 ```
 
-Windows 发行物通过 PyInstaller 打包为单文件 `facut.exe`，并内置 FFmpeg/FFprobe；源码安装方式用于开发和测试。
+Windows 默认发行物通过 PyInstaller 打包为便携目录：入口仍是 `facut.exe`，运行库与内置 FFmpeg/FFprobe 放在旁边的 `facut_runtime`，避免单文件版每次自解压造成数秒冷启动。`tools/build_exe.ps1 -Mode onefile` 仍可生成兼容单文件版；源码安装方式用于开发和测试。

@@ -9,6 +9,9 @@
   glossary terms, confirmed/uncertain/rejected facts and forbidden claims.
 - Exposed Inbox and Trip Bible operations through CLI, workflow schema and
   JSON-RPC with atomic files and auditable resolution notes.
+- Switched the default Windows build to a portable one-directory executable so
+  the launcher can start without extracting a 100+ MB archive on every call;
+  the standalone one-file build remains optional.
 
 ## 0.8.2 — 2026-08-19
 

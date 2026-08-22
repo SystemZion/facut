@@ -8,7 +8,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-if (-not $FacutExe) { $FacutExe = Join-Path $ProjectRoot "dist\facut.exe" }
+if (-not $FacutExe) {
+    $OneDirExe = Join-Path $ProjectRoot "dist\facut\facut.exe"
+    $FacutExe = if (Test-Path -LiteralPath $OneDirExe -PathType Leaf) {
+        $OneDirExe
+    } else {
+        Join-Path $ProjectRoot "dist\facut.exe"
+    }
+}
 if (-not $NativeBuild) { $NativeBuild = Join-Path $ProjectRoot "build\native-win64" }
 if (-not $OutputRoot) { $OutputRoot = Join-Path $ProjectRoot "dist" }
 if (-not $FFmpegRoot) { throw "Pass -FFmpegRoot or set FACUT_FFMPEG_ROOT." }
@@ -44,7 +51,12 @@ if ((Test-Path -LiteralPath $Bundle) -or (Test-Path -LiteralPath $Archive)) {
 }
 
 New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
+$FacutSourceRoot = Split-Path -Parent $FacutExe
+$RuntimeDirectory = Join-Path $FacutSourceRoot "facut_runtime"
 Copy-Item -LiteralPath $FacutExe -Destination (Join-Path $Bundle "facut.exe")
+if (Test-Path -LiteralPath $RuntimeDirectory -PathType Container) {
+    Copy-Item -LiteralPath $RuntimeDirectory -Destination $Bundle -Recurse
+}
 Copy-Item -LiteralPath (Join-Path $NativeBuild "facut-native.exe") -Destination $Bundle
 
 $prefixes = @("avcodec-", "avdevice-", "avfilter-", "avformat-", "avutil-", "swresample-", "swscale-")
@@ -66,5 +78,7 @@ $hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvar
     bundle = $Bundle
     archive = $Archive
     sha256 = $hash
-    files = @(Get-ChildItem -LiteralPath $Bundle -File | Select-Object -ExpandProperty Name)
+    files = @(Get-ChildItem -LiteralPath $Bundle -File -Recurse | ForEach-Object {
+        [System.IO.Path]::GetRelativePath($Bundle, $_.FullName)
+    })
 }
