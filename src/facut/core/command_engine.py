@@ -181,6 +181,26 @@ class CommandEngine:
                 "transitions": [item.model_dump(mode="json") for item in candidate_state.transitions],
                 "markers": [item.model_dump(mode="json") for item in candidate_state.markers],
             }
+        if action == "vlog.review.apply":
+            from facut.vlog.review import prepare_review_apply
+
+            if "plan" not in command:
+                raise CommandEngineError("vlog.review.apply requires plan.")
+            return prepare_review_apply(
+                self.manager,
+                command["plan"],
+                approved_only=bool(command.get("approved_only", True)),
+            )
+        if action == "vlog.soundscape.apply":
+            from facut.vlog.soundscape import prepare_soundscape_apply
+
+            if "plan" not in command:
+                raise CommandEngineError("vlog.soundscape.apply requires plan.")
+            return prepare_soundscape_apply(
+                self.manager,
+                command["plan"],
+                approved_only=bool(command.get("approved_only", True)),
+            )
         return deepcopy(command)
 
     @staticmethod
@@ -266,6 +286,14 @@ class CommandEngine:
             }
             document.recompute_duration()
             return document.settings["vlog_director"]
+        if action == "vlog.review.apply.prepared":
+            from facut.vlog.review import apply_prepared_review
+
+            return apply_prepared_review(document, command)
+        if action == "vlog.soundscape.apply.prepared":
+            from facut.vlog.soundscape import apply_prepared_soundscape
+
+            return apply_prepared_soundscape(document, command)
         handler = handlers.get(action)
         if handler is None:
             raise CommandEngineError(f"Unsupported action: {action}")

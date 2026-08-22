@@ -148,6 +148,13 @@ def serve_command(
                 "voice.sample.show", "voice.sample.approve", "voice.sample.reject",
                 "narration.synthesize", "vlog.prepare",
                 "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
+                "vlog.atlas.build", "vlog.atlas.status", "vlog.inspect.batch",
+                "vlog.observe.batch",
+                "vlog.story.brief", "vlog.story.submit", "vlog.story.validate",
+                "vlog.opening.plan", "vlog.ending.plan", "vlog.continuity.check",
+                "vlog.review.create", "vlog.review.submit", "vlog.review.plan",
+                "vlog.review.apply", "vlog.soundscape.analyze",
+                "vlog.soundscape.plan", "vlog.soundscape.apply",
                 "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
                 "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
                 "vlog.bible.show", "vlog.bible.import",
@@ -649,7 +656,14 @@ def serve_command(
                 }
             elif method in {
                 "vlog.prepare", "vlog.inspect.next", "vlog.observe", "vlog.status",
+                "vlog.atlas.build", "vlog.atlas.status", "vlog.inspect.batch",
+                "vlog.observe.batch",
                 "vlog.plan", "vlog.compare", "vlog.refine",
+                "vlog.story.brief", "vlog.story.submit", "vlog.story.validate",
+                "vlog.opening.plan", "vlog.ending.plan", "vlog.continuity.check",
+                "vlog.review.create", "vlog.review.submit", "vlog.review.plan",
+                "vlog.review.apply", "vlog.soundscape.analyze",
+                "vlog.soundscape.plan", "vlog.soundscape.apply",
                 "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
                 "vlog.bible.show", "vlog.bible.import",
             }:
@@ -668,6 +682,31 @@ def serve_command(
                     refine_story_candidate,
                     resolve_inbox_item,
                     save_trip_bible,
+                )
+                from facut.vlog.labs import (
+                    build_story_brief,
+                    check_continuity,
+                    plan_endings,
+                    plan_openings,
+                    submit_story_proposal,
+                    validate_story_plan,
+                )
+                from facut.vlog.atlas import (
+                    build_scene_atlas,
+                    ingest_atlas_observations,
+                    next_atlas_inspection_batch,
+                    scene_atlas_status,
+                )
+                from facut.vlog.review import (
+                    apply_review,
+                    create_review,
+                    plan_review,
+                    submit_review,
+                )
+                from facut.vlog.soundscape import (
+                    analyze_soundscape,
+                    apply_soundscape_plan,
+                    plan_soundscape,
                 )
 
                 if method == "vlog.prepare":
@@ -717,11 +756,35 @@ def serve_command(
                         batch_size=int(params.get("batch_size", 12)),
                         native_results=native_results,
                     )
+                    data["scene_atlas"] = build_scene_atlas(
+                        manager, batch_size=int(params.get("batch_size", 12))
+                    )
                     data["analysis_engine"] = "native" if native_results is not None else "python"
                     if native_warnings:
                         data["warnings"] = [*data.get("warnings", []), *native_warnings]
                 elif method == "vlog.inspect.next":
                     data = next_inspection_task(manager.project_dir)
+                elif method == "vlog.atlas.build":
+                    data = build_scene_atlas(
+                        manager, batch_size=int(params.get("batch_size", 12))
+                    )
+                elif method == "vlog.atlas.status":
+                    data = scene_atlas_status(manager.project_dir)
+                elif method == "vlog.inspect.batch":
+                    data = next_atlas_inspection_batch(
+                        manager.project_dir, task_id=params.get("task_id")
+                    )
+                elif method == "vlog.observe.batch":
+                    payload = {
+                        "observations": params["observations"],
+                        "asset_hashes": params.get("asset_hashes"),
+                    }
+                    data = ingest_atlas_observations(
+                        manager.require_document(),
+                        manager.project_dir,
+                        payload,
+                        task_id=params.get("task_id"),
+                    )
                 elif method == "vlog.inbox.next":
                     data = next_inbox_items(
                         manager.project_dir, limit=int(params.get("limit", 8))
@@ -757,6 +820,51 @@ def serve_command(
                         style=str(params.get("style", "natural-vlog")),
                         target_duration=float(params.get("target_duration", 480)),
                     ).model_dump(mode="json")
+                elif method == "vlog.story.brief":
+                    data = build_story_brief(manager.project_dir)
+                elif method == "vlog.story.submit":
+                    data = submit_story_proposal(
+                        manager.project_dir, dict(params["proposal"])
+                    ).model_dump(mode="json")
+                elif method == "vlog.story.validate":
+                    data = validate_story_plan(manager.project_dir)
+                elif method == "vlog.opening.plan":
+                    data = plan_openings(manager.project_dir)
+                elif method == "vlog.ending.plan":
+                    data = plan_endings(manager.project_dir)
+                elif method == "vlog.continuity.check":
+                    data = check_continuity(
+                        manager.project_dir, params.get("candidate_id")
+                    )
+                elif method == "vlog.review.create":
+                    data = create_review(
+                        manager, str(params.get("review_pass", "story"))
+                    )
+                elif method == "vlog.review.submit":
+                    data = submit_review(manager, dict(params["submission"]))
+                elif method == "vlog.review.plan":
+                    data = plan_review(manager, dict(params["submission"]))
+                elif method == "vlog.review.apply":
+                    data = apply_review(
+                        manager,
+                        dict(params["plan"]),
+                        approved_only=bool(params.get("approved_only", True)),
+                    )
+                elif method == "vlog.soundscape.analyze":
+                    data = analyze_soundscape(manager)
+                elif method == "vlog.soundscape.plan":
+                    data = plan_soundscape(
+                        manager,
+                        style=str(params.get("style", "natural-vlog")),
+                        target_lufs=float(params.get("target_lufs", -14.0)),
+                        true_peak_db=float(params.get("true_peak_db", -1.0)),
+                    )
+                elif method == "vlog.soundscape.apply":
+                    data = apply_soundscape_plan(
+                        manager,
+                        dict(params["plan"]),
+                        approved_only=bool(params.get("approved_only", True)),
+                    )
                 elif method == "vlog.compare":
                     data = compare_story_candidates(manager.project_dir)
                 else:

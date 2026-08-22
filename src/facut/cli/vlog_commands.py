@@ -43,15 +43,49 @@ from facut.vlog import (
     resolve_inbox_item,
     save_trip_bible,
 )
+from facut.vlog.labs import (
+    build_story_brief,
+    check_continuity,
+    plan_endings,
+    plan_openings,
+    submit_story_proposal,
+    validate_story_plan,
+)
+from facut.vlog.atlas import (
+    build_scene_atlas,
+    ingest_atlas_observations,
+    next_atlas_inspection_batch,
+    scene_atlas_status,
+)
+from facut.vlog.review import apply_review, create_review, plan_review, submit_review
+from facut.vlog.soundscape import (
+    analyze_soundscape,
+    apply_soundscape_plan,
+    plan_soundscape,
+)
 
 
 vlog_app = typer.Typer(help="Quality-first travel VLOG director workflow.")
 inspect_app = typer.Typer(help="Read resumable visual-inspection tasks for an external AI.")
 inbox_app = typer.Typer(help="Prioritize ambiguous, high-value and continuity review tasks.")
 bible_app = typer.Typer(help="Manage confirmed travel people, places, terms and facts.")
+story_app = typer.Typer(help="Exchange evidence-grounded story proposals with an external AI director.")
+opening_app = typer.Typer(help="Build reviewable opening alternatives from saved evidence.")
+ending_app = typer.Typer(help="Build reviewable ending alternatives from saved evidence.")
+continuity_app = typer.Typer(help="Check deterministic story and edit continuity constraints.")
+atlas_app = typer.Typer(help="Batch large travel libraries into resumable external-AI review packs.")
+review_app = typer.Typer(help="Run evidence-bound external-AI review and atomic revision rounds.")
+soundscape_app = typer.Typer(help="Plan and apply review-first VLOG sound settings.")
 vlog_app.add_typer(inspect_app, name="inspect")
 vlog_app.add_typer(inbox_app, name="inbox")
 vlog_app.add_typer(bible_app, name="bible")
+vlog_app.add_typer(story_app, name="story")
+vlog_app.add_typer(opening_app, name="opening")
+vlog_app.add_typer(ending_app, name="ending")
+vlog_app.add_typer(continuity_app, name="continuity")
+vlog_app.add_typer(atlas_app, name="atlas")
+vlog_app.add_typer(review_app, name="review")
+vlog_app.add_typer(soundscape_app, name="soundscape")
 
 
 def _state(ctx: typer.Context):
@@ -392,6 +426,256 @@ def vlog_bible_import(
         _fail(ctx, command, error)
 
 
+@story_app.command("brief")
+def vlog_story_brief(
+    ctx: typer.Context,
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+) -> None:
+    """Create the evidence-addressed brief consumed by an external AI director."""
+
+    command = "vlog.story.brief"
+    try:
+        manager = manager_for(_state(ctx))
+        data = build_story_brief(manager.project_dir)
+        if output is not None:
+            destination = output.expanduser().resolve()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            data["output"] = str(destination)
+        _emit(ctx, command, data, revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@story_app.command("submit")
+def vlog_story_submit(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+) -> None:
+    """Validate and save a story proposal returned by an external AI."""
+
+    command = "vlog.story.submit"
+    try:
+        manager = manager_for(_state(ctx))
+        payload = json.loads(source.expanduser().resolve().read_text("utf-8-sig"))
+        plan = submit_story_proposal(manager.project_dir, payload)
+        _emit(
+            ctx,
+            command,
+            plan.model_dump(mode="json"),
+            warnings=plan.warnings,
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@story_app.command("validate")
+def vlog_story_validate(ctx: typer.Context) -> None:
+    """Revalidate the current story proposal against the latest evidence."""
+
+    command = "vlog.story.validate"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            validate_story_plan(manager.project_dir),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@opening_app.command("plan")
+def vlog_opening_plan(ctx: typer.Context) -> None:
+    """Create three evidence-grounded opening alternatives."""
+
+    command = "vlog.opening.plan"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            plan_openings(manager.project_dir),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@ending_app.command("plan")
+def vlog_ending_plan(ctx: typer.Context) -> None:
+    """Create three evidence-grounded ending alternatives."""
+
+    command = "vlog.ending.plan"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            plan_endings(manager.project_dir),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@continuity_app.command("check")
+def vlog_continuity_check(
+    ctx: typer.Context,
+    candidate_id: Annotated[str | None, typer.Option("--candidate")] = None,
+) -> None:
+    """Check causal, temporal, movement, B-roll and ending continuity."""
+
+    command = "vlog.continuity.check"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            check_continuity(manager.project_dir, candidate_id),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@review_app.command("create")
+def vlog_review_create(
+    ctx: typer.Context,
+    review_pass: Annotated[str, typer.Option("--pass")] = "story",
+) -> None:
+    """Create an immutable story, continuity, or sound review package."""
+
+    command = "vlog.review.create"
+    try:
+        if review_pass not in {"story", "continuity", "sound"}:
+            raise ValueError("--pass must be story, continuity, or sound.")
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            create_review(manager, review_pass),  # type: ignore[arg-type]
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@review_app.command("submit")
+def vlog_review_submit(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+) -> None:
+    """Validate and store an external director's review findings."""
+
+    command = "vlog.review.submit"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            submit_review(manager, source),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@review_app.command("plan")
+def vlog_review_plan(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+) -> None:
+    """Compile review findings into an auditable, unapplied revision plan."""
+
+    command = "vlog.review.plan"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            plan_review(manager, source),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@review_app.command("apply")
+def vlog_review_apply(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    approved_only: Annotated[bool, typer.Option("--approved-only/--include-drafts")] = True,
+) -> None:
+    """Apply approved deterministic review edits in one CutGraph revision."""
+
+    command = "vlog.review.apply"
+    try:
+        manager = manager_for(_state(ctx))
+        data = apply_review(manager, source, approved_only=approved_only)
+        _emit(ctx, command, data, revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@soundscape_app.command("analyze")
+def vlog_soundscape_analyze(ctx: typer.Context) -> None:
+    """Inventory audio roles without inventing unmeasured signal quality."""
+
+    command = "vlog.soundscape.analyze"
+    try:
+        manager = manager_for(_state(ctx))
+        data = analyze_soundscape(manager)
+        _emit(ctx, command, data, warnings=data["warnings"], revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@soundscape_app.command("plan")
+def vlog_soundscape_plan(
+    ctx: typer.Context,
+    style: Annotated[str, typer.Option("--style")] = "natural-vlog",
+    target_lufs: Annotated[float, typer.Option("--target-lufs")] = -14.0,
+    true_peak_db: Annotated[float, typer.Option("--true-peak")] = -1.0,
+) -> None:
+    """Create draft-only ambience, ducking and mastering recommendations."""
+
+    command = "vlog.soundscape.plan"
+    try:
+        manager = manager_for(_state(ctx))
+        data = plan_soundscape(
+            manager,
+            style=style,
+            target_lufs=target_lufs,
+            true_peak_db=true_peak_db,
+        )
+        _emit(ctx, command, data, warnings=data["warnings"], revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@soundscape_app.command("apply")
+def vlog_soundscape_apply(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    approved_only: Annotated[bool, typer.Option("--approved-only/--include-drafts")] = True,
+) -> None:
+    """Apply approved sound settings atomically; render and QC remain required."""
+
+    command = "vlog.soundscape.apply"
+    try:
+        manager = manager_for(_state(ctx))
+        data = apply_soundscape_plan(manager, source, approved_only=approved_only)
+        _emit(ctx, command, data, warnings=data["warnings"], revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
 @vlog_app.command("prepare")
 def vlog_prepare(
     ctx: typer.Context,
@@ -488,6 +772,7 @@ def vlog_prepare(
             batch_size=batch_size,
             native_results=native_results,
         )
+        data["scene_atlas"] = build_scene_atlas(manager, batch_size=batch_size)
         data.update(
             {
                 "project": str(manager.project_file.resolve()),
@@ -518,6 +803,90 @@ def vlog_inspect_next(ctx: typer.Context) -> None:
         manager = manager_for(_state(ctx))
         data = next_inspection_task(manager.project_dir)
         _emit(ctx, command, data, revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@inspect_app.command("batch")
+def vlog_inspect_batch(
+    ctx: typer.Context,
+    task_id: Annotated[str | None, typer.Option("--task")] = None,
+) -> None:
+    """Return the next Scene Atlas batch for one external-AI review call."""
+
+    command = "vlog.inspect.batch"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            next_atlas_inspection_batch(manager.project_dir, task_id=task_id),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@atlas_app.command("build")
+def vlog_atlas_build(
+    ctx: typer.Context,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1, max=100)] = 12,
+) -> None:
+    """Build or resume stable quality-first inspection batches."""
+
+    command = "vlog.atlas.build"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            build_scene_atlas(manager, batch_size=batch_size),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@atlas_app.command("status")
+def vlog_atlas_status(ctx: typer.Context) -> None:
+    """Report Atlas coverage and the next stable batch task."""
+
+    command = "vlog.atlas.status"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            scene_atlas_status(manager.project_dir),
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@atlas_app.command("observe")
+def vlog_atlas_observe(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    task_id: Annotated[str | None, typer.Option("--task")] = None,
+) -> None:
+    """Validate and store one batch of external visual observations."""
+
+    command = "vlog.observe.batch"
+    try:
+        manager = manager_for(_state(ctx))
+        payload = json.loads(source.expanduser().resolve().read_text("utf-8-sig"))
+        _emit(
+            ctx,
+            command,
+            ingest_atlas_observations(
+                manager.require_document(),
+                manager.project_dir,
+                payload,
+                task_id=task_id,
+            ),
+            revision=manager.require_document().revision,
+        )
     except Exception as error:
         _fail(ctx, command, error)
 
@@ -755,15 +1124,16 @@ def vlog_run(
             ffmpeg=state.config.tools.ffmpeg,
             ffprobe=state.config.tools.ffprobe,
         ).scan(search_directories=[source], link=True)
-        prepared = prepare_evidence_manifest(
+        prepare_evidence_manifest(
             manager, ffmpeg=state.config.tools.ffmpeg, generate_frames=True
         )
-        if prepared["pending_tasks"]:
-            task = next_inspection_task(manager.project_dir)
+        atlas = build_scene_atlas(manager)
+        if atlas["pending_tasks"]:
+            task = next_atlas_inspection_batch(manager.project_dir)
             raise ReviewRequiredError(
                 "External visual inspection is required before quality-first story planning.",
-                suggestion="Inspect the returned frame batch, submit evidence with `facut vlog observe`, then rerun this command.",
-                details={"stage": "inspection", "task": task},
+                suggestion="Inspect the returned multi-asset pack, submit it with `facut vlog atlas observe`, then rerun this command.",
+                details={"stage": "atlas_inspection", "task": task},
             )
         plan = build_story_candidates(
             manager.require_document(),

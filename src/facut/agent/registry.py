@@ -360,6 +360,39 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "rpc": True,
         "parameters": _object({}),
     },
+    "vlog.atlas.build": {
+        "summary": "Build or resume stable batches for large-library external visual review.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12}}
+        ),
+    },
+    "vlog.atlas.status": {
+        "summary": "Report Scene Atlas coverage, exclusions and the next stable task.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.inspect.batch": {
+        "summary": "Return one bounded multi-asset evidence pack for an external visual AI.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"task_id": {"type": ["string", "null"]}}),
+    },
+    "vlog.observe.batch": {
+        "summary": "Idempotently store a source-hashed batch of external visual observations.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "task_id": {"type": ["string", "null"]},
+                "observations": {"type": "array", "items": {"type": "object"}, "minItems": 1},
+                "asset_hashes": {"type": ["object", "null"]},
+            },
+            ["observations"],
+        ),
+    },
     "vlog.observe": {
         "summary": "Validate and idempotently store external visual observations.",
         "mutates": False,
@@ -389,6 +422,120 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "target_duration": {"type": "number", "minimum": 1, "default": 480},
                 "candidates": {"const": 3},
             }
+        ),
+    },
+    "vlog.story.brief": {
+        "summary": "Build an evidence-addressed StoryGraph 3 brief for an external AI director.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.story.submit": {
+        "summary": "Validate and save an external AI story proposal without applying it.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"proposal": {"type": "object", "additionalProperties": True}},
+            ["proposal"],
+        ),
+    },
+    "vlog.story.validate": {
+        "summary": "Validate the current StoryGraph against evidence and causal constraints.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.opening.plan": {
+        "summary": "Build three reviewable evidence-grounded opening alternatives.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({}),
+    },
+    "vlog.ending.plan": {
+        "summary": "Build three reviewable evidence-grounded ending alternatives.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({}),
+    },
+    "vlog.continuity.check": {
+        "summary": "Check causal, location, daypart, movement, composition, B-roll and ending continuity.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"candidate_id": {"type": ["string", "null"]}}
+        ),
+    },
+    "vlog.review.create": {
+        "summary": "Create one immutable external-director review package, up to three rounds.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"review_pass": {"enum": ["story", "continuity", "sound"], "default": "story"}}
+        ),
+    },
+    "vlog.review.submit": {
+        "summary": "Validate and idempotently store evidence-bound external review findings.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"submission": {"type": "object", "additionalProperties": True}},
+            ["submission"],
+        ),
+    },
+    "vlog.review.plan": {
+        "summary": "Compile external findings into an auditable, unapplied revision plan.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"submission": {"type": "object", "additionalProperties": True}},
+            ["submission"],
+        ),
+    },
+    "vlog.review.apply": {
+        "summary": "Atomically apply explicitly approved deterministic review edits.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "object", "additionalProperties": True},
+                "approved_only": {"type": "boolean", "default": True},
+            },
+            ["plan"],
+        ),
+    },
+    "vlog.soundscape.analyze": {
+        "summary": "Inventory dialogue, narration, original, ambience, music and SFX roles.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.soundscape.plan": {
+        "summary": "Create review-first ducking and mastering recommendations without fake measurements.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "style": {"type": "string", "default": "natural-vlog"},
+                "target_lufs": {"type": "number", "default": -14.0},
+                "true_peak_db": {"type": "number", "default": -1.0},
+            }
+        ),
+    },
+    "vlog.soundscape.apply": {
+        "summary": "Atomically apply approved sound settings; render and measured QC remain required.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "object", "additionalProperties": True},
+                "approved_only": {"type": "boolean", "default": True},
+            },
+            ["plan"],
         ),
     },
     "vlog.compare": {

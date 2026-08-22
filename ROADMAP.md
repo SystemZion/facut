@@ -39,13 +39,18 @@ FACUT 的主线是日常 VLOG、旅行、City Walk、亲子出行与周末记录
 - 相似声音先隔离、人工确认同一说话人后才允许进入授权档案。
 - 声音 QC 分离文件质量、合成可用性和六种风格覆盖率。
 
-## 0.9 — Travel Director
+## 0.9 — Director Loop
 
-- Director Inbox 基础闭环已实现：稳定优先级、低置信深审、事件链缺口、事实复审、显式解决记录；后续继续接入 ASR 讲话和空镜多样性信号。
-- Trip Bible 基础闭环已实现：人物、地点、日期、专名、确认/不确定/拒绝事实与禁用断言；后续将其约束贯穿字幕、口播和 StoryGraph。
-- StoryGraph 2 生成叙事、沉浸、视觉和生活流候选，并强制同一人物事件链完整有序。
-- Opening Lab/Ending Lab 在 CutGraph 分支生成多个开头和结尾，支持变化区间 A/B 审片。
-- Continuity Guard 检查地点、昼夜、动作方向、重复构图、B-roll 缺口和结尾硬停。
-- Soundscape 规划环境声桥、J/L-cut、现场反应、音乐闪避和授权音效。
-- RenderGraph v3 分离视频、原声、音乐、口播、字幕和转场边界缓存；修改片尾 5 秒时目标复用率不低于 95%。
-- GPX/KML、横竖派生、章节、封面候选和完整 QC/发布包围绕同一主序列交付。
+- Scene Atlas 将大素材库组成稳定批次，支持部分提交、断点恢复和自适应深审。
+- StoryGraph 3 接收外部AI导演提案，验证旅行章节、事件因果、人物结果和证据引用；原启发式计划明确标记为确定性基线。
+- Opening/Ending Lab、Continuity Guard 与最多三轮 Director Review 已形成可审计修订闭环。
+- Soundscape 按六类声音角色生成审核优先的闪避和母版设置，不伪造未测量的响度或降噪结果。
+- 可确定执行的地点板、动作匹配、克制叠化和喜剧强调进入RenderGraph；需要眼睛或物体锚点的效果继续要求外部证据。
+- CLI、Agent Schema、Recipe、批处理和JSON-RPC保持同一能力面。
+
+## 0.10 — Travel Delivery
+
+- GPX/KML路线动画与地点数据卡。
+- 一个4K主序列派生横版、Shorts、预告、无字幕母版、章节和封面候选。
+- 主体轨迹由外部视觉AI提供，FACUT只做确定性横竖重构图。
+- RenderGraph继续优化跨版本缓存复用和变化区间审片。

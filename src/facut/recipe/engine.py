@@ -172,6 +172,28 @@ class RecipeEngine:
                     "preset": recipe.vlog.preset,
                 }
             )
+        if recipe.review is not None:
+            plan_path = Path(recipe.review.plan).expanduser()
+            if not plan_path.is_absolute():
+                plan_path = source_dir / plan_path
+            commands.append(
+                {
+                    "action": "vlog.review.apply",
+                    "plan": str(plan_path.resolve()),
+                    "approved_only": recipe.review.approved_only,
+                }
+            )
+        if recipe.soundscape is not None:
+            plan_path = Path(recipe.soundscape.plan).expanduser()
+            if not plan_path.is_absolute():
+                plan_path = source_dir / plan_path
+            commands.append(
+                {
+                    "action": "vlog.soundscape.apply",
+                    "plan": str(plan_path.resolve()),
+                    "approved_only": recipe.soundscape.approved_only,
+                }
+            )
         track_types: dict[str, str] = {
             track.id: track.type.value for track in document.tracks
         }

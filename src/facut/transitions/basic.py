@@ -62,4 +62,10 @@ def builtins() -> tuple[TransitionDefinition, ...]:
         TransitionDefinition(
             "blur", ("blur-transition",), "basic", 0.5, "fade", common
         ),
+        TransitionDefinition(
+            "restrained-dissolve", (), "vlog", 0.45, "fade", common
+        ),
+        TransitionDefinition(
+            "movement-match", (), "vlog", 0.3, "slideleft", common
+        ),
     )

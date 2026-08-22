@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0 — 2026-08-22
+
+- Added Scene Atlas with stable 12-asset review batches, content-hash resume,
+  partial idempotent submissions, explicit exclusions and adaptive deep review.
+- Added StoryGraph 3 external-director briefs and proposals with episodes,
+  events, causal constraints, visual motifs and a clearly labeled deterministic
+  fallback.
+- Added Opening Lab, Ending Lab and Continuity Guard for location, daypart,
+  motion, composition, B-roll, event-outcome and hard-stop checks.
+- Added a three-round evidence-bound Director Review Loop. Approved commands
+  apply as one atomic CutGraph revision and stale plans are rejected.
+- Added review-first Soundscape role inventory, ducking/mastering plans and
+  atomic approved settings without claiming unmeasured audio results.
+- Registered executable VLOG transitions and restrained effects; unsupported
+  anchor-dependent polish remains explicitly review-required.
+- Exposed the new workflow through CLI, Agent schemas, Recipes and loopback
+  JSON-RPC while keeping all visual interpretation external.
+
 ## 0.8.3 — 2026-08-22
 
 - Updated Windows install and self-update to carry the complete portable ZIP,
@@ -12,19 +30,6 @@
 - Reclaimed abandoned background-warmup locks and made `cleanram` verify that
   the voice process actually stopped instead of reporting success on timeout.
 - Corrected the lightweight `cleanram` and `warmup` help syntax.
-
-## Unreleased — Travel Director
-
-- Added a stable Director Inbox that prioritizes unobserved media, ambiguous
-  evidence, same-subject event-chain gaps and uncertain travel facts without
-  reducing mandatory baseline coverage.
-- Added the strict Trip Bible contract for reviewed people, places, dates,
-  glossary terms, confirmed/uncertain/rejected facts and forbidden claims.
-- Exposed Inbox and Trip Bible operations through CLI, workflow schema and
-  JSON-RPC with atomic files and auditable resolution notes.
-- Switched the default Windows build to a portable one-directory executable so
-  the launcher can start without extracting a 100+ MB archive on every call;
-  the standalone one-file build remains optional.
 
 ## 0.8.2 — 2026-08-19
 

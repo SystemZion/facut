@@ -172,6 +172,36 @@ std::vector<std::uint8_t> sampled_luma(const AVFrame* frame) {
     return values;
 }
 
+std::string average_hash(const AVFrame* frame) {
+    if (!frame->data[0] || frame->width <= 0 || frame->height <= 0) {
+        return {};
+    }
+    std::array<double, 64> sums{};
+    std::array<std::uint64_t, 64> counts{};
+    for (int y = 0; y < frame->height; ++y) {
+        const auto* row = frame->data[0] + y * frame->linesize[0];
+        const int bucket_y = std::min(7, y * 8 / frame->height);
+        for (int x = 0; x < frame->width; ++x) {
+            const int bucket_x = std::min(7, x * 8 / frame->width);
+            const auto index = static_cast<std::size_t>(bucket_y * 8 + bucket_x);
+            sums[index] += row[x];
+            ++counts[index];
+        }
+    }
+    std::array<double, 64> cells{};
+    for (std::size_t index = 0; index < cells.size(); ++index) {
+        cells[index] = counts[index] ? sums[index] / counts[index] : 0.0;
+    }
+    const double mean = std::accumulate(cells.begin(), cells.end(), 0.0) / cells.size();
+    std::uint64_t hash = 0;
+    for (const auto value : cells) {
+        hash = (hash << 1) | static_cast<std::uint64_t>(value >= mean);
+    }
+    std::ostringstream encoded;
+    encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return encoded.str();
+}
+
 void write_jpeg(const AVFrame* input, const std::filesystem::path& output, int requested_width) {
     const int width = std::max(2, requested_width - requested_width % 2);
     const int scaled = static_cast<int>(std::llround(
@@ -275,6 +305,7 @@ json sample_video(
                     {"luminance_mean", metrics.luminance},
                     {"sharpness", metrics.sharpness},
                     {"motion", metrics.motion},
+                    {"perceptual_hash", average_hash(frame.get())},
                 });
                 av_frame_unref(frame.get());
                 found = true;
@@ -461,7 +492,7 @@ json runtime_diagnostics() {
             {"configuration", avcodec_configuration()},
             {"license", avcodec_license()},
         }},
-        {"features", {"media.batch_scan", "representative_frames", "quality_metrics", "waveform_peaks", "fingerprint"}},
+        {"features", {"media.batch_scan", "representative_frames", "quality_metrics", "waveform_peaks", "fingerprint", "perceptual_hash"}},
     };
 }
 

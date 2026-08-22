@@ -5,23 +5,28 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.8.3` 在质量优先的 Vlog Director 旁增加了可选 C++ Native Accelerator：一次进程可批量读取大量素材的技术元数据、代表帧、波形和轻量质量指标。Python 仍负责工程、StoryGraph、Agent 协议与确定性渲染；原生进程失败会重启一次，`auto` 模式随后明确回退，不会伪造加速成功。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+当前开发版本 `0.9.0` 引入 Director Loop：Scene Atlas 默认把12条素材组成一个可恢复的外部AI审阅包，StoryGraph 3保存旅行章节、事件因果和视觉母题，Opening/Ending Lab、Continuity Guard、三轮审片与Soundscape把“看素材—出故事—审片—修订”连成可追溯闭环。可选C++ Native Accelerator继续负责批量技术分析；FACUT不内置本地视觉模型，也不会用Token限制跳过有效素材。
 
 最短工作流：
 
 ```powershell
 facut vlog prepare D:\Trip --project D:\Trip-Project
 facut --project D:\Trip-Project vlog bible import trip-bible.json
-facut --project D:\Trip-Project vlog inbox next --limit 8 --json
-facut --project D:\Trip-Project vlog inspect next --json
-facut --project D:\Trip-Project vlog observe observations.json
-facut --project D:\Trip-Project vlog plan --style comedy-vlog --target-duration 480
+facut --project D:\Trip-Project vlog inspect batch --json
+facut --project D:\Trip-Project vlog atlas observe observations.json
+facut --project D:\Trip-Project vlog story brief -o story-brief.json
+facut --project D:\Trip-Project vlog story submit story-candidates.json
+facut --project D:\Trip-Project vlog continuity check
+facut --project D:\Trip-Project vlog opening plan
+facut --project D:\Trip-Project vlog ending plan
 facut --project D:\Trip-Project vlog preview --all-candidates
 facut --project D:\Trip-Project vlog refine candidate-narrative --auto
+facut --project D:\Trip-Project vlog soundscape plan
+facut --project D:\Trip-Project vlog review create --pass story
 facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-4k -o D:\Trip-Final\final.mp4
 ```
 
-`Director Inbox` 不代替全素材覆盖：它只把未观察素材、低置信观察、同一人物事件链缺口和 Trip Bible 不确定事实按优先级送给 AI。`Trip Bible` 保存经确认的人物、地点、日期、专名和事实；只有 `confirmed` 事实可进入生成口播或标题，`uncertain` 会进入 Inbox，`rejected` 不得作为成片断言。
+`Scene Atlas` 和 `Director Inbox` 都不代替全素材覆盖：Atlas保证每个有效非重复素材至少进入一个基础审阅包，再把低置信、重要动作、事件链和高价值原声升级为深审；Inbox负责后续歧义与事实复核。`Trip Bible` 保存经确认的人物、地点、日期、专名和事实；只有 `confirmed` 事实可进入生成口播或标题，`uncertain` 会进入Inbox，`rejected`不得作为成片断言。
 
 `vlog run ... --auto` 也遵守同一质量门：缺少外部视觉观察或 ASR 中存在待复审词时返回 `REVIEW_REQUIRED`，不会伪造成功。字幕正文使用统一易读字体；科技、人文、风景、喜剧、家庭和美食标题通过逻辑字体角色匹配本机已授权字体，最终渲染前强制检查缺字。
 

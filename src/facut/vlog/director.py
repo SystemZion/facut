@@ -11,7 +11,16 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from facut.core.models import Clip, MediaKind, ProjectDocument, Track, TrackType
+from facut.core.models import (
+    Clip,
+    Effect,
+    MediaKind,
+    ProjectDocument,
+    TextOverlay,
+    Track,
+    TrackType,
+    Transition,
+)
 from facut.core.project_manager import ProjectManager
 from facut.media.thumbnail import generate_thumbnail
 from facut.media.importer import SUPPORTED_EXTENSIONS
@@ -204,6 +213,7 @@ def prepare_evidence_manifest(
                         "sharpness": item.get("sharpness"),
                         "motion": item.get("motion"),
                     },
+                    "perceptual_hash": item.get("perceptual_hash"),
                 }
                 for item in native_result.get("representative_frames", [])
             ]
@@ -414,6 +424,40 @@ def director_status(
         result["candidate_id"] = applied["candidate_id"]
     if delivery:
         result["delivery"] = delivery
+    from .atlas import scene_atlas_status
+
+    atlas = scene_atlas_status(project_dir)
+    result["scene_atlas"] = atlas
+    if (
+        atlas.get("stage") == "inspection"
+        and stage not in {"applied", "built", "delivered"}
+    ):
+        result["stage"] = "atlas_inspection"
+        result["pending_tasks"] = atlas["pending_tasks"]
+        result["next_command"] = atlas["next_command"]
+    review_root = root / "reviews"
+    review_packages = list((review_root / "packages").glob("*.json"))
+    review_plans = list((review_root / "plans").glob("*.json"))
+    result["director_review"] = {
+        "rounds_created": len(review_packages),
+        "maximum_rounds": 3,
+        "revision_plans": len(review_plans),
+        "applications": len(
+            document.settings.get("director_review_applications", [])
+            if document is not None
+            else []
+        ),
+    }
+    soundscape_root = root / "soundscape"
+    result["soundscape"] = {
+        "analysis_available": (soundscape_root / "analysis.json").is_file(),
+        "plans": len(list((soundscape_root / "plans").glob("*.json"))),
+        "applications": len(
+            document.settings.get("soundscape_applications", [])
+            if document is not None
+            else []
+        ),
+    }
     return result
 
 
@@ -702,7 +746,19 @@ def _candidate(
             transition = "hard-cut"
             reason = "Hard cut preserves continuity and avoids decorative transitions."
             if previous.stage != segment.stage:
-                transition, reason = "location-card", "Story stage changes; use a restrained chapter/location bridge."
+                previous_evidence = observation_by_id[previous.observation_id]
+                previous_location = previous_evidence.location_id or previous_evidence.location
+                current_location = evidence.location_id or evidence.location
+                if previous_location and current_location and previous_location != current_location:
+                    transition, reason = (
+                        "location-card",
+                        "Confirmed location changes; use a restrained chapter/location bridge.",
+                    )
+                elif strategy == "visual":
+                    transition, reason = (
+                        "restrained-dissolve",
+                        "The visual-emotion strategy changes story stages without a confirmed location jump.",
+                    )
             elif (
                 evidence.camera_motion
                 and observation_by_id[previous.observation_id].camera_motion == evidence.camera_motion
@@ -714,7 +770,7 @@ def _candidate(
                     "type": transition,
                     "reason": reason,
                     "confidence": min(previous.confidence, segment.confidence),
-                    "render_status": "intent-only" if transition != "hard-cut" else "native",
+                    "render_status": "planned" if transition != "hard-cut" else "rendered",
                 }
             )
         comedic = any(token in text for token in ("funny", "laugh", "fall", "搞笑", "笑", "摔倒", "迷路", "失败"))
@@ -910,8 +966,122 @@ def candidate_document(
     ]
     copy.tracks = [Track(id="V1", name=f"VLOG {candidate.name}", type=TrackType.VIDEO, clips=clips)]
     copy.transitions = []
-    copy.subtitle_cues = []
     copy.text_overlays = []
+    by_observation = {
+        clip.metadata["observation_id"]: clip for clip in clips
+    }
+    rendered_effects: list[dict[str, Any]] = []
+    for intent in candidate.polish_plan.get("effect_intents", []):
+        clip = by_observation.get(intent.get("observation_id"))
+        if clip is None:
+            continue
+        requested = str(intent.get("effect", ""))
+        confidence = float(intent.get("confidence", 0.0))
+        selected = requested
+        fallback_used = False
+        if requested not in {"punch-zoom", "micro-shake", "comic-impact"}:
+            selected = str(intent.get("fallback", ""))
+            fallback_used = True
+        if selected not in {"punch-zoom", "micro-shake", "comic-impact"} or confidence < 0.75:
+            intent["render_status"] = "review-required"
+            continue
+        parameters = {"intensity": 0.12} if selected == "punch-zoom" else {}
+        clip.effects.append(Effect(type=selected, parameters=parameters))
+        intent["render_status"] = "fallback" if fallback_used else "rendered"
+        intent["rendered_effect"] = selected
+        rendered_effects.append(
+            {
+                "clip_id": clip.id,
+                "requested": requested,
+                "rendered": selected,
+                "fallback": fallback_used,
+            }
+        )
+
+    # xfade transitions require a real overlap. Shift the target and all later
+    # clips by the reviewed boundary duration; hard cuts and location cards do
+    # not silently become decorative dissolves.
+    clip_indexes = {clip.id: index for index, clip in enumerate(clips)}
+    for intent in candidate.polish_plan.get("transition_intents", []):
+        requested = str(intent.get("type", "hard-cut"))
+        if requested == "hard-cut":
+            intent["render_status"] = "rendered"
+            continue
+        if requested == "location-card":
+            between = intent.get("between") or []
+            target = by_observation.get(between[1]) if len(between) == 2 else None
+            if target is None:
+                intent["render_status"] = "review-required"
+                continue
+            stage = str(target.metadata.get("story_stage", "chapter"))
+            labels = {
+                "opening": "出发",
+                "setup": "抵达",
+                "exploration": "探索",
+                "change": "途中插曲",
+                "climax": "高光时刻",
+                "reflection": "回味",
+            }
+            copy.text_overlays.append(
+                TextOverlay(
+                    text=labels.get(stage, stage),
+                    at=target.timeline_start,
+                    duration=min(2.0, target.duration),
+                    x="center",
+                    y="center",
+                    entrance="fade",
+                    exit="fade",
+                    template="chapter",
+                    metadata={
+                        "source": "vlog-location-card",
+                        "between": between,
+                    },
+                )
+            )
+            intent["render_status"] = "rendered"
+            intent["rendered_as"] = "chapter-text-overlay"
+            continue
+        if requested not in {"movement-match", "restrained-dissolve"}:
+            intent["render_status"] = "review-required"
+            continue
+        between = intent.get("between") or []
+        if len(between) != 2:
+            intent["render_status"] = "review-required"
+            continue
+        source = by_observation.get(between[0])
+        target = by_observation.get(between[1])
+        if source is None or target is None:
+            intent["render_status"] = "review-required"
+            continue
+        target_index = clip_indexes[target.id]
+        if target_index != clip_indexes[source.id] + 1:
+            intent["render_status"] = "review-required"
+            continue
+        duration = min(
+            0.3 if requested == "movement-match" else 0.45,
+            source.duration / 3,
+            target.duration / 3,
+        )
+        if duration <= 1 / copy.project.fps:
+            intent["render_status"] = "review-required"
+            continue
+        for later in clips[target_index:]:
+            later.timeline_start = max(0.0, later.timeline_start - duration)
+        copy.transitions.append(
+            Transition(
+                type=requested,
+                duration=duration,
+                from_clip_id=source.id,
+                to_clip_id=target.id,
+                track_id="V1",
+                at=target.timeline_start,
+            )
+        )
+        intent["render_status"] = "rendered"
+        intent["duration"] = duration
+    if rendered_effects:
+        copy.settings["vlog_polish"] = {"effects": rendered_effects}
+    copy.subtitle_cues = []
     copy.markers = []
     copy.recompute_duration()
     return copy, candidate

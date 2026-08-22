@@ -44,6 +44,23 @@ class EvidenceObservation(VlogModel):
     event_chain: str | None = None
     event_order: int | None = Field(default=None, ge=0)
     story_role: Literal["setup", "incident", "recovery", "outcome"] | None = None
+    episode_id: str | None = None
+    location_id: str | None = None
+    event_id: str | None = None
+    event_role: Literal[
+        "setup", "action", "reaction", "incident", "recovery", "outcome", "transition"
+    ] | None = None
+    causes: list[str] = Field(default_factory=list)
+    requires_before: list[str] = Field(default_factory=list)
+    requires_after: list[str] = Field(default_factory=list)
+    emotion: str | None = None
+    original_audio_quote: str | None = None
+    visual_motifs: list[str] = Field(default_factory=list)
+    movement_direction: Literal[
+        "left", "right", "up", "down", "in", "out", "static", "mixed"
+    ] | None = None
+    composition_signature: str | None = None
+    broll_topics: list[str] = Field(default_factory=list)
     provider: str = "external-agent"
     warnings: list[str] = Field(default_factory=list)
 
@@ -90,6 +107,9 @@ class StoryPlan(VlogModel):
     selected_candidate_id: str | None = None
     quality_weights: dict[str, float]
     warnings: list[str] = Field(default_factory=list)
+    generation_mode: Literal["deterministic-baseline", "external-director"] = (
+        "deterministic-baseline"
+    )
 
 
 def vlog_workflow_schema() -> dict[str, Any]:
@@ -107,14 +127,23 @@ def vlog_workflow_schema() -> dict[str, Any]:
         },
         "steps": [
             {"action": "vlog.prepare", "mutates_project": True},
+            {"action": "vlog.atlas.build", "default_batch_size": 12},
             {"action": "vlog.bible.import", "requires": "reviewed facts or an empty bible"},
             {"action": "vlog.inbox.next", "repeat_until": "baseline and high-priority gaps resolved"},
-            {"action": "vlog.inspect.next", "repeat_until": "pending_tasks == 0"},
-            {"action": "vlog.observe", "idempotent_by": "observation_id"},
-            {"action": "vlog.plan", "default_candidates": 3},
+            {"action": "vlog.inspect.batch", "repeat_until": "atlas pending_tasks == 0"},
+            {"action": "vlog.observe.batch", "idempotent_by": "task_id and observation_id"},
+            {"action": "vlog.story.brief", "visual_provider": "external-agent"},
+            {"action": "vlog.story.submit", "preferred": True},
+            {"action": "vlog.plan", "fallback": "deterministic-baseline", "default_candidates": 3},
+            {"action": "vlog.continuity.check"},
+            {"action": "vlog.opening.plan", "default_candidates": 3},
+            {"action": "vlog.ending.plan", "default_candidates": 3},
             {"action": "vlog.compare"},
             {"action": "vlog.refine"},
             {"action": "vlog.apply", "requires": "ready candidate"},
+            {"action": "vlog.soundscape.plan", "requires": "audition before approval"},
+            {"action": "vlog.review.create", "maximum_rounds": 3},
+            {"action": "vlog.review.apply", "requires": "approved deterministic edits"},
             {"action": "vlog.build", "requires": "ready candidate"},
         ],
         "evidence_schema": EvidenceObservation.model_json_schema(),
