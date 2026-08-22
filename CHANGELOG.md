@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.3 — 2026-08-22
+
+- Updated Windows install and self-update to carry the complete portable ZIP,
+  including `facut_runtime`, with safe extraction, staged directory switching
+  and rollback; legacy single-file releases remain supported.
+- Bound StoryGraph and narration plans to a semantic Trip Bible digest so a
+  changed or rejected fact invalidates stale plans before timeline mutation.
+- Bound resolved Director Inbox items to source fingerprints and made status
+  reconstruction non-persistent, preventing stale decisions and query writes.
+- Reclaimed abandoned background-warmup locks and made `cleanram` verify that
+  the voice process actually stopped instead of reporting success on timeout.
+- Corrected the lightweight `cleanram` and `warmup` help syntax.
+
 ## Unreleased — Travel Director
 
 - Added a stable Director Inbox that prioritizes unobserved media, ambiguous

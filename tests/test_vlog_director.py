@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from typer.testing import CliRunner
 
 from facut.cli.main import app
@@ -95,6 +97,32 @@ def test_director_inbox_prioritizes_incomplete_event_chain_and_keeps_resolution(
     assert resolved["item"]["status"] == "resolved"
     rebuilt = rebuild_director_inbox(manager.project_dir)
     assert next(item for item in rebuilt["items"] if item["id"] == item_id)["status"] == "resolved"
+
+
+def test_director_inbox_reopens_resolution_when_source_observation_changes(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=1)
+    initial = {
+        "observations": [{
+            "observation_id": "ambiguous",
+            "media_id": "media_0",
+            "range": {"start": 1, "end": 5},
+            "summary": "画面含义不明确",
+            "confidence": 0.5,
+        }]
+    }
+    ingest_observations(manager.require_document(), manager.project_dir, initial)
+    inbox = rebuild_director_inbox(manager.project_dir)
+    item = next(item for item in inbox["items"] if item["kind"] == "deep-review")
+    resolve_inbox_item(manager.project_dir, item["id"], resolution="已检查。")
+    changed = initial.copy()
+    changed["observations"] = [dict(initial["observations"][0], summary="新的证据摘要")]
+    observations_path = manager.project_dir / "cache" / "vlog" / "observations.json"
+    observations_path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+    rebuilt = rebuild_director_inbox(manager.project_dir)
+    reopened = next(entry for entry in rebuilt["items"] if entry["id"] == item["id"])
+    assert reopened["status"] == "pending"
+    assert reopened["resolution"] is None
 
 
 def test_trip_bible_separates_confirmed_uncertain_and_rejected_claims(tmp_path) -> None:
@@ -243,6 +271,20 @@ def test_storygraph_builds_three_reviewable_candidates_and_comparison(tmp_path) 
     refined = refine_story_candidate(manager.project_dir, "candidate-narrative")
     assert refined.selected_candidate_id == "candidate-narrative"
     assert refined.status == "ready"
+
+
+def test_story_plan_is_invalidated_when_trip_bible_changes(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    prepare_evidence_manifest(manager, generate_frames=False, batch_size=1)
+    ingest_observations(
+        manager.require_document(), manager.project_dir,
+        {"observations": [{"observation_id": "one", "media_id": "media_0", "range": {"start": 0, "end": 5}, "summary": "抵达"}]},
+        task_id="inspect_0001",
+    )
+    build_story_candidates(manager.require_document(), manager.project_dir)
+    save_trip_bible(manager.project_dir, {"trip_name": "changed", "facts": []})
+    with pytest.raises(ValueError, match="Trip Bible changed"):
+        refine_story_candidate(manager.project_dir, "candidate-narrative")
 
 
 def test_storygraph_redistributes_sparse_stage_duration(tmp_path) -> None:

@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.8.2` 在质量优先的 Vlog Director 旁增加了可选 C++ Native Accelerator：一次进程可批量读取大量素材的技术元数据、代表帧、波形和轻量质量指标。Python 仍负责工程、StoryGraph、Agent 协议与确定性渲染；原生进程失败会重启一次，`auto` 模式随后明确回退，不会伪造加速成功。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+当前开发版本 `0.8.3` 在质量优先的 Vlog Director 旁增加了可选 C++ Native Accelerator：一次进程可批量读取大量素材的技术元数据、代表帧、波形和轻量质量指标。Python 仍负责工程、StoryGraph、Agent 协议与确定性渲染；原生进程失败会重启一次，`auto` 模式随后明确回退，不会伪造加速成功。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
 
 最短工作流：
 
@@ -44,7 +44,7 @@ facut update --check
 facut update
 ```
 
-更新从 `SystemZion/facut` 最新 GitHub Release 断点续传 `facut.exe`；若正在运行的正是已安装 EXE，FACUT 会在当前进程退出后完成替换。
+Windows 更新优先从 `SystemZion/facut` 最新 GitHub Release 断点续传完整的 `facut-windows-x64.zip`，校验并暂存整个便携目录；若正在运行的正是已安装 EXE，FACUT 会在当前进程退出后原子切换目录并保留失败回滚。旧版单文件 Release 仍可兼容更新。
 
 ```bash
 python -m venv .venv

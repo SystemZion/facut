@@ -402,7 +402,7 @@ def director_status(
     }
     from .context import load_trip_bible, rebuild_director_inbox
 
-    inbox = rebuild_director_inbox(project_dir)
+    inbox = rebuild_director_inbox(project_dir, persist=False)
     bible = load_trip_bible(project_dir)
     result["director_inbox"] = {"pending": inbox["pending"], "total": inbox["total"]}
     result["trip_bible"] = {
@@ -791,7 +791,7 @@ def build_story_candidates(
         _candidate(observations, strategy, target_duration, style)
         for strategy in ("narrative", "immersive", "visual")
     ]
-    from .context import load_trip_bible, trip_bible_fact_policy
+    from .context import load_trip_bible, trip_bible_fact_policy, trip_bible_sha256
 
     bible = load_trip_bible(project_dir, default_name=document.project.name)
     fact_policy = trip_bible_fact_policy(bible)
@@ -807,6 +807,7 @@ def build_story_candidates(
     plan = StoryPlan(
         project_revision=document.revision,
         evidence_sha256=hashlib.sha256(evidence_bytes).hexdigest(),
+        trip_bible_sha256=trip_bible_sha256(bible),
         style=style,
         target_duration=target_duration,
         candidates=candidates,
@@ -840,9 +841,31 @@ def compare_story_candidates(project_dir: str | Path) -> dict[str, Any]:
     return {"style": plan.style, "candidates": [item.model_dump(mode="json") for item in plan.candidates], "differences": differences}
 
 
+def _assert_story_context_current(plan: StoryPlan, project_dir: str | Path) -> None:
+    """Refuse a plan whose factual policy changed after it was generated."""
+
+    from .context import load_trip_bible, trip_bible_sha256
+
+    planned_name = next(
+        (
+            str(item.polish_plan.get("trip_bible", {}).get("trip_name"))
+            for item in plan.candidates
+            if item.polish_plan.get("trip_bible", {}).get("trip_name")
+        ),
+        "Untitled trip",
+    )
+    current = trip_bible_sha256(load_trip_bible(project_dir, default_name=planned_name))
+    if plan.trip_bible_sha256 != current:
+        raise ValueError(
+            "The Trip Bible changed after this StoryGraph plan was generated. "
+            "Run `facut vlog plan` again before refining or applying a candidate."
+        )
+
+
 def refine_story_candidate(project_dir: str | Path, candidate_id: str) -> StoryPlan:
     path = _root(project_dir) / "story.plan.json"
     plan = StoryPlan.model_validate(_read_json(path))
+    _assert_story_context_current(plan, project_dir)
     candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
     if candidate is None:
         raise ValueError(f'Unknown story candidate "{candidate_id}".')
@@ -863,6 +886,7 @@ def candidate_document(
     if raw is None:
         raise FileNotFoundError("Story plan was not found. Run `facut vlog plan` first.")
     plan = StoryPlan.model_validate(raw)
+    _assert_story_context_current(plan, project_dir)
     candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
     if candidate is None:
         raise ValueError(f'Unknown story candidate "{candidate_id}".')

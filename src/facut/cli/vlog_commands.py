@@ -104,6 +104,7 @@ def _apply_candidate(
     if (
         applied.get("candidate_id") == candidate.id
         and applied.get("evidence_sha256") == plan.evidence_sha256
+        and applied.get("trip_bible_sha256") == plan.trip_bible_sha256
     ):
         return current, candidate, plan
     manager.ensure_experiment_branch("vlog")
@@ -118,6 +119,7 @@ def _apply_candidate(
             "strategy": candidate.strategy,
             "style": plan.style,
             "evidence_sha256": plan.evidence_sha256,
+            "trip_bible_sha256": plan.trip_bible_sha256,
         }
         return document.settings["vlog_director"]
 

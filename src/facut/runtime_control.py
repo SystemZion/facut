@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any, Iterable
 import json
 
@@ -157,6 +158,35 @@ def _voice_state_has_live_process() -> bool:
         return False
 
 
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _remove_stale_warmup_lock(lock_path: Path, *, ttl_seconds: float = 900.0) -> bool:
+    """Remove a lock only when its owner is dead or the lock exceeded its TTL."""
+
+    try:
+        payload = json.loads(lock_path.read_text("utf-8"))
+        pid = int(payload.get("pid", 0))
+        created_at = float(payload.get("created_at", 0))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pid = 0
+        try:
+            created_at = lock_path.stat().st_mtime
+        except OSError:
+            return True
+    stale = not _pid_is_alive(pid) or time.time() - created_at > ttl_seconds
+    if stale:
+        lock_path.unlink(missing_ok=True)
+    return stale
+
+
 def schedule_default_warmup() -> dict[str, Any]:
     """Launch a detached warmup helper without delaying the requested command."""
 
@@ -170,12 +200,17 @@ def schedule_default_warmup() -> dict[str, Any]:
         return {"scheduled": False, "reason": "state-present", "services": selected}
     lock_path = _warmup_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return {"scheduled": False, "reason": "warmup-in-progress", "services": selected}
-    else:
-        os.close(descriptor)
+    for attempt in range(2):
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if attempt == 0 and _remove_stale_warmup_lock(lock_path):
+                continue
+            return {"scheduled": False, "reason": "warmup-in-progress", "services": selected}
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump({"pid": os.getpid(), "created_at": time.time()}, stream)
+            break
     if getattr(sys, "frozen", False):
         command = [sys.executable, "__runtime_warmup__", *selected]
     else:
@@ -185,22 +220,31 @@ def schedule_default_warmup() -> dict[str, Any]:
     environment = os.environ.copy()
     if getattr(sys, "frozen", False):
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=log_stream,
-        stderr=log_stream,
-        env=environment,
-        shell=False,
-        creationflags=(
-            getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=log_stream,
+            env=environment,
+            shell=False,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+            )
+            if os.name == "nt"
+            else 0,
+            start_new_session=os.name != "nt",
         )
-        if os.name == "nt"
-        else 0,
-        start_new_session=os.name != "nt",
-    )
-    log_stream.close()
+        if lock_path.exists():
+            lock_path.write_text(
+                json.dumps({"pid": process.pid, "created_at": time.time()}), encoding="utf-8"
+            )
+    except Exception:
+        lock_path.unlink(missing_ok=True)
+        raise
+    finally:
+        log_stream.close()
     return {
         "scheduled": True,
         "services": selected,

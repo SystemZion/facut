@@ -82,6 +82,7 @@ class StoryPlan(VlogModel):
     version: Literal["2.0"] = "2.0"
     project_revision: int = Field(ge=0)
     evidence_sha256: str
+    trip_bible_sha256: str | None = None
     style: str
     target_duration: float = Field(gt=0)
     status: Literal["review_required", "ready"] = "review_required"

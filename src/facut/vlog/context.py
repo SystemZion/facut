@@ -65,6 +65,7 @@ class DirectorInboxItem(ContextModel):
     media_ids: list[str] = Field(default_factory=list)
     observation_ids: list[str] = Field(default_factory=list)
     requested_evidence: list[str] = Field(default_factory=list)
+    source_fingerprint: str
     resolution: str | None = None
     created_at: str
     resolved_at: str | None = None
@@ -136,12 +137,27 @@ def trip_bible_fact_policy(bible: TripBible) -> dict[str, Any]:
     }
 
 
+def fact_policy_sha256(policy: dict[str, Any]) -> str:
+    """Return a stable semantic digest for plan staleness checks."""
+
+    payload = json.dumps(policy, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def trip_bible_sha256(bible: TripBible) -> str:
+    """Hash only the effective policy, not the volatile ``updated_at`` field."""
+
+    return fact_policy_sha256(trip_bible_fact_policy(bible))
+
+
 def _item_id(kind: str, key: str) -> str:
     digest = hashlib.sha256(f"{kind}:{key}".encode()).hexdigest()[:12]
     return f"inbox_{digest}"
 
 
-def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
+def rebuild_director_inbox(
+    project_dir: str | Path, *, persist: bool = True
+) -> dict[str, Any]:
     """Build a stable priority queue without claiming unobserved visual facts."""
 
     root = _root(project_dir)
@@ -155,12 +171,20 @@ def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
 
     def add(item: DirectorInboxItem) -> None:
         old = previous.get(item.id)
-        if old and old.get("status") == "resolved":
+        if (
+            old
+            and old.get("status") == "resolved"
+            and old.get("source_fingerprint") == item.source_fingerprint
+        ):
             item.status = "resolved"
             item.resolution = old.get("resolution")
             item.resolved_at = old.get("resolved_at")
             item.created_at = old.get("created_at") or item.created_at
         generated.append(item)
+
+    def fingerprint(payload: Any) -> str:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     for asset in manifest.get("assets", []):
         if asset["media_id"] in observed_media:
@@ -174,6 +198,7 @@ def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
             reason="This playable asset still needs truthful baseline visual coverage.",
             media_ids=[asset["media_id"]],
             requested_evidence=["entry-middle-exit", "speech-or-reaction", "shot-quality"],
+            source_fingerprint=fingerprint(asset),
             created_at=now,
         ))
     for observation in observations:
@@ -189,6 +214,7 @@ def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
                 media_ids=[observation["media_id"]],
                 observation_ids=[observation["observation_id"]],
                 requested_evidence=["8-16-frames", "short-proxy-range", "resolve-warnings"],
+                source_fingerprint=fingerprint(observation),
                 created_at=now,
             ))
     chains: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -208,6 +234,7 @@ def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
                 media_ids=sorted({item["media_id"] for item in items}),
                 observation_ids=sorted(item["observation_id"] for item in items),
                 requested_evidence=["same-subject-recovery", "same-subject-outcome"],
+                source_fingerprint=fingerprint(items),
                 created_at=now,
             ))
     bible = load_trip_bible(project_dir)
@@ -220,11 +247,14 @@ def rebuild_director_inbox(project_dir: str | Path) -> dict[str, Any]:
                 reason=f"Trip Bible fact is uncertain: {fact.statement}",
                 observation_ids=fact.evidence_observation_ids,
                 requested_evidence=["confirm-or-reject-fact", "source-attribution"],
+                source_fingerprint=fingerprint(fact.model_dump(mode="json")),
                 created_at=now,
             ))
     generated.sort(key=lambda item: (-item.priority, item.created_at, item.id))
     payload = {"version": "1.0", "items": [item.model_dump(mode="json") for item in generated]}
-    path = _write(root / "director-inbox.json", payload)
+    path = root / "director-inbox.json"
+    if persist:
+        _write(path, payload)
     return {
         "path": str(path.resolve()),
         "total": len(generated),

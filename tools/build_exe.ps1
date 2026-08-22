@@ -4,6 +4,7 @@ param(
     [string]$FFprobe = "",
     [ValidateSet("onedir", "onefile")]
     [string]$Mode = "onedir",
+    [switch]$UseCurrentEnvironment,
     [switch]$Clean
 )
 
@@ -14,6 +15,7 @@ $BuildPath = Join-Path $ProjectRoot "build"
 $GeneratedSpecPath = Join-Path $BuildPath "generated-spec"
 $ResolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $BundledTools = Join-Path $ProjectRoot "vendor\ffmpeg"
+$PackagingVenv = Join-Path $BuildPath "packaging-venv"
 
 if (-not $FFmpeg) {
     $CandidateFFmpeg = Join-Path $BundledTools "ffmpeg.exe"
@@ -46,6 +48,19 @@ if ($Clean) {
         Remove-Item -LiteralPath $BuildPath -Recurse -Force
     }
 }
+
+$BuildPython = $Python
+if (-not $UseCurrentEnvironment) {
+    $VenvPython = Join-Path $PackagingVenv "Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
+        New-Item -ItemType Directory -Force -Path $BuildPath | Out-Null
+        & $Python -m venv $PackagingVenv
+        if ($LASTEXITCODE -ne 0) { throw "Could not create isolated packaging environment." }
+    }
+    & $VenvPython -m pip install --disable-pip-version-check --quiet -e "${ProjectRoot}[build]"
+    if ($LASTEXITCODE -ne 0) { throw "Could not install FACUT build dependencies in the isolated environment." }
+    $BuildPython = $VenvPython
+}
 if ($FFmpeg) { $FFmpeg = [System.IO.Path]::GetFullPath($FFmpeg) }
 if ($FFprobe) { $FFprobe = [System.IO.Path]::GetFullPath($FFprobe) }
 
@@ -58,9 +73,6 @@ $PyInstallerArgs = @(
     "--console",
     "--name", "facut",
     "--paths", (Join-Path $ProjectRoot "src"),
-    "--collect-all", "typer",
-    "--collect-all", "rich",
-    "--collect-all", "pydantic",
     "--collect-data", "openpyxl",
     "--collect-data", "opentimelineio",
     "--collect-submodules", "opentimelineio.adapters",
@@ -77,6 +89,11 @@ $PyInstallerArgs = @(
     "--exclude-module", "matplotlib",
     "--exclude-module", "gradio",
     "--exclude-module", "pyarrow",
+    "--exclude-module", "pytest",
+    "--exclude-module", "pygame",
+    "--exclude-module", "clr",
+    "--exclude-module", "pythonnet",
+    "--exclude-module", "win32com",
     "--collect-data", "facut"
 )
 if ($Mode -eq "onefile") {
@@ -103,7 +120,7 @@ if ($FFprobe) {
 }
 $PyInstallerArgs += (Join-Path $ProjectRoot "src\facut\__main__.py")
 
-& $Python -m PyInstaller @PyInstallerArgs
+& $BuildPython -m PyInstaller @PyInstallerArgs
 
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE"

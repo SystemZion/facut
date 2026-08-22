@@ -72,6 +72,27 @@ def test_default_autoload_schedules_a_detached_helper_without_waiting(
     assert calls and "__runtime_warmup__" in calls[0][0]
 
 
+def test_default_autoload_reclaims_a_dead_owner_lock(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    voice_home = tmp_path / "voices"
+    monkeypatch.setenv("FACUT_CONFIG", str(config_path))
+    monkeypatch.setenv("FACUT_VOICE_HOME", str(voice_home))
+    save_config(AppConfig())
+    lock = voice_home / "service" / "autoload.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(json.dumps({"pid": 99999999, "created_at": 1}), encoding="utf-8")
+
+    class FakeProcess:
+        pid = 4322
+
+    monkeypatch.setattr(
+        "facut.runtime_control.subprocess.Popen", lambda *args, **kwargs: FakeProcess()
+    )
+    result = schedule_default_warmup()
+    assert result["scheduled"] is True
+    assert json.loads(lock.read_text("utf-8"))["pid"] == 4322
+
+
 def test_cleanram_cli_selects_voice_service(monkeypatch) -> None:
     monkeypatch.setattr(
         "facut.cli.runtime_commands.clean_services",

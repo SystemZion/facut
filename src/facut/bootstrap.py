@@ -56,14 +56,15 @@ def _lifecycle_command(arguments: list[str]) -> int | None:
     json_output = "--json" in arguments
     quiet = "--quiet" in arguments or "-q" in arguments
     filtered = [item for item in arguments if item not in {"--json", "--quiet", "-q"}]
+    command_index = filtered.index(command)
+    command_arguments = filtered[command_index + 1 :]
     try:
         if command in {"cleanram", "warmup"}:
             parser = argparse.ArgumentParser(prog=f"facut {command}")
-            parser.add_argument("command")
             parser.add_argument("--service", action="append", required=True)
             if command == "cleanram":
                 parser.add_argument("--dry-run", action="store_true")
-            parsed = parser.parse_args(filtered)
+            parsed = parser.parse_args(command_arguments)
             if command == "cleanram":
                 from facut.runtime_control import clean_services
 
@@ -77,11 +78,10 @@ def _lifecycle_command(arguments: list[str]) -> int | None:
             _emit(response_command, data, json_output=json_output, quiet=quiet)
             return 0
         parser = argparse.ArgumentParser(prog="facut autoload")
-        parser.add_argument("command")
         parser.add_argument("action", choices=("status", "enable", "disable"))
         parser.add_argument("service", nargs="?")
         parser.add_argument("--stop-now", action="store_true")
-        parsed = parser.parse_args(filtered)
+        parsed = parser.parse_args(command_arguments)
         from facut.runtime_control import (
             autoload_status,
             clean_services,
@@ -127,7 +127,11 @@ def main() -> None:
     if lifecycle_result is not None:
         raise SystemExit(lifecycle_result)
     command = _command_name(arguments)
-    if command not in {None, "help", "doctor"} and "--help" not in arguments and "-h" not in arguments:
+    if (
+        command not in {None, "help", "doctor", "install", "update"}
+        and "--help" not in arguments
+        and "-h" not in arguments
+    ):
         try:
             from facut.runtime_control import schedule_default_warmup
 

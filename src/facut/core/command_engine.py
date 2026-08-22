@@ -175,6 +175,7 @@ class CommandEngine:
                 "story": {
                     "style": plan.style,
                     "evidence_sha256": plan.evidence_sha256,
+                    "trip_bible_sha256": plan.trip_bible_sha256,
                 },
                 "tracks": [item.model_dump(mode="json") for item in candidate_state.tracks],
                 "transitions": [item.model_dump(mode="json") for item in candidate_state.transitions],

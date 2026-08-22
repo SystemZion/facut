@@ -686,7 +686,30 @@ def stop_voice_service(*, state_path: str | Path | None = None, timeout: float =
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and state_file.exists():
         time.sleep(0.05)
-    return {"protocol": SERVICE_PROTOCOL, "running": False, "stopped": True}
+    if not state_file.exists():
+        return {"protocol": SERVICE_PROTOCOL, "running": False, "stopped": True}
+    pid = int(state.get("pid") or 0)
+    if pid <= 0:
+        process_alive = False
+    else:
+        try:
+            os.kill(pid, 0)
+            process_alive = True
+        except OSError:
+            process_alive = False
+    if not process_alive:
+        state_file.unlink(missing_ok=True)
+        return {
+            "protocol": SERVICE_PROTOCOL,
+            "running": False,
+            "stopped": True,
+            "stale_state_removed": True,
+        }
+    raise VoiceServiceError(
+        "The voice service did not stop before the timeout.",
+        suggestion="Retry `facut cleanram --service voice`, then inspect `facut voice serve status`.",
+        details={"pid": pid, "timeout_seconds": timeout},
+    )
 
 
 def synthesize_with_voice_service(
