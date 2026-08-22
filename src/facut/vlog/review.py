@@ -86,6 +86,7 @@ class ReviewPackage(_StrictModel):
     project_sha256: str
     evidence_sha256: str
     timeline: dict[str, Any]
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
     questions: list[str]
 
 
@@ -164,6 +165,22 @@ def _package_path(project_dir: str | Path, review_id: str) -> Path:
     return _review_root(project_dir) / "packages" / f"{review_id}.json"
 
 
+def _submitted_review_ids(project_dir: str | Path) -> set[str]:
+    submissions = _review_root(project_dir) / "submissions"
+    if not submissions.is_dir():
+        return set()
+    review_ids: set[str] = set()
+    for path in submissions.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        review_id = payload.get("review_id")
+        if isinstance(review_id, str):
+            review_ids.add(review_id)
+    return review_ids
+
+
 def _timeline_snapshot(document: ProjectDocument) -> dict[str, Any]:
     return {
         "duration": document.project.duration,
@@ -191,6 +208,34 @@ def _timeline_snapshot(document: ProjectDocument) -> dict[str, Any]:
         "subtitle_count": len(document.subtitle_cues),
         "text_overlay_count": len(document.text_overlays),
     }
+
+
+def _review_evidence(project_dir: str | Path) -> list[dict[str, Any]]:
+    path = Path(project_dir) / "cache" / "vlog" / "observations.json"
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in payload.get("observations", []):
+        if not isinstance(item, dict):
+            continue
+        output.append(
+            {
+                key: item.get(key)
+                for key in (
+                    "observation_id",
+                    "media_id",
+                    "range",
+                    "summary",
+                    "confidence",
+                    "evidence_frames",
+                )
+            }
+        )
+    return output
 
 
 def _questions(review_pass: ReviewPass) -> list[str]:
@@ -221,14 +266,37 @@ def create_review(
 
     document = manager.require_document()
     packages = _review_root(manager.project_dir) / "packages"
-    existing = sorted(packages.glob("review-*.json")) if packages.is_dir() else []
-    if len(existing) >= 3:
+    existing_paths = sorted(packages.glob("review-*.json")) if packages.is_dir() else []
+    existing: list[ReviewPackage] = []
+    for path in existing_paths:
+        try:
+            existing.append(ReviewPackage.model_validate_json(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    submitted_ids = _submitted_review_ids(manager.project_dir)
+    current_project_sha = _document_sha256(document)
+    current_evidence_sha = _evidence_sha256(manager.project_dir)
+    for package in reversed(existing):
+        if (
+            package.id not in submitted_ids
+            and package.review_pass == review_pass
+            and package.project_id == document.project.id
+            and package.project_revision == document.revision
+            and package.project_sha256 == current_project_sha
+            and package.evidence_sha256 == current_evidence_sha
+        ):
+            path = _package_path(manager.project_dir, package.id)
+            return {**package.model_dump(mode="json"), "path": str(path.resolve()), "reused": True}
+    completed_rounds = len(
+        {package.id for package in existing if package.id in submitted_ids}
+    )
+    if completed_rounds >= 3:
         raise ReviewRequiredError(
             "The automatic Director Review Loop reached its three-round limit.",
             suggestion="Compare the three review branches and ask a person to choose or revise the edit.",
-            details={"completed_rounds": len(existing), "max_rounds": 3},
+            details={"completed_rounds": completed_rounds, "max_rounds": 3},
         )
-    round_number = len(existing) + 1
+    round_number = completed_rounds + 1
     review_id = f"review-{round_number:02d}-{uuid4().hex[:8]}"
     package = ReviewPackage(
         id=review_id,
@@ -237,15 +305,16 @@ def create_review(
         created_at=datetime.now(timezone.utc),
         project_id=document.project.id,
         project_revision=document.revision,
-        project_sha256=_document_sha256(document),
-        evidence_sha256=_evidence_sha256(manager.project_dir),
+        project_sha256=current_project_sha,
+        evidence_sha256=current_evidence_sha,
         timeline=_timeline_snapshot(document),
+        evidence=_review_evidence(manager.project_dir),
         questions=_questions(review_pass),
     )
     path = _atomic_write(
         _package_path(manager.project_dir, review_id), package.model_dump(mode="json")
     )
-    return {**package.model_dump(mode="json"), "path": str(path.resolve())}
+    return {**package.model_dump(mode="json"), "path": str(path.resolve()), "reused": False}
 
 
 def submit_review(
@@ -277,6 +346,31 @@ def submit_review(
             "Review submission does not match its immutable project/evidence package.",
             suggestion="Create a new review package from the current project and resubmit findings.",
         )
+    known_observations = {
+        str(entry.get("observation_id"))
+        for entry in package.evidence
+        if entry.get("observation_id")
+    }
+    known_clips = {
+        str(clip.get("id"))
+        for track in package.timeline.get("tracks", [])
+        for clip in track.get("clips", [])
+        if clip.get("id")
+    }
+    for finding in item.findings:
+        if finding.edits and not finding.evidence:
+            raise InvalidArgumentError(
+                f'Review finding "{finding.id}" proposes edits without evidence references.'
+            )
+        for reference in finding.evidence:
+            observation_id = reference.get("observation_id")
+            clip_id = reference.get("clip_id")
+            if observation_id in known_observations or clip_id in known_clips:
+                continue
+            raise InvalidArgumentError(
+                f'Review finding "{finding.id}" references unknown evidence.',
+                suggestion="Use an observation_id or clip_id included in the immutable review package.",
+            )
     path = _review_root(manager.project_dir) / "submissions" / f"{item.id}.json"
     encoded = item.model_dump(mode="json")
     if path.is_file():

@@ -13,6 +13,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from facut.core.models import ProjectDocument
+from facut.core.project_manager import ProjectManager
+
+from .context import load_trip_bible, trip_bible_fact_policy, trip_bible_sha256
 from .director import _read_json, _root, _write_json
 from .models import EvidenceObservation, StoryCandidate, StoryPlan
 
@@ -96,10 +100,15 @@ def build_story_brief(project_dir: str | Path) -> dict[str, Any]:
 
 
 def _story_validation_issues(
-    candidates: list[StoryCandidate], observations: list[EvidenceObservation]
+    candidates: list[StoryCandidate],
+    observations: list[EvidenceObservation],
+    document: ProjectDocument | None = None,
 ) -> list[dict[str, Any]]:
     known = {item.observation_id: item for item in observations}
-    event_positions: dict[str, dict[str, int]] = {}
+    chains: dict[str, list[EvidenceObservation]] = {}
+    for item in observations:
+        if item.event_chain:
+            chains.setdefault(item.event_chain, []).append(item)
     issues: list[dict[str, Any]] = []
     for candidate in candidates:
         ids = [item.observation_id for item in candidate.segments]
@@ -117,7 +126,6 @@ def _story_validation_issues(
             for item in ids
             if item in known and known[item].event_id
         }
-        event_positions[candidate.id] = selected_events
         for observation_id in ids:
             evidence = known.get(observation_id)
             if evidence is None:
@@ -137,6 +145,116 @@ def _story_validation_issues(
                     issues.append({"code": "MISSING_REQUIRED_OUTCOME", "severity": "error", "candidate_id": candidate.id, "observation_id": observation_id, "event_id": required})
                 elif selected_events[required] <= positions[observation_id]:
                     issues.append({"code": "CAUSAL_ORDER_VIOLATION", "severity": "error", "candidate_id": candidate.id, "observation_id": observation_id, "event_id": required})
+
+        selected_chain_names = {
+            known[item].event_chain
+            for item in ids
+            if item in known and known[item].event_chain
+        }
+        for chain_name in sorted(selected_chain_names):
+            chain = chains[chain_name]
+            selected = [known[item] for item in ids if item in known and known[item].event_chain == chain_name]
+            subjects = {item.subject_id for item in selected if item.subject_id}
+            if len(subjects) > 1:
+                issues.append({
+                    "code": "EVENT_CHAIN_SUBJECT_MISMATCH",
+                    "severity": "error",
+                    "candidate_id": candidate.id,
+                    "event_chain": chain_name,
+                })
+            orders = [item.event_order for item in selected if item.event_order is not None]
+            if orders != sorted(orders) or len(orders) != len(set(orders)):
+                issues.append({
+                    "code": "EVENT_CHAIN_ORDER_VIOLATION",
+                    "severity": "error",
+                    "candidate_id": candidate.id,
+                    "event_chain": chain_name,
+                })
+            selected_ids = {item.observation_id for item in selected}
+            for incident in [item for item in selected if item.story_role == "incident"]:
+                outcomes = [
+                    item
+                    for item in chain
+                    if item.story_role in {"recovery", "outcome"}
+                    and (not incident.subject_id or item.subject_id == incident.subject_id)
+                    and (
+                        incident.event_order is None
+                        or item.event_order is None
+                        or item.event_order > incident.event_order
+                    )
+                ]
+                if outcomes and not any(item.observation_id in selected_ids for item in outcomes):
+                    issues.append({
+                        "code": "MISSING_EVENT_CHAIN_RECOVERY",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "event_chain": chain_name,
+                        "observation_id": incident.observation_id,
+                    })
+            for recovery in [item for item in selected if item.story_role in {"recovery", "outcome"}]:
+                incidents = [
+                    item
+                    for item in chain
+                    if item.story_role == "incident"
+                    and (not recovery.subject_id or item.subject_id == recovery.subject_id)
+                    and (
+                        recovery.event_order is None
+                        or item.event_order is None
+                        or item.event_order < recovery.event_order
+                    )
+                ]
+                if incidents and not any(item.observation_id in selected_ids for item in incidents):
+                    issues.append({
+                        "code": "MISSING_EVENT_CHAIN_INCIDENT",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "event_chain": chain_name,
+                        "observation_id": recovery.observation_id,
+                    })
+
+        if document is not None:
+            media_by_id = {item.id: item for item in document.media}
+            frame_tolerance = 1.0 / max(1.0, document.project.fps)
+            previous_end: float | None = None
+            for segment in candidate.segments:
+                media = media_by_id.get(segment.media_id)
+                if media is None:
+                    issues.append({
+                        "code": "UNKNOWN_STORY_MEDIA",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "media_id": segment.media_id,
+                    })
+                    continue
+                if (
+                    media.technical.duration is not None
+                    and segment.source_out > media.technical.duration + frame_tolerance
+                ):
+                    issues.append({
+                        "code": "STORY_SOURCE_RANGE_EXCEEDS_MEDIA",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "observation_id": segment.observation_id,
+                    })
+                evidence = known.get(segment.observation_id)
+                if evidence and (
+                    segment.source_in < evidence.range.start - frame_tolerance
+                    or segment.source_out > evidence.range.end + frame_tolerance
+                ):
+                    issues.append({
+                        "code": "STORY_RANGE_OUTSIDE_EVIDENCE",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "observation_id": segment.observation_id,
+                    })
+                if previous_end is not None and segment.timeline_start < previous_end - frame_tolerance:
+                    issues.append({
+                        "code": "STORY_TIMELINE_OVERLAP",
+                        "severity": "error",
+                        "candidate_id": candidate.id,
+                        "observation_id": segment.observation_id,
+                    })
+                previous_end = segment.timeline_start + segment.duration
     return issues
 
 
@@ -144,18 +262,31 @@ def submit_story_proposal(project_dir: str | Path, payload: dict[str, Any]) -> S
     """Validate and persist an externally directed StoryGraph without applying it."""
 
     submission = ExternalStorySubmission.model_validate(payload)
+    manager = ProjectManager(project_dir)
+    document = manager.load() if manager.project_file.is_file() else None
     observations, evidence_raw = _load_observations(project_dir)
-    issues = _story_validation_issues(submission.candidates, observations)
+    issues = _story_validation_issues(submission.candidates, observations, document)
     errors = [item for item in issues if item["severity"] == "error"]
     if errors:
         codes = ", ".join(sorted({item["code"] for item in errors}))
         raise ValueError(f"External story proposal failed validation: {codes}.")
     current = _read_json(_root(project_dir) / "story.plan.json", {})
     manifest = _read_json(_root(project_dir) / "manifest.json", {})
+    bible = load_trip_bible(
+        project_dir,
+        default_name=document.project.name if document is not None else "Untitled trip",
+    )
+    fact_policy = trip_bible_fact_policy(bible)
+    for candidate in submission.candidates:
+        candidate.polish_plan["trip_bible"] = fact_policy
     plan = StoryPlan(
-        project_revision=int(current.get("project_revision", manifest.get("project_revision", 0))),
+        project_revision=(
+            document.revision
+            if document is not None
+            else int(manifest.get("project_revision", 0))
+        ),
         evidence_sha256=hashlib.sha256(evidence_raw).hexdigest(),
-        trip_bible_sha256=current.get("trip_bible_sha256"),
+        trip_bible_sha256=trip_bible_sha256(bible),
         style=submission.style,
         target_duration=submission.target_duration,
         status="ready" if submission.selected_candidate_id else "review_required",
@@ -180,10 +311,14 @@ def validate_story_plan(project_dir: str | Path) -> dict[str, Any]:
     if raw is None:
         raise FileNotFoundError("Story plan was not found.")
     plan = StoryPlan.model_validate(raw)
+    manager = ProjectManager(project_dir)
+    document = manager.load() if manager.project_file.is_file() else None
     observations, evidence_raw = _load_observations(project_dir)
-    issues = _story_validation_issues(plan.candidates, observations)
+    issues = _story_validation_issues(plan.candidates, observations, document)
     if plan.evidence_sha256 != hashlib.sha256(evidence_raw).hexdigest():
         issues.insert(0, {"code": "STALE_STORY_EVIDENCE", "severity": "error"})
+    if document is not None and plan.project_revision != document.revision:
+        issues.insert(0, {"code": "STALE_STORY_PROJECT", "severity": "error"})
     return {
         "status": "pass" if not any(item["severity"] == "error" for item in issues) else "review_required",
         "generation_mode": plan.generation_mode,

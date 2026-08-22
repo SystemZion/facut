@@ -125,6 +125,49 @@ struct FrameMetrics {
     double motion{0.0};
 };
 
+FramePtr gray8_frame(const AVFrame* input) {
+    if (!input || input->width <= 0 || input->height <= 0 || input->format < 0) {
+        throw std::runtime_error("decoded frame has no usable pixel format");
+    }
+    FramePtr gray(av_frame_alloc());
+    if (!gray) {
+        throw std::bad_alloc();
+    }
+    gray->format = AV_PIX_FMT_GRAY8;
+    gray->width = input->width;
+    gray->height = input->height;
+    require_ffmpeg(av_frame_get_buffer(gray.get(), 32), "allocate gray analysis frame");
+    require_ffmpeg(av_frame_make_writable(gray.get()), "make gray analysis frame writable");
+    SwsPtr scaler(sws_getContext(
+        input->width,
+        input->height,
+        static_cast<AVPixelFormat>(input->format),
+        input->width,
+        input->height,
+        AV_PIX_FMT_GRAY8,
+        SWS_FAST_BILINEAR,
+        nullptr,
+        nullptr,
+        nullptr
+    ));
+    if (!scaler) {
+        throw std::runtime_error("create gray analysis scaler: unavailable conversion");
+    }
+    const auto rows = sws_scale(
+        scaler.get(),
+        input->data,
+        input->linesize,
+        0,
+        input->height,
+        gray->data,
+        gray->linesize
+    );
+    if (rows != input->height) {
+        throw std::runtime_error("convert decoded frame to gray analysis plane: incomplete output");
+    }
+    return gray;
+}
+
 FrameMetrics metrics_for(const AVFrame* frame, const std::vector<std::uint8_t>& previous) {
     if (!frame->data[0] || frame->width <= 0 || frame->height <= 0) {
         return {};
@@ -292,8 +335,9 @@ json sample_video(
                     av_frame_unref(frame.get());
                     continue;
                 }
-                const auto metrics = metrics_for(frame.get(), previous);
-                previous = sampled_luma(frame.get());
+                const auto gray = gray8_frame(frame.get());
+                const auto metrics = metrics_for(gray.get(), previous);
+                previous = sampled_luma(gray.get());
                 std::ostringstream name;
                 name << "frame_" << std::setw(2) << std::setfill('0') << index << ".jpg";
                 const auto output = output_directory / name.str();
@@ -305,7 +349,7 @@ json sample_video(
                     {"luminance_mean", metrics.luminance},
                     {"sharpness", metrics.sharpness},
                     {"motion", metrics.motion},
-                    {"perceptual_hash", average_hash(frame.get())},
+                    {"perceptual_hash", average_hash(gray.get())},
                 });
                 av_frame_unref(frame.get());
                 found = true;

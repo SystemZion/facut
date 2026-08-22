@@ -135,4 +135,15 @@ if (-not (Test-Path -LiteralPath $Exe)) {
     throw "Expected executable was not created: $Exe"
 }
 
+# Keep the selected packaging mode unambiguous. A stale one-file executable at
+# dist\facut.exe otherwise looks newer and easier to launch than the current
+# onedir build even though it may contain an older FACUT version.
+if ($Mode -eq "onedir") {
+    $StaleCounterpart = Join-Path $DistPath "facut.exe"
+    Assert-ProjectChild $StaleCounterpart
+    if (Test-Path -LiteralPath $StaleCounterpart -PathType Leaf) {
+        Remove-Item -LiteralPath $StaleCounterpart -Force
+    }
+}
+
 Write-Output $Exe

@@ -79,6 +79,17 @@ class StorySegment(VlogModel):
     preserve_original_audio: bool = False
     alternatives: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_source_range(self) -> "StorySegment":
+        if self.source_out <= self.source_in:
+            raise ValueError("source_out must be greater than source_in")
+        source_duration = self.source_out - self.source_in
+        if abs(self.duration - source_duration) > 0.05:
+            raise ValueError(
+                "duration must match source_out - source_in within 50 milliseconds"
+            )
+        return self
+
 
 class StoryCandidate(VlogModel):
     id: str

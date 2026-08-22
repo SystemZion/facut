@@ -59,6 +59,7 @@ def _submission(package: dict, *, actions: list[dict], conclusion="changes_reque
             {
                 "category": "pace",
                 "message": "Opening needs a tighter first cut.",
+                "evidence": [{"clip_id": "clip_main"}],
                 "edits": actions,
             }
         ],
@@ -158,11 +159,43 @@ def test_review_application_rolls_back_all_actions_on_failure(tmp_path) -> None:
 
 def test_review_packages_stop_after_three_rounds(tmp_path) -> None:
     manager = _manager(tmp_path)
-    assert [create_review(manager, "story")["round"] for _ in range(3)] == [1, 2, 3]
+    rounds = []
+    for _ in range(3):
+        package = create_review(manager, "story")
+        rounds.append(package["round"])
+        plan_review(manager, _submission(package, actions=[], conclusion="pass"))
+    assert rounds == [1, 2, 3]
     with pytest.raises(ReviewRequiredError) as error:
         create_review(manager, "story")
     assert error.value.code == "REVIEW_REQUIRED"
     assert error.value.details["max_rounds"] == 3
+
+
+def test_review_create_retry_reuses_unsubmitted_package(tmp_path) -> None:
+    manager = _manager(tmp_path)
+    first = create_review(manager, "story")
+    second = create_review(manager, "story")
+    assert first["id"] == second["id"]
+    assert first["round"] == second["round"] == 1
+    assert first["reused"] is False
+    assert second["reused"] is True
+
+
+def test_review_edit_requires_known_evidence_reference(tmp_path) -> None:
+    manager = _manager(tmp_path)
+    package = create_review(manager, "story")
+    submission = _submission(
+        package,
+        actions=[{
+            "action": "clip.move",
+            "parameters": {"clip_id": "clip_main", "to": 1},
+            "status": "approved",
+            "reason": "Tighten the opening.",
+        }],
+    )
+    submission["findings"][0]["evidence"] = [{"clip_id": "missing"}]
+    with pytest.raises(InvalidArgumentError, match="unknown evidence"):
+        plan_review(manager, submission)
 
 
 def test_submission_is_evidence_bound(tmp_path) -> None:

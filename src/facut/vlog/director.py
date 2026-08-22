@@ -897,8 +897,13 @@ def compare_story_candidates(project_dir: str | Path) -> dict[str, Any]:
     return {"style": plan.style, "candidates": [item.model_dump(mode="json") for item in plan.candidates], "differences": differences}
 
 
-def _assert_story_context_current(plan: StoryPlan, project_dir: str | Path) -> None:
-    """Refuse a plan whose factual policy changed after it was generated."""
+def _assert_story_context_current(
+    plan: StoryPlan,
+    project_dir: str | Path,
+    *,
+    candidate_id: str | None = None,
+) -> None:
+    """Refuse plans whose project, evidence, or factual policy is stale."""
 
     from .context import load_trip_bible, trip_bible_sha256
 
@@ -916,12 +921,39 @@ def _assert_story_context_current(plan: StoryPlan, project_dir: str | Path) -> N
             "The Trip Bible changed after this StoryGraph plan was generated. "
             "Run `facut vlog plan` again before refining or applying a candidate."
         )
+    evidence_path = _root(project_dir) / "observations.json"
+    evidence_sha256 = hashlib.sha256(
+        evidence_path.read_bytes() if evidence_path.is_file() else b""
+    ).hexdigest()
+    if plan.evidence_sha256 != evidence_sha256:
+        raise ValueError(
+            "Visual evidence changed after this StoryGraph plan was generated. "
+            "Run `facut vlog story brief` and submit or generate a new plan."
+        )
+    manager = ProjectManager(project_dir)
+    document = manager.load()
+    if plan.project_revision == document.revision:
+        return
+    applied = document.settings.get("vlog_director", {})
+    expected_revision = int(applied.get("applied_revision", plan.project_revision + 1))
+    already_applied = (
+        candidate_id is not None
+        and applied.get("candidate_id") == candidate_id
+        and applied.get("evidence_sha256") == plan.evidence_sha256
+        and applied.get("trip_bible_sha256") == plan.trip_bible_sha256
+        and document.revision == expected_revision
+    )
+    if not already_applied:
+        raise ValueError(
+            "The project changed after this StoryGraph plan was generated. "
+            "Create a new plan before replacing the current timeline."
+        )
 
 
 def refine_story_candidate(project_dir: str | Path, candidate_id: str) -> StoryPlan:
     path = _root(project_dir) / "story.plan.json"
     plan = StoryPlan.model_validate(_read_json(path))
-    _assert_story_context_current(plan, project_dir)
+    _assert_story_context_current(plan, project_dir, candidate_id=candidate_id)
     candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
     if candidate is None:
         raise ValueError(f'Unknown story candidate "{candidate_id}".')
@@ -942,7 +974,7 @@ def candidate_document(
     if raw is None:
         raise FileNotFoundError("Story plan was not found. Run `facut vlog plan` first.")
     plan = StoryPlan.model_validate(raw)
-    _assert_story_context_current(plan, project_dir)
+    _assert_story_context_current(plan, project_dir, candidate_id=candidate_id)
     candidate = next((item for item in plan.candidates if item.id == candidate_id), None)
     if candidate is None:
         raise ValueError(f'Unknown story candidate "{candidate_id}".')

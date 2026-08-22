@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.1 — 2026-08-22
+
+- Fixed fresh external-director proposals so they bind the current project,
+  evidence and Trip Bible and can be refined without first generating a legacy
+  deterministic plan.
+- Rejected stale evidence/project plans, invalid media ranges, timeline overlap,
+  reversed event chains, mixed subjects and incident-only stories when matching
+  recovery evidence exists.
+- Kept chapter/location text and subtitle layers identical between candidate
+  preview and the applied final timeline, with a plan digest for safe retries.
+- Made Director Review creation idempotent until submission, counted only
+  submitted rounds, embedded review evidence references and rejected unknown
+  citations.
+- Converted decoded frames to a real gray8 analysis plane before native quality
+  metrics and perceptual hashing, fixing 10/12/16-bit HEVC interpretation.
+- Removed stale single-file executables when producing the preferred onedir
+  Windows build so the output directory cannot silently offer an older FACUT.
+
 ## 0.9.0 — 2026-08-22
 
 - Added Scene Atlas with stable 12-asset review batches, content-hash resume,

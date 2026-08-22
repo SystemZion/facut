@@ -5,7 +5,7 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.9.0` 引入 Director Loop：Scene Atlas 默认把12条素材组成一个可恢复的外部AI审阅包，StoryGraph 3保存旅行章节、事件因果和视觉母题，Opening/Ending Lab、Continuity Guard、三轮审片与Soundscape把“看素材—出故事—审片—修订”连成可追溯闭环。可选C++ Native Accelerator继续负责批量技术分析；FACUT不内置本地视觉模型，也不会用Token限制跳过有效素材。
+当前开发版本 `0.9.1` 引入并稳定 Director Loop：Scene Atlas 默认把12条素材组成一个可恢复的外部AI审阅包，StoryGraph 3保存旅行章节、事件因果和视觉母题，Opening/Ending Lab、Continuity Guard、三轮审片与Soundscape把“看素材—出故事—审片—修订”连成可追溯闭环。可选C++ Native Accelerator继续负责批量技术分析；FACUT不内置本地视觉模型，也不会用Token限制跳过有效素材。
 
 最短工作流：
 

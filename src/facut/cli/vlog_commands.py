@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,23 +131,39 @@ def _apply_candidate(
             "Candidate is not ready; resolve evidence and continuity gaps first.",
             details={"candidate_id": candidate_id, "warnings": plan.warnings},
         )
-    candidate_state, candidate = candidate_document(
-        manager.require_document(), manager.project_dir, candidate_id
-    )
     current = manager.require_document()
+    candidate = next(item for item in plan.candidates if item.id == candidate_id)
     applied = current.settings.get("vlog_director", {})
+    plan_sha256 = hashlib.sha256(
+        json.dumps(
+            plan.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     if (
         applied.get("candidate_id") == candidate.id
         and applied.get("evidence_sha256") == plan.evidence_sha256
         and applied.get("trip_bible_sha256") == plan.trip_bible_sha256
+        and applied.get("story_plan_sha256") == plan_sha256
     ):
         return current, candidate, plan
+    candidate_state, candidate = candidate_document(
+        current, manager.project_dir, candidate_id
+    )
     manager.ensure_experiment_branch("vlog")
 
     def operation(document):
         document.tracks = candidate_state.tracks
         document.transitions = candidate_state.transitions
         document.markers = candidate_state.markers
+        document.text_overlays = candidate_state.text_overlays
+        document.subtitle_cues = candidate_state.subtitle_cues
+        if "vlog_polish" in candidate_state.settings:
+            document.settings["vlog_polish"] = candidate_state.settings["vlog_polish"]
+        else:
+            document.settings.pop("vlog_polish", None)
         document.recompute_duration()
         document.settings["vlog_director"] = {
             "candidate_id": candidate.id,
@@ -154,6 +171,8 @@ def _apply_candidate(
             "style": plan.style,
             "evidence_sha256": plan.evidence_sha256,
             "trip_bible_sha256": plan.trip_bible_sha256,
+            "story_plan_sha256": plan_sha256,
+            "applied_revision": document.revision + 1,
         }
         return document.settings["vlog_director"]
 
