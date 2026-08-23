@@ -7,9 +7,6 @@ import json
 import sys
 from typing import Any
 
-from facut import __version__
-
-
 def _command_name(arguments: list[str]) -> str | None:
     consumes_value = {"--project", "-p"}
     skip_next = False
@@ -112,7 +109,9 @@ def _lifecycle_command(arguments: list[str]) -> int | None:
 def main() -> None:
     arguments = sys.argv[1:]
     if len(arguments) == 1 and arguments[0] == "--version":
-        print(f"facut {__version__}")
+        from facut.runtime_identity import version_label
+
+        print(version_label())
         return
     if arguments and arguments[0] == "__voice_service_daemon__":
         from facut.voice.service import _daemon_entry
