@@ -216,3 +216,14 @@ def test_release_gate_requires_version_commit_and_archive_digest(
     )
     assert result["status"] == "pass"
     assert all(result["checks"].values())
+
+
+def test_console_entrypoint_preserves_domain_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from facut.cli import main as cli_main
+
+    monkeypatch.setattr(cli_main, "app", lambda *, standalone_mode: 2)
+    with pytest.raises(SystemExit) as failure:
+        cli_main.main()
+    assert failure.value.code == 2

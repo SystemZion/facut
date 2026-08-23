@@ -223,7 +223,13 @@ def main() -> None:
         _daemon_entry(sys.argv[2:])
         return
     try:
-        app(standalone_mode=False)
+        result = app(standalone_mode=False)
+        # Click converts ``Exit`` into its numeric return value when
+        # ``standalone_mode`` is disabled.  Preserve that code at the real
+        # console boundary so agents never mistake a structured error for a
+        # successful command.
+        if isinstance(result, int) and result != ExitCode.SUCCESS:
+            raise SystemExit(result)
     except click.ClickException as error:
         # Click normally prints usage prose before FACUT gets control. Agents
         # require the global --json contract even for unknown/malformed CLI
