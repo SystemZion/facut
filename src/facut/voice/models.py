@@ -45,6 +45,7 @@ class VoiceSample(VoiceModel):
     transcript: str | None = None
     category: str | None = Field(default=None, max_length=80)
     delivery: str | None = Field(default=None, max_length=80)
+    identity_verification: dict[str, str | float | bool] | None = None
     imported_at: datetime = Field(default_factory=_now)
 
     @field_validator("stored_path")

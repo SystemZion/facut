@@ -10,12 +10,36 @@ from typing import Annotated, Any
 import typer
 
 from facut.cli.common import public_error
+from facut.exceptions import InvalidArgumentError
 from facut.config import AppConfig, load_config, save_config
-from facut.installation import install_facut, update_facut
+from facut.installation import install_facut, release_publish_check, update_facut
 from facut.responses import success_response
 
 
 models_app = typer.Typer(help="Inspect, link, or relocate separately stored AI models.")
+release_app = typer.Typer(help="Verify release artifacts and source/build identity.")
+
+
+@release_app.command("check")
+def release_check(
+    ctx: typer.Context,
+    repository: Annotated[str, typer.Option("--repository")] = "SystemZion/facut",
+) -> None:
+    """HARD FAIL unless the current build matches the downloadable Release."""
+
+    try:
+        from facut.runtime_identity import runtime_identity
+
+        data = release_publish_check(runtime_identity(), repository)
+        if data["status"] != "pass":
+            raise InvalidArgumentError(
+                "RELEASE_NOT_PUBLISHED: version, commit and asset digest are not all "
+                "identical to the latest downloadable GitHub Release.",
+                details=data,
+            )
+        _emit(ctx, "release.check", data)
+    except Exception as error:
+        _fail(ctx, "release.check", error)
 
 
 def _state(ctx: typer.Context):

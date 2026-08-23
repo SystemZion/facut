@@ -415,6 +415,7 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
                     "reference_sample_id": reference_sample_id,
                     "candidate_index": int(line.get("candidate_index", 0)),
                     "timeline_range": line.get("timeline_range"),
+                    "request_id": request.get("request_id"),
                 }
             )
             continue
@@ -472,10 +473,12 @@ def synthesize(request: dict[str, Any]) -> dict[str, Any]:
                 "candidate_index": int(line.get("candidate_index", 0)),
                 "generation_seed": seed,
                 "timeline_range": line.get("timeline_range"),
+                "request_id": request.get("request_id"),
             }
         )
     return {
         "status": "success",
+        "request_id": request.get("request_id"),
         "provider": "facut-cosyvoice3-local",
         "model_version": MODEL_VERSION,
         "device": context["device"],

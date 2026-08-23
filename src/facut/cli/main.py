@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import click
 from rich.console import Console
 from rich.table import Table
 
 from facut import __version__
 from facut.cli.doctor import collect_diagnostics, run_sample_render
 from facut.config import AppConfig, load_config
-from facut.exceptions import ExitCode, FacutError
+from facut.exceptions import ExitCode, FacutError, InvalidArgumentError
 from facut.logging_config import configure_logging
 from facut.responses import Response, error_response, success_response
 
@@ -43,7 +44,9 @@ class CliState:
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"facut {__version__}")
+        from facut.runtime_identity import version_label
+
+        typer.echo(version_label())
         raise typer.Exit(ExitCode.SUCCESS)
 
 
@@ -136,6 +139,22 @@ def help_command(ctx: typer.Context) -> None:
         typer.echo(ctx.parent.get_help())
 
 
+@app.command("version")
+def version_command(ctx: typer.Context) -> None:
+    """Report version, build commit, artifact hash and PATH precedence."""
+
+    from facut.runtime_identity import runtime_identity, version_label
+
+    state: CliState = ctx.ensure_object(CliState)
+    data = runtime_identity()
+    emit(
+        state,
+        success_response("version", data),
+        human=version_label()
+        + (f"\nPATH winner: {data['path_winner']}" if data.get("path_winner") else ""),
+    )
+
+
 @app.command("doctor")
 def doctor(
     ctx: typer.Context,
@@ -203,14 +222,32 @@ def main() -> None:
 
         _daemon_entry(sys.argv[2:])
         return
-    app()
+    try:
+        app(standalone_mode=False)
+    except click.ClickException as error:
+        # Click normally prints usage prose before FACUT gets control. Agents
+        # require the global --json contract even for unknown/malformed CLI
+        # invocations, so normalize parser failures at the console boundary.
+        if "--json" in sys.argv[1:]:
+            domain_error = InvalidArgumentError(
+                error.format_message(),
+                suggestion="Run `facut help` or `facut schema commands`.",
+            )
+            typer.echo(error_response("cli", domain_error).as_json())
+        else:
+            error.show()
+        raise SystemExit(error.exit_code) from error
+    except click.exceptions.Exit as error:
+        raise SystemExit(error.exit_code) from error
 
 
 # The console-script imports this module before calling ``main``.  Avoid loading
 # every editing subsystem for the eager version query; this keeps automation
 # health checks fast without changing normal Typer registration or tests.
 if len(sys.argv) == 2 and sys.argv[1] == "--version":
-    typer.echo(f"facut {__version__}")
+    from facut.runtime_identity import version_label
+
+    typer.echo(version_label())
     raise SystemExit(ExitCode.SUCCESS)
 
 
@@ -265,6 +302,7 @@ from facut.cli.download_commands import download_command  # noqa: E402
 from facut.cli.install_commands import (  # noqa: E402
     install_command,
     models_app,
+    release_app,
     update_command,
 )
 from facut.cli.runtime_commands import (  # noqa: E402
@@ -320,6 +358,7 @@ app.command("download")(download_command)
 app.command("install")(install_command)
 app.command("update")(update_command)
 app.add_typer(models_app, name="models")
+app.add_typer(release_app, name="release")
 app.command("cleanram")(cleanram_command)
 app.command("warmup")(warmup_command)
 app.add_typer(autoload_app, name="autoload")

@@ -139,6 +139,58 @@ class TimelineEngine:
     def clone(self) -> "TimelineEngine":
         return TimelineEngine(deepcopy(self.project))
 
+    def _assert_protected_boundaries(
+        self,
+        media_id: str,
+        source_in: float,
+        source_out: float,
+        *,
+        allow_protected_cut: bool = False,
+    ) -> None:
+        """Reject cuts through protected speech or atomic-event spans.
+
+        Analysis/Agent integrations store source-relative spans in
+        ``asset.metadata.protected_spans``. Exact span boundaries are legal;
+        a boundary inside a span is a destructive content cut and is P0.
+        """
+
+        if allow_protected_cut:
+            return
+        asset = self.project.find_media(media_id)
+        if asset is None:
+            raise TimelineItemNotFound(f'Media "{media_id}" was not found.')
+        raw_spans = asset.metadata.get("protected_spans", [])
+        if not isinstance(raw_spans, list):
+            raise TimelineError(
+                f'Media "{media_id}" has invalid protected_spans metadata.'
+            )
+        epsilon = 1 / self.fps / 2
+        for index, item in enumerate(raw_spans, start=1):
+            if not isinstance(item, dict):
+                raise TimelineError(
+                    f'Media "{media_id}" protected span {index} must be an object.'
+                )
+            try:
+                start = float(item["start"])
+                end = float(item["end"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise TimelineError(
+                    f'Media "{media_id}" protected span {index} requires numeric start/end.'
+                ) from error
+            if start < 0 or end <= start:
+                raise TimelineError(
+                    f'Media "{media_id}" protected span {index} has an invalid range.'
+                )
+            kind = str(item.get("type") or item.get("kind") or "content")
+            label = str(item.get("id") or item.get("label") or index)
+            for boundary_name, boundary in (("in", source_in), ("out", source_out)):
+                if start + epsilon < boundary < end - epsilon:
+                    raise TimelineError(
+                        f'Source {boundary_name} {boundary:.3f}s cuts protected {kind} '
+                        f'span "{label}" ({start:.3f}-{end:.3f}s). Use '
+                        "--allow-protected-cut only after explicit review."
+                    )
+
     def _track(self, track_id: str) -> Track:
         track = self.project.find_track(track_id)
         if track is None:
@@ -194,6 +246,7 @@ class TimelineEngine:
         duration: str | float | None = None,
         clip_id: str | None = None,
         append: bool = False,
+        allow_protected_cut: bool = False,
     ) -> Clip:
         track = self._track(track_id)
         if track.locked:
@@ -232,6 +285,12 @@ class TimelineEngine:
                 raise TimelineError(
                     f"Source out {out_seconds:.3f}s exceeds media duration {media_duration:.3f}s."
                 )
+        self._assert_protected_boundaries(
+            media_id,
+            in_seconds,
+            out_seconds,
+            allow_protected_cut=allow_protected_cut,
+        )
         timeline_start = (
             max((item.end for item in track.clips if item.enabled), default=0.0)
             if append
@@ -905,7 +964,12 @@ class TimelineEngine:
         return entry
 
     def split_clip(
-        self, clip_id: str, at: str | float, *, timeline_position: bool = False
+        self,
+        clip_id: str,
+        at: str | float,
+        *,
+        timeline_position: bool = False,
+        allow_protected_cut: bool = False,
     ) -> tuple[Clip, Clip]:
         clip, track = self._clip_and_track(clip_id)
         split_at = seconds(at, self.fps)
@@ -914,6 +978,12 @@ class TimelineEngine:
             raise TimelineError("Split point must be strictly inside the clip.")
         consumed_source = relative * abs(clip.speed)
         source_split = clip.source_in + consumed_source
+        self._assert_protected_boundaries(
+            clip.media_id,
+            source_split,
+            source_split,
+            allow_protected_cut=allow_protected_cut,
+        )
         right = clip.model_copy(deep=True)
         right.id = new_id("clip")
         right.timeline_start = clip.timeline_start + relative
@@ -933,26 +1003,41 @@ class TimelineEngine:
         end_delta: str | float | None = None,
         source_in: str | float | None = None,
         source_out: str | float | None = None,
+        allow_protected_cut: bool = False,
     ) -> Clip:
         clip, _ = self._clip_and_track(clip_id)
+        candidate = clip.model_copy(deep=True)
         if source_in is not None:
             new_in = seconds(source_in, self.fps)
-            timeline_shift = (new_in - clip.source_in) / abs(clip.speed)
-            clip.source_in = new_in
-            clip.timeline_start += timeline_shift
+            timeline_shift = (new_in - candidate.source_in) / abs(candidate.speed)
+            candidate.source_in = new_in
+            candidate.timeline_start += timeline_shift
         if source_out is not None:
-            clip.source_out = seconds(source_out, self.fps)
+            candidate.source_out = seconds(source_out, self.fps)
         if start_delta is not None:
             delta_seconds = seconds(start_delta, self.fps)
-            clip.source_in += delta_seconds * abs(clip.speed)
-            clip.timeline_start += delta_seconds
+            candidate.source_in += delta_seconds * abs(candidate.speed)
+            candidate.timeline_start += delta_seconds
         if end_delta is not None:
-            clip.source_out += seconds(end_delta, self.fps) * abs(clip.speed)
-        if clip.timeline_start < 0 or clip.source_in < 0 or clip.source_out <= clip.source_in:
+            candidate.source_out += seconds(end_delta, self.fps) * abs(candidate.speed)
+        if (
+            candidate.timeline_start < 0
+            or candidate.source_in < 0
+            or candidate.source_out <= candidate.source_in
+        ):
             raise TimelineError("Trim would produce an invalid clip range.")
         # Assignment validators do not run a model-level range check after two
         # separate field assignments, so explicitly validate the final model.
-        Clip.model_validate(clip.model_dump())
+        Clip.model_validate(candidate.model_dump())
+        self._assert_protected_boundaries(
+            candidate.media_id,
+            candidate.source_in,
+            candidate.source_out,
+            allow_protected_cut=allow_protected_cut,
+        )
+        clip.source_in = candidate.source_in
+        clip.source_out = candidate.source_out
+        clip.timeline_start = candidate.timeline_start
         self._remove_transitions_for(clip_id)
         self.project.recompute_duration()
         return clip

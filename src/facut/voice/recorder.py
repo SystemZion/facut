@@ -180,6 +180,7 @@ class RecordingSession:
                     transcript=prompt["text"],
                     category=prompt.get("category"),
                     delivery=prompt.get("delivery"),
+                    trusted_capture=True,
                 )
                 self.accepted_prompt_ids.add(prompt_id)
             return {

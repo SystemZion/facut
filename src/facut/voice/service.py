@@ -265,7 +265,23 @@ class ProviderWorker:
                 raise RuntimeError("Voice provider exited before synthesis.")
             self.process.stdin.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n")
             self.process.stdin.flush()
-            response = self._read_payload(timeout)
+            try:
+                response = self._read_payload(timeout)
+            except TimeoutError as error:
+                # The stream has lost request/response synchronization. Kill
+                # the worker before another request can enter; unique output
+                # directories also quarantine any write already in flight.
+                self.close()
+                try:
+                    self.start()
+                except Exception as restart_error:
+                    raise TimeoutError(
+                        "Voice provider timed out and could not be restarted: "
+                        f"{restart_error}"
+                    ) from error
+                raise TimeoutError(
+                    "Voice provider timed out; the worker was restarted and its late output discarded."
+                ) from error
             if response.get("status") == "error":
                 error = response.get("error") or {}
                 raise RuntimeError(str(error.get("message") or "Voice provider synthesis failed."))
@@ -776,7 +792,9 @@ def synthesize_with_voice_service(
     payload = _service_request(
         state, "/synthesize", payload={"request": request, "timeout": timeout}, timeout=timeout + 5
     )
-    return validate_provider_response(payload, destination, profile.id)
+    return validate_provider_response(
+        payload, destination, profile.id, request=request
+    )
 
 
 def _daemon_entry(argv: list[str] | None = None) -> None:

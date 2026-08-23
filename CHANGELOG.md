@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2 — 2026-08-23
+
+- Added hard speech-span and atomic-event cut protection with an explicit reviewed override.
+- Made LRF/proxy files video-only for preview; camera audio always comes from original media.
+- Added speaker identity guards for existing profiles and recoverable per-sample removal.
+- Isolated TTS requests by request ID and restart desynchronized warm providers after timeout.
+- Added optional ASR round-trip narration verification for entities and factual numbers.
+- Added build commit/hash identity, PATH shadowing diagnostics, and a strict GitHub Release gate.
+- Restored structured JSON errors for malformed and unknown CLI commands.
+
 ## 0.9.1 — 2026-08-22
 
 - Fixed fresh external-director proposals so they bind the current project,

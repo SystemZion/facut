@@ -35,6 +35,13 @@ class VoiceAliasConflictError(ValueError):
     exit_code = 2
 
 
+class VoiceSpeakerGuardError(ValueError):
+    """Raised when a sample cannot be safely assigned to an existing voice."""
+
+    code = "VOICE_SPEAKER_MISMATCH"
+    exit_code = 2
+
+
 def _platform_voice_homes() -> tuple[Path, Path]:
     """Return the canonical and pre-0.5.3 platform voice directories.
 
@@ -360,8 +367,62 @@ class VoiceProfileStore:
         transcript: str | None = None,
         category: str | None = None,
         delivery: str | None = None,
+        speaker_similarity: float | None = None,
+        speaker_confirmed: bool = False,
+        confirmation_statement: str | None = None,
+        trusted_capture: bool = False,
     ) -> VoiceProfile:
         profile = self.get(profile_id)
+        threshold = 0.72
+        statement = (confirmation_statement or "").strip()
+        if speaker_confirmed and len(statement) < 12:
+            raise VoiceSpeakerGuardError(
+                "Explicit speaker confirmation requires a confirmation statement of at least 12 characters."
+            )
+        if speaker_similarity is not None and not 0.0 <= speaker_similarity <= 1.0:
+            raise ValueError("speaker_similarity must be between 0 and 1.")
+        if profile.samples and not trusted_capture:
+            similarity_passed = (
+                speaker_similarity is not None and speaker_similarity >= threshold
+            )
+            explicit_override = speaker_confirmed and len(statement) >= 12
+            if not similarity_passed and not explicit_override:
+                detail = (
+                    f"measured similarity {speaker_similarity:.3f} is below {threshold:.2f}"
+                    if speaker_similarity is not None
+                    else "no speaker similarity result was supplied"
+                )
+                raise VoiceSpeakerGuardError(
+                    f'Voice sample import into "{profile.display_name}" was blocked: {detail}. '
+                    "Quarantine it with `facut voice sample propose`, or explicitly confirm "
+                    "the speaker with --speaker-confirmed and --confirmation-statement."
+                )
+        elif len({str(Path(item).expanduser().resolve()) for item in paths}) > 1 and not trusted_capture and not (
+            speaker_confirmed and len(statement) >= 12
+        ):
+            raise VoiceSpeakerGuardError(
+                "A first-time batch import cannot establish that every file contains the same speaker. "
+                "Import one baseline sample, quarantine candidates, or explicitly confirm the batch."
+            )
+        verification: dict[str, str | float | bool] = {
+            "basis": (
+                "trusted_capture"
+                if trusted_capture
+                else "speaker_similarity"
+                if speaker_similarity is not None and speaker_similarity >= threshold
+                else "manual_confirmation"
+                if speaker_confirmed
+                else "initial_sample"
+            ),
+            "speaker_confirmed": bool(speaker_confirmed or trusted_capture),
+        }
+        if speaker_similarity is not None:
+            verification["similarity"] = round(speaker_similarity, 6)
+            verification["threshold"] = threshold
+        if statement:
+            verification["confirmation_sha256"] = hashlib.sha256(
+                statement.encode("utf-8")
+            ).hexdigest()
         samples_dir = self._profile_dir(profile_id) / "samples"
         samples_dir.mkdir(parents=True, exist_ok=True)
         known = {sample.sha256 for sample in profile.samples}
@@ -396,6 +457,7 @@ class VoiceProfileStore:
                     transcript=transcript,
                     category=category,
                     delivery=delivery,
+                    identity_verification=verification,
                 )
             )
             known.add(digest)
@@ -506,6 +568,9 @@ class VoiceProfileStore:
             transcript=candidate.transcript,
             category=candidate.category,
             delivery=candidate.delivery,
+            speaker_confirmed=True,
+            confirmation_statement=statement,
+            trusted_capture=True,
         )
         candidate.status = "approved"
         candidate.speaker_confirmed = True
@@ -545,6 +610,35 @@ class VoiceProfileStore:
                 raise ValueError("Voice sample path escaped its profile directory.")
             result.append(candidate)
         return result
+
+    def remove_sample(self, selector: str, sample_id: str) -> tuple[VoiceSample, str]:
+        """Remove one sample from synthesis and keep a recoverable private copy."""
+
+        profile = self.resolve(selector)
+        matches = [item for item in profile.samples if item.id == sample_id]
+        if len(matches) != 1:
+            raise FileNotFoundError(
+                f'Voice sample "{sample_id}" was not found in profile "{profile.id}".'
+            )
+        sample = matches[0]
+        profile_root = self._profile_dir(profile.id).resolve()
+        source = (profile_root / sample.stored_path).resolve()
+        if profile_root not in source.parents:
+            raise ValueError("Voice sample path escaped its profile directory.")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        trash_name = f"{sample.id}-{stamp}.wav"
+        destination = profile_root / ".trash" / "samples" / trash_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_file():
+            os.replace(source, destination)
+        profile.samples = [item for item in profile.samples if item.id != sample.id]
+        profile.status = "draft"
+        self._save(profile)
+        # Derived references may have mixed this sample into cached prompts.
+        derived = profile_root / "derived"
+        if derived.is_dir():
+            shutil.rmtree(derived)
+        return sample, trash_name
 
     def profile_directory(self, profile_id: str) -> Path:
         """Return the validated private profile directory for local providers."""

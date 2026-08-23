@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from uuid import uuid4
 from typing import Any
 
 from facut.exceptions import InvalidArgumentError, NotImplementedFacutError
@@ -65,11 +66,16 @@ def build_provider_request(
 ) -> tuple[dict[str, Any], Path]:
     """Build the stable local-provider request without starting a process."""
 
-    destination = Path(output_directory).expanduser().resolve()
+    output_root = Path(output_directory).expanduser().resolve()
+    request_id = f"voice_request_{uuid4().hex}"
+    # Every request owns a unique directory. A timed-out provider can never
+    # overwrite a later request's outputs, even if it attempts a late write.
+    destination = output_root / ".facut-requests" / request_id
     destination.mkdir(parents=True, exist_ok=True)
     request = {
         "protocol": "facut-voice-provider/1.0",
         "action": "synthesize",
+        "request_id": request_id,
         "profile": profile.public_dict(),
         "profile_directory": str(Path(profile_directory).resolve()),
         "output_directory": str(destination),
@@ -79,7 +85,11 @@ def build_provider_request(
 
 
 def validate_provider_response(
-    payload: dict[str, Any], destination: str | Path, profile_id: str
+    payload: dict[str, Any],
+    destination: str | Path,
+    profile_id: str,
+    *,
+    request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate provider output paths and attach content hashes.
 
@@ -91,19 +101,46 @@ def validate_provider_response(
     output_root = Path(destination).expanduser().resolve()
     if payload.get("status") != "success" or not isinstance(payload.get("outputs"), list):
         raise RuntimeError("Local voice provider did not return a successful outputs list.")
+    request_id = str((request or {}).get("request_id") or "")
+    response_request_id = payload.get("request_id")
+    if response_request_id is not None and str(response_request_id) != request_id:
+        raise RuntimeError("Local voice provider returned a response for another request.")
+    expected_lines = list((request or {}).get("lines") or [])
+    if expected_lines and len(payload["outputs"]) != len(expected_lines):
+        raise RuntimeError(
+            "Local voice provider output count does not match the current request."
+        )
     outputs = []
-    for item in payload["outputs"]:
+    for index, item in enumerate(payload["outputs"]):
         path = Path(str(item["output"])).expanduser().resolve()
         if output_root != path.parent and output_root not in path.parents:
             raise RuntimeError("Local voice provider returned an output outside the requested directory.")
         if path.suffix.casefold() != ".wav" or not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError("Local voice provider returned a missing or invalid WAV output.")
-        outputs.append({**item, "output": str(path), "sha256": _hash_file(path)})
+        expected_text = (
+            str(
+                expected_lines[index].get("text")
+                or expected_lines[index].get("draft_text")
+                or ""
+            )
+            if expected_lines
+            else ""
+        )
+        outputs.append(
+            {
+                **item,
+                "output": str(path),
+                "sha256": _hash_file(path),
+                "request_id": request_id or None,
+                "text_sha256": hashlib.sha256(expected_text.encode("utf-8")).hexdigest(),
+            }
+        )
     return {
         "status": "success",
         "provider": payload.get("provider"),
         "model_version": payload.get("model_version"),
         "profile_id": profile_id,
+        "request_id": request_id or None,
         "outputs": outputs,
         "warnings": payload.get("warnings", []),
     }
@@ -236,4 +273,6 @@ def synthesize_with_provider(
         device=device,
         require_cuda=require_cuda,
     )
-    return validate_provider_response(payload, destination, profile.id)
+    return validate_provider_response(
+        payload, destination, profile.id, request=request
+    )

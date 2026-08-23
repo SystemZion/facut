@@ -282,6 +282,29 @@ def apply_transcript_plan(
         document.subtitle_cues = [item for item in document.subtitle_cues if item.track_id != track_id]
         created = []
         for item in selected:
+            asset = document.find_media(item.media_id)
+            if asset is None:
+                raise ValueError(
+                    f'Transcript cue "{item.id}" references missing media "{item.media_id}".'
+                )
+            protected = asset.metadata.setdefault("protected_spans", [])
+            if not isinstance(protected, list):
+                raise ValueError(
+                    f'Media "{item.media_id}" has invalid protected_spans metadata.'
+                )
+            span_id = f"speech_{item.id}"
+            protected[:] = [entry for entry in protected if entry.get("id") != span_id]
+            protected.append(
+                {
+                    "id": span_id,
+                    "type": "speech",
+                    "start": item.source_start,
+                    "end": item.source_end,
+                    "text": item.raw_text,
+                    "confidence": item.confidence,
+                }
+            )
+            protected.sort(key=lambda entry: (float(entry["start"]), float(entry["end"])))
             display_text = item.selected_text
             if item.corrected_text:
                 display_text, _ = format_caption(

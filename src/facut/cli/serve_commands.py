@@ -146,6 +146,7 @@ def serve_command(
             if method in {
                 "voice.say", "voice.sample.propose", "voice.sample.list",
                 "voice.sample.show", "voice.sample.approve", "voice.sample.reject",
+                "voice.profile.sample.remove",
                 "narration.synthesize", "vlog.prepare",
                 "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
                 "vlog.atlas.build", "vlog.atlas.status", "vlog.inspect.batch",
@@ -1176,6 +1177,33 @@ def serve_command(
                         "require_cuda": bool(params.get("require_cuda", False)),
                     },
                 )
+                if bool(params.get("verify", False)):
+                    from facut.analysis.engine import transcribe_local
+                    from facut.voice.verification import verify_outputs
+
+                    model_path = state.config.models.resolve("srt_model")
+                    if not model_path.is_dir():
+                        raise FileNotFoundError(
+                            "TTS verification requires srt_model. Run `facut download srt_model`."
+                        )
+                    reports = verify_outputs(
+                        [item["output"] for item in data["outputs"]],
+                        str(params["text"]),
+                        required_entities=[str(item) for item in params.get("verify_entity", [])],
+                        minimum_similarity=float(params.get("verify_min_similarity", 0.70)),
+                        transcribe=lambda path: transcribe_local(
+                            path,
+                            model_path=model_path,
+                            language="zh",
+                            external_python=state.config.tools.analysis_python,
+                        ),
+                    )
+                    data["verification"] = reports
+                    if any(not item["passed"] for item in reports):
+                        raise ValueError(
+                            "TTS_ASR_MISMATCH: synthesized narration did not match this request; "
+                            "no final output was written."
+                        )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 for item, final_path in zip(data["outputs"], outputs, strict=True):
                     generated = Path(str(item["output"])).resolve()
@@ -1202,6 +1230,20 @@ def serve_command(
                     identity_basis=str(params.get("identity_basis", "similarity")),
                 )
                 result = {"status": "success", "command": method, "data": {**candidate.public_dict(), "synthesis_eligible": False}, "warnings": ["Candidate audio is quarantined until the speaker is manually confirmed."], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.sample.remove":
+                if not bool(params.get("confirm", False)):
+                    raise ValueError("Voice sample removal requires confirm=true.")
+                sample, trash_name = VoiceProfileStore().remove_sample(
+                    str(params["profile"]), str(params["sample_id"])
+                )
+                result = {
+                    "status": "success", "command": method,
+                    "data": {"sample_id": sample.id, "sha256": sample.sha256,
+                             "recoverable": True, "trash_name": trash_name,
+                             "derived_cache_cleared": True},
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
             elif method == "voice.sample.list":
                 store = VoiceProfileStore()
                 candidates = store.list_candidates(params.get("profile"))
@@ -1229,6 +1271,13 @@ def serve_command(
                     store.resolve(str(params["profile_id"])).id,
                     [str(item) for item in params["samples"]],
                     transcript=params.get("transcript"),
+                    speaker_similarity=(
+                        float(params["speaker_similarity"])
+                        if params.get("speaker_similarity") is not None
+                        else None
+                    ),
+                    speaker_confirmed=bool(params.get("speaker_confirmed", False)),
+                    confirmation_statement=params.get("confirmation_statement"),
                 )
                 result = {"status": "success", "command": method, "data": profile.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.validate":

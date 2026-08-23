@@ -82,6 +82,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                     ],
                     "description": "Clip timeline duration; still images default to 5 seconds.",
                 },
+                "allow_protected_cut": {"type": "boolean", "default": False},
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["media_id", "track"],
@@ -109,6 +110,8 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             {
                 "clip_id": {"type": "string"},
                 "at": {"type": "number", "exclusiveMinimum": 0},
+                "timeline_position": {"type": "boolean", "default": False},
+                "allow_protected_cut": {"type": "boolean", "default": False},
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["clip_id", "at"],
@@ -891,6 +894,19 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             ["output"],
         ),
     },
+    "voice.profile.sample.remove": {
+        "summary": "Remove one voice sample to recoverable trash and clear derived cache.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile": {"type": "string", "minLength": 1},
+                "sample_id": {"type": "string", "minLength": 1},
+                "confirm": {"type": "boolean", "default": False},
+            },
+            ["profile", "sample_id"],
+        ),
+    },
     "subtitle.apply": {
         "summary": "Apply reviewed transcript cues with a readable installed font in one revision.",
         "mutates": True,
@@ -1067,6 +1083,13 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "use_service": {"type": "boolean", "default": True},
                 "provider": {"type": ["string", "null"]},
                 "overwrite": {"type": "boolean", "default": False},
+                "verify": {"type": "boolean", "default": False},
+                "verify_entity": {
+                    "type": "array", "items": {"type": "string"}, "default": []
+                },
+                "verify_min_similarity": {
+                    "type": "number", "minimum": 0, "maximum": 1, "default": 0.70
+                },
             },
             ["text", "output"],
         ),
@@ -1100,6 +1123,9 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "profile_id": {"type": "string"},
                 "samples": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "transcript": {"type": ["string", "null"]},
+                "speaker_similarity": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "speaker_confirmed": {"type": "boolean", "default": False},
+                "confirmation_statement": {"type": ["string", "null"]},
             },
             ["profile_id", "samples"],
         ),

@@ -284,6 +284,12 @@ def install_facut(
     replaced = destination.exists() and not _same_path(source, destination)
     if not _same_path(source, destination):
         _atomic_copy(source, destination)
+    build_identity: dict[str, Any] | None = None
+    source_build_manifest = source.parent / "facut-build.json"
+    if source_build_manifest.is_file():
+        build_identity = json.loads(source_build_manifest.read_text(encoding="utf-8-sig"))
+        build_manifest_destination = install_directory / "facut-build.json"
+        _atomic_copy(source_build_manifest, build_manifest_destination, minimum_size=0)
     runtime_result = _install_python_runtime(source, install_directory)
     native_result = (
         _install_native_bundle(source, install_directory)
@@ -324,6 +330,7 @@ def install_facut(
         "models": [item["model"] for item in model_results],
         "native": native_result,
         "runtime": runtime_result,
+        "build_identity": build_identity,
     }
     manifest_path = install_directory / "install.json"
     temporary = manifest_path.with_suffix(".json.tmp")
@@ -373,11 +380,22 @@ def latest_release(repository: str = DEFAULT_REPOSITORY) -> dict[str, Any]:
             str(item.get("name", "")).casefold(): item for item in payload.get("assets", [])
         }
         asset = next((assets.get(name.casefold()) for name in preferred_assets if assets.get(name.casefold())), None)
+        release_manifest_asset = assets.get("facut-release.json")
+        release_manifest = None
+        if release_manifest_asset and release_manifest_asset.get("browser_download_url"):
+            manifest_request = Request(
+                str(release_manifest_asset["browser_download_url"]),
+                headers={"User-Agent": f"facut/{__version__}"},
+            )
+            with urlopen(manifest_request, timeout=20) as response:
+                release_manifest = json.load(response)
         latest_version = str(payload.get("tag_name") or "").lstrip("v")
         release_url = payload.get("html_url")
         asset_url = asset.get("browser_download_url") if asset else None
         asset_size = asset.get("size") if asset else None
         asset_name = asset.get("name") if asset else None
+        asset_digest = asset.get("digest") if asset else None
+        release_commitish = payload.get("target_commitish")
         source = "github-api"
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
         # GitHub's anonymous REST quota is small and shared by some networks.
@@ -397,6 +415,9 @@ def latest_release(repository: str = DEFAULT_REPOSITORY) -> dict[str, Any]:
         asset_name = WINDOWS_PORTABLE_ASSET if os.name == "nt" else "facut"
         asset_url = f"https://github.com/{repository}/releases/download/{tag}/{asset_name}"
         asset_size = None
+        asset_digest = None
+        release_commitish = None
+        release_manifest = None
         source = "public-release-redirect"
     return {
         "repository": repository,
@@ -406,8 +427,49 @@ def latest_release(repository: str = DEFAULT_REPOSITORY) -> dict[str, Any]:
         "asset_url": asset_url,
         "asset_size": asset_size,
         "asset_name": asset_name,
+        "asset_digest": asset_digest,
+        "release_commitish": release_commitish,
+        "release_manifest": release_manifest,
         "source": source,
         "update_available": _version_tuple(latest_version) > _version_tuple(__version__),
+    }
+
+
+def release_publish_check(
+    identity: dict[str, Any], repository: str = DEFAULT_REPOSITORY
+) -> dict[str, Any]:
+    """Verify that the declared build is actually obtainable as latest Release."""
+
+    release = latest_release(repository)
+    expected_version = str(identity.get("version") or __version__)
+    expected_commit = str(identity.get("commit") or "")
+    digest = str(release.get("asset_digest") or "")
+    if digest.casefold().startswith("sha256:"):
+        digest = digest.split(":", 1)[1]
+    release_manifest = release.get("release_manifest") or {}
+    manifest_archive_sha = str(release_manifest.get("archive_sha256") or "").casefold()
+    checks = {
+        "version_matches": release["latest_version"] == expected_version,
+        "asset_available": bool(release.get("asset_url")),
+        "release_manifest_available": bool(release_manifest),
+        "asset_digest_matches_manifest": bool(
+            digest and manifest_archive_sha and digest.casefold() == manifest_archive_sha
+        ),
+        "commit_declared": bool(expected_commit and expected_commit != "unknown"),
+        "commit_matches": bool(
+            expected_commit
+            and release_manifest.get("commit")
+            and expected_commit == str(release_manifest["commit"])
+        ),
+        "manifest_version_matches": release_manifest.get("version") == expected_version,
+    }
+    passed = all(checks.values())
+    return {
+        "status": "pass" if passed else "blocked",
+        "checks": checks,
+        "identity": identity,
+        "release": release,
+        "hard_fail": not passed,
     }
 
 

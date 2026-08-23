@@ -35,12 +35,14 @@ from facut.voice.service import (
 
 voice_app = typer.Typer(help="Manage authorized local digital voice profiles.")
 profile_app = typer.Typer(help="Create, import, inspect, validate and remove voice profiles.")
+profile_sample_app = typer.Typer(help="Manage individual samples in a voice profile.")
 provider_app = typer.Typer(help="Inspect the configured local voice synthesis provider.")
 alias_app = typer.Typer(help="Manage stable human-readable voice aliases.")
 default_app = typer.Typer(help="Manage the default narration voice.")
 serve_app = typer.Typer(help="Keep the local voice model warm for fast synthesis.")
 sample_app = typer.Typer(help="Review quarantined voice samples before synthesis.")
 voice_app.add_typer(profile_app, name="profile")
+profile_app.add_typer(profile_sample_app, name="sample")
 voice_app.add_typer(provider_app, name="provider")
 voice_app.add_typer(alias_app, name="alias")
 voice_app.add_typer(default_app, name="default")
@@ -153,6 +155,13 @@ def profile_import(
     transcript: Annotated[str | None, typer.Option("--transcript")] = None,
     category: Annotated[str | None, typer.Option("--category")] = None,
     delivery: Annotated[str | None, typer.Option("--delivery")] = None,
+    speaker_similarity: Annotated[
+        float | None, typer.Option("--speaker-similarity", min=0.0, max=1.0)
+    ] = None,
+    speaker_confirmed: Annotated[bool, typer.Option("--speaker-confirmed")] = False,
+    confirmation_statement: Annotated[
+        str | None, typer.Option("--confirmation-statement")
+    ] = None,
 ) -> None:
     """Copy PCM WAV samples into the selected local profile."""
 
@@ -164,10 +173,42 @@ def profile_import(
             transcript=transcript,
             category=category,
             delivery=delivery,
+            speaker_similarity=speaker_similarity,
+            speaker_confirmed=speaker_confirmed,
+            confirmation_statement=confirmation_statement,
         )
         _emit(ctx, "voice.profile.import", profile.public_dict())
     except Exception as error:
         _fail(ctx, "voice.profile.import", error)
+
+
+@profile_sample_app.command("remove")
+def profile_sample_remove(
+    ctx: typer.Context,
+    profile: Annotated[str, typer.Argument(help="Voice ID, alias, or display name.")],
+    sample_id: Annotated[str, typer.Argument()],
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    """Remove one synthesis sample while retaining a recoverable private copy."""
+
+    try:
+        if not confirm:
+            raise ValueError("Voice sample removal requires --confirm.")
+        sample, trash_name = VoiceProfileStore().remove_sample(profile, sample_id)
+        _emit(
+            ctx,
+            "voice.profile.sample.remove",
+            {
+                "profile": profile,
+                "sample_id": sample.id,
+                "sha256": sample.sha256,
+                "recoverable": True,
+                "trash_name": trash_name,
+                "derived_cache_cleared": True,
+            },
+        )
+    except Exception as error:
+        _fail(ctx, "voice.profile.sample.remove", error)
 
 
 @profile_app.command("validate")
@@ -615,6 +656,17 @@ def voice_say(
     ] = True,
     provider: Annotated[Path | None, typer.Option("--provider")] = None,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    verify: Annotated[
+        bool,
+        typer.Option("--verify", help="ASR-check synthesized words, entities and numbers."),
+    ] = False,
+    verify_entity: Annotated[
+        list[str] | None,
+        typer.Option("--verify-entity", help="Required factual entity; repeat as needed."),
+    ] = None,
+    verify_min_similarity: Annotated[
+        float, typer.Option("--verify-min-similarity", min=0.0, max=1.0)
+    ] = 0.70,
 ) -> None:
     """Generate audition-first narration candidates without editing a timeline."""
 
@@ -661,6 +713,36 @@ def voice_say(
             use_service=use_service,
             service_options={"device": device, "require_cuda": require_cuda},
         )
+        if verify:
+            from facut.analysis.engine import transcribe_local
+            from facut.voice.verification import verify_outputs
+
+            state = _state(ctx)
+            model_path = state.config.models.resolve("srt_model")
+            if model_path is None:
+                raise FileNotFoundError(
+                    "TTS verification requires srt_model. Run `facut download srt_model`."
+                )
+            reports = verify_outputs(
+                [item["output"] for item in result["outputs"]],
+                text,
+                required_entities=verify_entity,
+                minimum_similarity=verify_min_similarity,
+                transcribe=lambda path: transcribe_local(
+                    path,
+                    model_path=model_path,
+                    language="zh",
+                    external_python=state.config.tools.analysis_python,
+                    word_timestamps=False,
+                ),
+            )
+            result["verification"] = reports
+            failed = [item for item in reports if not item["passed"]]
+            if failed:
+                raise ValueError(
+                    "TTS_ASR_MISMATCH: synthesized narration did not match the current "
+                    f"request ({len(failed)}/{len(reports)} take(s) failed); no final output was written."
+                )
         destination.parent.mkdir(parents=True, exist_ok=True)
         for item, final_path in zip(result["outputs"], destinations, strict=True):
             generated = Path(str(item["output"])).expanduser().resolve()

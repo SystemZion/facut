@@ -54,6 +54,10 @@ New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
 $FacutSourceRoot = Split-Path -Parent $FacutExe
 $RuntimeDirectory = Join-Path $FacutSourceRoot "facut_runtime"
 Copy-Item -LiteralPath $FacutExe -Destination (Join-Path $Bundle "facut.exe")
+$BuildManifestSource = Join-Path $FacutSourceRoot "facut-build.json"
+if (Test-Path -LiteralPath $BuildManifestSource -PathType Leaf) {
+    Copy-Item -LiteralPath $BuildManifestSource -Destination $Bundle
+}
 if (Test-Path -LiteralPath $RuntimeDirectory -PathType Container) {
     Copy-Item -LiteralPath $RuntimeDirectory -Destination $Bundle -Recurse
 }
@@ -74,10 +78,24 @@ Copy-Item -LiteralPath (Join-Path $FFmpegRoot "LICENSE.txt") -Destination (Join-
 Compress-Archive -Path (Join-Path $Bundle "*") -DestinationPath $Archive -CompressionLevel Optimal
 
 $hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+$BuildManifest = if (Test-Path -LiteralPath $BuildManifestSource -PathType Leaf) {
+    Get-Content -LiteralPath $BuildManifestSource -Raw | ConvertFrom-Json
+} else { $null }
+$ReleaseManifest = [ordered]@{
+    schema = "facut-release/1.0"
+    version = if ($BuildManifest) { $BuildManifest.version } else { "unknown" }
+    commit = if ($BuildManifest) { $BuildManifest.commit } else { "unknown" }
+    archive = "facut-windows-x64.zip"
+    archive_sha256 = $hash
+    executable_sha256 = (Get-FileHash -LiteralPath (Join-Path $Bundle "facut.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$ReleaseManifestPath = Join-Path $OutputRoot "facut-release.json"
+$ReleaseManifest | ConvertTo-Json | Set-Content -LiteralPath $ReleaseManifestPath -Encoding utf8
 [pscustomobject]@{
     bundle = $Bundle
     archive = $Archive
     sha256 = $hash
+    release_manifest = $ReleaseManifestPath
     files = @(Get-ChildItem -LiteralPath $Bundle -File -Recurse | ForEach-Object {
         [System.IO.Path]::GetRelativePath($Bundle, $_.FullName)
     })

@@ -146,4 +146,21 @@ if ($Mode -eq "onedir") {
     }
 }
 
+# Bind the executable to the exact source commit and binary digest users run.
+$BuildCommit = (& git -C $ProjectRoot rev-parse HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $BuildCommit) { $BuildCommit = "unknown" }
+$ProjectVersion = [regex]::Match(
+    (Get-Content -LiteralPath (Join-Path $ProjectRoot "pyproject.toml") -Raw),
+    '(?m)^version\s*=\s*"([^"]+)"'
+).Groups[1].Value
+$BuildManifest = [ordered]@{
+    schema = "facut-build/1.0"
+    version = $ProjectVersion
+    commit = $BuildCommit.Trim()
+    executable_sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+    build_time_utc = [DateTime]::UtcNow.ToString("o")
+}
+$BuildManifestPath = Join-Path (Split-Path -Parent $Exe) "facut-build.json"
+$BuildManifest | ConvertTo-Json | Set-Content -LiteralPath $BuildManifestPath -Encoding utf8
+
 Write-Output $Exe

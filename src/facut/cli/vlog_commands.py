@@ -152,6 +152,17 @@ def _apply_candidate(
     candidate_state, candidate = candidate_document(
         current, manager.project_dir, candidate_id
     )
+    observations_path = manager.project_dir / "cache" / "vlog" / "observations.json"
+    observation_payload = (
+        json.loads(observations_path.read_text(encoding="utf-8-sig"))
+        if observations_path.is_file()
+        else {"observations": []}
+    )
+    observations_by_id = {
+        str(item.get("observation_id")): item
+        for item in observation_payload.get("observations", [])
+        if isinstance(item, dict) and item.get("observation_id")
+    }
     manager.ensure_experiment_branch("vlog")
 
     def operation(document):
@@ -160,6 +171,38 @@ def _apply_candidate(
         document.markers = candidate_state.markers
         document.text_overlays = candidate_state.text_overlays
         document.subtitle_cues = candidate_state.subtitle_cues
+        for segment in candidate.segments:
+            observation = observations_by_id.get(segment.observation_id)
+            if not observation or not observation.get("event_chain"):
+                continue
+            asset = document.find_media(segment.media_id)
+            if asset is None:
+                raise ValueError(
+                    f'Story segment references missing media "{segment.media_id}".'
+                )
+            protected = asset.metadata.setdefault("protected_spans", [])
+            if not isinstance(protected, list):
+                raise ValueError(
+                    f'Media "{segment.media_id}" has invalid protected_spans metadata.'
+                )
+            span_id = f"event_{segment.observation_id}"
+            protected[:] = [
+                entry
+                for entry in protected
+                if not isinstance(entry, dict) or entry.get("id") != span_id
+            ]
+            protected.append(
+                {
+                    "id": span_id,
+                    "type": "atomic_event",
+                    "start": segment.source_in,
+                    "end": segment.source_out,
+                    "event_chain": observation.get("event_chain"),
+                    "event_order": observation.get("event_order"),
+                    "subject_id": observation.get("subject_id"),
+                    "story_role": observation.get("story_role"),
+                }
+            )
         if "vlog_polish" in candidate_state.settings:
             document.settings["vlog_polish"] = candidate_state.settings["vlog_polish"]
         else:
