@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from facut.exceptions import DependencyMissingError, FacutError
 
@@ -534,7 +534,11 @@ def _service_request(
         },
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        # Loopback control traffic must never inherit a corporate/system proxy.
+        # Besides leaking the bearer token, proxy discovery can make localhost
+        # health checks stall on macOS runners and managed workstations.
+        opener = build_opener(ProxyHandler({}))
+        with opener.open(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         try:
