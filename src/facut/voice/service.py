@@ -622,7 +622,11 @@ def start_voice_service(
         if getattr(sys, "frozen", False):
             daemon_command = [sys.executable, "__voice_service_daemon__"]
         else:
-            daemon_command = [sys.executable, "-m", "facut.voice.service"]
+            daemon_command = [
+                sys.executable,
+                "-c",
+                "from facut.voice.service import _daemon_entry; _daemon_entry()",
+            ]
     command = [
         *daemon_command,
         "--provider",
