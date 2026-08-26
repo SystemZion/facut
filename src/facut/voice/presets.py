@@ -19,6 +19,11 @@ VOICE_STYLE_PRESETS: dict[str, dict[str, str]] = {
         "description": "像对熟人说话，允许轻微思考和口语停顿。",
         "recording_delivery": "chat",
     },
+    "daily-chat": {
+        "name_zh": "日常聊天版",
+        "description": "更接近旅行现场随口交流，保留自然停顿、轻微语气词和不刻意组织的表达。",
+        "recording_delivery": "daily-chat",
+    },
     "comedy": {
         "name_zh": "搞笑版",
         "description": "轻松俏皮，有反差和笑意，但不使用夸张卡通腔。",

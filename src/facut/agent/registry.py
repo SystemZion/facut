@@ -82,6 +82,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                     ],
                     "description": "Clip timeline duration; still images default to 5 seconds.",
                 },
+                "allow_protected_cut": {"type": "boolean", "default": False},
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["media_id", "track"],
@@ -109,6 +110,8 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             {
                 "clip_id": {"type": "string"},
                 "at": {"type": "number", "exclusiveMinimum": 0},
+                "timeline_position": {"type": "boolean", "default": False},
+                "allow_protected_cut": {"type": "boolean", "default": False},
                 "dry_run": {"type": "boolean", "default": False},
             },
             ["clip_id", "at"],
@@ -234,7 +237,143 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "proxy": {"enum": ["none", "auto"], "default": "auto"},
                 "batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
                 "frames": {"type": "boolean", "default": True},
+                "engine": {"enum": ["auto", "native", "python"], "default": "auto"},
+                "native_mode": {"enum": ["fast", "deep"], "default": "fast"},
             }
+        ),
+    },
+    "vlog.inbox.next": {
+        "summary": "Return the highest-priority truthful review tasks without reducing coverage.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8}}
+        ),
+    },
+    "vlog.inbox.list": {
+        "summary": "List the complete Director Inbox and stable review IDs.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.inbox.resolve": {
+        "summary": "Resolve one Director Inbox item with an auditable explanation.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "item_id": {"type": "string", "minLength": 1},
+                "resolution": {"type": "string", "minLength": 1},
+            },
+            ["item_id", "resolution"],
+        ),
+    },
+    "vlog.bible.show": {
+        "summary": "Read confirmed and uncertain trip context used to constrain generated claims.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.bible.import": {
+        "summary": "Validate and atomically replace a reviewed Trip Bible document.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {"bible": {"type": "object", "additionalProperties": True}}, ["bible"]
+        ),
+    },
+    "vlog.bible.audit": {
+        "summary": "Audit Trip Bible entity ambiguity and unsupported confirmed facts.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.bible.rename": {
+        "summary": "Rename one uniquely resolved person or place and stale dependent plans.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "entity": {"type": "string", "minLength": 1},
+                "new_name": {"type": "string", "minLength": 1},
+                "kind": {"enum": ["auto", "person", "place"], "default": "auto"},
+            },
+            ["entity", "new_name"],
+        ),
+    },
+    "native.doctor": {
+        "summary": "Verify the optional C++ sidecar, protocol, FFmpeg ABI, and features.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "runtime.status": {
+        "summary": "Inspect configured warm background services without loading media models.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "runtime.cleanram": {
+        "summary": "Stop explicitly selected warm services without deleting models or caches.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "services": {
+                    "type": "array",
+                    "items": {"enum": ["voice", "all"]},
+                    "minItems": 1,
+                    "uniqueItems": True,
+                },
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            ["services"],
+        ),
+    },
+    "runtime.warmup": {
+        "summary": "Load explicitly selected heavy services and wait for readiness.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "services": {
+                    "type": "array",
+                    "items": {"enum": ["voice", "all"]},
+                    "minItems": 1,
+                    "uniqueItems": True,
+                }
+            },
+            ["services"],
+        ),
+    },
+    "runtime.autoload.configure": {
+        "summary": "Enable or disable default background warmup for one service.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "service": {"enum": ["voice", "all"]},
+                "enabled": {"type": "boolean"},
+                "stop_now": {"type": "boolean", "default": False},
+            },
+            ["service", "enabled"],
+        ),
+    },
+    "analyze.batch": {
+        "summary": "Analyze a media tree with the persistent native sidecar or Python fallback.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "folder": {"type": "string", "minLength": 1},
+                "engine": {"enum": ["auto", "native", "python"], "default": "auto"},
+                "mode": {"enum": ["fast", "deep"], "default": "fast"},
+                "output_directory": {"type": ["string", "null"]},
+                "limit": {"type": ["integer", "null"], "minimum": 1},
+                "jobs": {"type": "integer", "minimum": 1, "maximum": 8, "default": 3},
+                "asset_timeout": {"type": "number", "exclusiveMinimum": 0, "default": 180},
+            },
+            ["folder"],
         ),
     },
     "vlog.inspect.next": {
@@ -242,6 +381,43 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "mutates": False,
         "rpc": True,
         "parameters": _object({}),
+    },
+    "vlog.atlas.build": {
+        "summary": "Build or resume stable batches for large-library external visual review.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+                "sampling": {"enum": ["adaptive", "baseline"], "default": "adaptive"},
+                "max_gap": {"type": "number", "exclusiveMinimum": 0, "default": 15.0},
+            }
+        ),
+    },
+    "vlog.atlas.status": {
+        "summary": "Report Scene Atlas coverage, exclusions and the next stable task.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.inspect.batch": {
+        "summary": "Return one bounded multi-asset evidence pack for an external visual AI.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"task_id": {"type": ["string", "null"]}}),
+    },
+    "vlog.observe.batch": {
+        "summary": "Idempotently store a source-hashed batch of external visual observations.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "task_id": {"type": ["string", "null"]},
+                "observations": {"type": "array", "items": {"type": "object"}, "minItems": 1},
+                "asset_hashes": {"type": ["object", "null"]},
+            },
+            ["observations"],
+        ),
     },
     "vlog.observe": {
         "summary": "Validate and idempotently store external visual observations.",
@@ -272,6 +448,120 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "target_duration": {"type": "number", "minimum": 1, "default": 480},
                 "candidates": {"const": 3},
             }
+        ),
+    },
+    "vlog.story.brief": {
+        "summary": "Build an evidence-addressed StoryGraph 3 brief for an external AI director.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.story.submit": {
+        "summary": "Validate and save an external AI story proposal without applying it.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"proposal": {"type": "object", "additionalProperties": True}},
+            ["proposal"],
+        ),
+    },
+    "vlog.story.validate": {
+        "summary": "Validate the current StoryGraph against evidence and causal constraints.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.opening.plan": {
+        "summary": "Build three reviewable evidence-grounded opening alternatives.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({}),
+    },
+    "vlog.ending.plan": {
+        "summary": "Build three reviewable evidence-grounded ending alternatives.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object({}),
+    },
+    "vlog.continuity.check": {
+        "summary": "Check causal, location, daypart, movement, composition, B-roll and ending continuity.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"candidate_id": {"type": ["string", "null"]}}
+        ),
+    },
+    "vlog.review.create": {
+        "summary": "Create one immutable external-director review package, up to three rounds.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"review_pass": {"enum": ["story", "continuity", "sound"], "default": "story"}}
+        ),
+    },
+    "vlog.review.submit": {
+        "summary": "Validate and idempotently store evidence-bound external review findings.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {"submission": {"type": "object", "additionalProperties": True}},
+            ["submission"],
+        ),
+    },
+    "vlog.review.plan": {
+        "summary": "Compile external findings into an auditable, unapplied revision plan.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {"submission": {"type": "object", "additionalProperties": True}},
+            ["submission"],
+        ),
+    },
+    "vlog.review.apply": {
+        "summary": "Atomically apply explicitly approved deterministic review edits.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "object", "additionalProperties": True},
+                "approved_only": {"type": "boolean", "default": True},
+            },
+            ["plan"],
+        ),
+    },
+    "vlog.soundscape.analyze": {
+        "summary": "Inventory dialogue, narration, original, ambience, music and SFX roles.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"measure": {"type": "boolean", "default": False}}),
+    },
+    "vlog.soundscape.plan": {
+        "summary": "Create review-first ducking and mastering recommendations without fake measurements.",
+        "mutates": False,
+        "rpc": True,
+        "plan_first": True,
+        "parameters": _object(
+            {
+                "style": {"type": "string", "default": "natural-vlog"},
+                "target_lufs": {"type": "number", "default": -14.0},
+                "true_peak_db": {"type": "number", "default": -1.0},
+            }
+        ),
+    },
+    "vlog.soundscape.apply": {
+        "summary": "Atomically apply approved sound settings; render and measured QC remain required.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "plan": {"type": "object", "additionalProperties": True},
+                "approved_only": {"type": "boolean", "default": True},
+            },
+            ["plan"],
         ),
     },
     "vlog.compare": {
@@ -548,6 +838,67 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             ["profile", "name"],
         ),
     },
+    "voice.sample.propose": {
+        "summary": "Quarantine possible speaker audio for identity review before synthesis.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "source": {"type": "string", "minLength": 1},
+                "profile": {"type": "string", "minLength": 1},
+                "transcript": {"type": ["string", "null"]},
+                "category": {"type": ["string", "null"]},
+                "delivery": {"type": ["string", "null"]},
+                "source_media_id": {"type": ["string", "null"]},
+                "source_start": {"type": ["number", "null"], "minimum": 0},
+                "source_end": {"type": ["number", "null"], "minimum": 0},
+                "identity_basis": {"enum": ["unknown", "similarity", "manual"], "default": "similarity"},
+            },
+            ["source", "profile"],
+        ),
+    },
+    "voice.sample.list": {
+        "summary": "List quarantined voice candidates and review state.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile": {"type": ["string", "null"]},
+                "status": {"enum": ["pending", "approved", "rejected", None]},
+            }
+        ),
+    },
+    "voice.sample.show": {
+        "summary": "Inspect one quarantined voice candidate.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({"candidate_id": {"type": "string", "minLength": 1}}, ["candidate_id"]),
+    },
+    "voice.sample.approve": {
+        "summary": "Make candidate audio eligible after explicit same-speaker confirmation.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "speaker_confirmed": {"const": True},
+                "confirmation_statement": {"type": "string", "minLength": 12},
+            },
+            ["candidate_id", "speaker_confirmed", "confirmation_statement"],
+        ),
+    },
+    "voice.sample.reject": {
+        "summary": "Reject candidate audio while retaining review evidence.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "candidate_id": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1},
+            },
+            ["candidate_id", "reason"],
+        ),
+    },
     "subtitle.transcribe": {
         "summary": "Create a review-first word-timestamped transcript plan from active timeline media.",
         "mutates": False,
@@ -564,6 +915,19 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "overwrite": {"type": "boolean", "default": False},
             },
             ["output"],
+        ),
+    },
+    "voice.profile.sample.remove": {
+        "summary": "Remove one voice sample to recoverable trash and clear derived cache.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "profile": {"type": "string", "minLength": 1},
+                "sample_id": {"type": "string", "minLength": 1},
+                "confirm": {"type": "boolean", "default": False},
+            },
+            ["profile", "sample_id"],
         ),
     },
     "subtitle.apply": {
@@ -731,7 +1095,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "text": {"type": "string", "minLength": 1},
                 "voice": {"type": ["string", "null"]},
                 "output": {"type": "string", "minLength": 1},
-                "style": {"enum": ["auto", "natural", "broadcast", "chat", "comedy", "excited"], "default": "auto"},
+                "style": {"enum": ["auto", "natural", "broadcast", "chat", "daily-chat", "comedy", "excited"], "default": "auto"},
                 "takes": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1},
                 "speed": {"type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0},
                 "intensity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5},
@@ -742,6 +1106,13 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "use_service": {"type": "boolean", "default": True},
                 "provider": {"type": ["string", "null"]},
                 "overwrite": {"type": "boolean", "default": False},
+                "verify": {"type": "boolean", "default": False},
+                "verify_entity": {
+                    "type": "array", "items": {"type": "string"}, "default": []
+                },
+                "verify_min_similarity": {
+                    "type": "number", "minimum": 0, "maximum": 1, "default": 0.70
+                },
             },
             ["text", "output"],
         ),
@@ -775,6 +1146,9 @@ _ACTIONS: dict[str, dict[str, Any]] = {
                 "profile_id": {"type": "string"},
                 "samples": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "transcript": {"type": ["string", "null"]},
+                "speaker_similarity": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "speaker_confirmed": {"type": "boolean", "default": False},
+                "confirmation_statement": {"type": ["string", "null"]},
             },
             ["profile_id", "samples"],
         ),
@@ -786,7 +1160,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "parameters": _object(
             {
                 "profile_id": {"type": "string"},
-                "recommended_seconds": {"type": "number", "minimum": 1, "default": 600},
+                "recommended_seconds": {"type": "number", "minimum": 1, "default": 120},
             },
             ["profile_id"],
         ),
@@ -937,6 +1311,14 @@ def capabilities() -> dict[str, Any]:
         "protocol_version": "1.0",
         "facut_version": __version__,
         "transport": ["cli-json", "stdio-jsonrpc"],
+        "shortcuts": [
+            {"name": "scan", "canonical_action": "vlog.prepare"},
+            {"name": "cut", "canonical_action": "vlog.run"},
+            {"name": "resume", "canonical_action": "vlog.run"},
+            {"name": "next", "canonical_action": "vlog.status"},
+            {"name": "say", "canonical_action": "voice.say"},
+            {"name": "check", "canonical_action": "doctor/project.validate/qc"},
+        ],
         "response_contract": {
             "status": ["success", "error"],
             "revisioned": True,

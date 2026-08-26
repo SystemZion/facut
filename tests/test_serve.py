@@ -48,6 +48,7 @@ def test_stdio_json_rpc_reuses_loaded_project(tmp_path) -> None:
     assert any(action["name"] == "narration.synthesize" for action in lines[3]["result"]["actions"])
     assert any(action["name"] == "clip.speed_curve" for action in lines[3]["result"]["actions"])
     assert any(action["name"] == "proxy.scan" for action in lines[3]["result"]["actions"])
+    assert any(item["name"] == "cut" for item in lines[3]["result"]["shortcuts"])
     assert lines[4]["result"]["plan_first"] is True
     assert lines[5]["result"]["status"] == "shutdown"
 

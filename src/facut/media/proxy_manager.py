@@ -275,6 +275,9 @@ class ProxyManager:
                     "match_score": match["score"],
                     "match_reasons": match["reasons"],
                     "source": "automatic_scan",
+                    # Camera LRF/proxy audio is not authoritative. Some DJI
+                    # LRF files contain a formally valid but silent track.
+                    "audio_untrusted": True,
                 }
                 linked_ids.append(selected_media_id)
             return linked_ids
@@ -311,6 +314,7 @@ class ProxyManager:
             asset.metadata["proxy"] = {
                 "path": stored_path,
                 "technical": technical,
+                "audio_untrusted": True,
             }
             return asset
 
@@ -431,6 +435,10 @@ class ProxyManager:
                     if proxy is not None and proxy.is_file()
                     else str(original),
                     "final_source": str(original),
+                    "audio_source": str(original),
+                    "proxy_audio_trusted": not bool(
+                        asset.metadata.get("proxy", {}).get("audio_untrusted", True)
+                    ),
                     "match_score": asset.metadata.get("proxy", {}).get("match_score"),
                     "match_reasons": asset.metadata.get("proxy", {}).get("match_reasons", []),
                 }

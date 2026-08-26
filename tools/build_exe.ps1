@@ -2,6 +2,9 @@ param(
     [string]$Python = "python",
     [string]$FFmpeg = "",
     [string]$FFprobe = "",
+    [ValidateSet("onedir", "onefile")]
+    [string]$Mode = "onedir",
+    [switch]$UseCurrentEnvironment,
     [switch]$Clean
 )
 
@@ -12,6 +15,7 @@ $BuildPath = Join-Path $ProjectRoot "build"
 $GeneratedSpecPath = Join-Path $BuildPath "generated-spec"
 $ResolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $BundledTools = Join-Path $ProjectRoot "vendor\ffmpeg"
+$PackagingVenv = Join-Path $BuildPath "packaging-venv"
 
 if (-not $FFmpeg) {
     $CandidateFFmpeg = Join-Path $BundledTools "ffmpeg.exe"
@@ -45,19 +49,30 @@ if ($Clean) {
     }
 }
 
+$BuildPython = $Python
+if (-not $UseCurrentEnvironment) {
+    $VenvPython = Join-Path $PackagingVenv "Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
+        New-Item -ItemType Directory -Force -Path $BuildPath | Out-Null
+        & $Python -m venv $PackagingVenv
+        if ($LASTEXITCODE -ne 0) { throw "Could not create isolated packaging environment." }
+    }
+    & $VenvPython -m pip install --disable-pip-version-check --quiet -e "${ProjectRoot}[build]"
+    if ($LASTEXITCODE -ne 0) { throw "Could not install FACUT build dependencies in the isolated environment." }
+    $BuildPython = $VenvPython
+}
+if ($FFmpeg) { $FFmpeg = [System.IO.Path]::GetFullPath($FFmpeg) }
+if ($FFprobe) { $FFprobe = [System.IO.Path]::GetFullPath($FFprobe) }
+
 New-Item -ItemType Directory -Force -Path $GeneratedSpecPath | Out-Null
 
 $PyInstallerArgs = @(
     "--noconfirm",
     "--clean",
     "--specpath", $GeneratedSpecPath,
-    "--onefile",
     "--console",
     "--name", "facut",
     "--paths", (Join-Path $ProjectRoot "src"),
-    "--collect-all", "typer",
-    "--collect-all", "rich",
-    "--collect-all", "pydantic",
     "--collect-data", "openpyxl",
     "--collect-data", "opentimelineio",
     "--collect-submodules", "opentimelineio.adapters",
@@ -74,8 +89,18 @@ $PyInstallerArgs = @(
     "--exclude-module", "matplotlib",
     "--exclude-module", "gradio",
     "--exclude-module", "pyarrow",
+    "--exclude-module", "pytest",
+    "--exclude-module", "pygame",
+    "--exclude-module", "clr",
+    "--exclude-module", "pythonnet",
+    "--exclude-module", "win32com",
     "--collect-data", "facut"
 )
+if ($Mode -eq "onefile") {
+    $PyInstallerArgs += "--onefile"
+} else {
+    $PyInstallerArgs += @("--onedir", "--contents-directory", "facut_runtime")
+}
 $PyInstallerArgs += @(
     "--add-data",
     "$(Join-Path $ProjectRoot 'src\facut\analysis\asr_worker.py');facut_worker"
@@ -95,15 +120,47 @@ if ($FFprobe) {
 }
 $PyInstallerArgs += (Join-Path $ProjectRoot "src\facut\__main__.py")
 
-& $Python -m PyInstaller @PyInstallerArgs
+& $BuildPython -m PyInstaller @PyInstallerArgs
 
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE"
 }
 
-$Exe = Join-Path $DistPath "facut.exe"
+$Exe = if ($Mode -eq "onefile") {
+    Join-Path $DistPath "facut.exe"
+} else {
+    Join-Path $DistPath "facut\facut.exe"
+}
 if (-not (Test-Path -LiteralPath $Exe)) {
     throw "Expected executable was not created: $Exe"
 }
+
+# Keep the selected packaging mode unambiguous. A stale one-file executable at
+# dist\facut.exe otherwise looks newer and easier to launch than the current
+# onedir build even though it may contain an older FACUT version.
+if ($Mode -eq "onedir") {
+    $StaleCounterpart = Join-Path $DistPath "facut.exe"
+    Assert-ProjectChild $StaleCounterpart
+    if (Test-Path -LiteralPath $StaleCounterpart -PathType Leaf) {
+        Remove-Item -LiteralPath $StaleCounterpart -Force
+    }
+}
+
+# Bind the executable to the exact source commit and binary digest users run.
+$BuildCommit = (& git -C $ProjectRoot rev-parse HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $BuildCommit) { $BuildCommit = "unknown" }
+$ProjectVersion = [regex]::Match(
+    (Get-Content -LiteralPath (Join-Path $ProjectRoot "pyproject.toml") -Raw),
+    '(?m)^version\s*=\s*"([^"]+)"'
+).Groups[1].Value
+$BuildManifest = [ordered]@{
+    schema = "facut-build/1.0"
+    version = $ProjectVersion
+    commit = $BuildCommit.Trim()
+    executable_sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+    build_time_utc = [DateTime]::UtcNow.ToString("o")
+}
+$BuildManifestPath = Join-Path (Split-Path -Parent $Exe) "facut-build.json"
+$BuildManifest | ConvertTo-Json | Set-Content -LiteralPath $BuildManifestPath -Encoding utf8
 
 Write-Output $Exe

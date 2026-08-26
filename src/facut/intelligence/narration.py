@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from facut.core.models import ProjectDocument, TrackType
+
+if TYPE_CHECKING:
+    from .narration_plan import NarrationPlan
 
 
 _ANGLES: tuple[tuple[set[str], str], ...] = (
@@ -65,6 +68,7 @@ def build_narration_plan(
     language: str = "zh-CN",
     max_lines: int = 12,
     minimum_confidence: float = 0.55,
+    fact_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create review-first narration ideas mapped to exact timeline ranges."""
 
@@ -161,10 +165,12 @@ def build_narration_plan(
         "language": language,
         "line_count": len(candidates),
         "lines": candidates,
+        "fact_policy": dict(fact_policy or {}),
         "agent_generation_brief": {
             "instruction": (
                 "Rewrite only from the supplied visual summaries and evidence. Keep a natural spoken tone, "
-                "do not invent people, places, dates, prices or emotions, and preserve each timeline range."
+                "do not invent people, places, dates, prices or emotions, preserve each timeline range, "
+                "and obey the Trip Bible fact_policy when present."
             ),
             "output_fields": ["timeline_range", "draft_text", "confidence", "evidence"],
         },
@@ -186,6 +192,7 @@ def generate_narration_plan(
     max_lines: int = 12,
     minimum_confidence: float = 0.55,
     provider: str = "deterministic",
+    fact_policy: dict[str, Any] | None = None,
 ) -> "NarrationPlan":
     """Build a validated plan without pretending that a text model was called.
 
@@ -194,11 +201,7 @@ def generate_narration_plan(
     adapter has been configured by the caller.
     """
 
-    from .narration_plan import (
-        NarrationPlan,
-        NarrationProviderNotConfigured,
-        narration_plan_from_suggestions,
-    )
+    from .narration_plan import NarrationProviderNotConfigured, narration_plan_from_suggestions
 
     if provider != "deterministic":
         raise NarrationProviderNotConfigured(
@@ -217,6 +220,7 @@ def generate_narration_plan(
         language=language,
         max_lines=max_lines,
         minimum_confidence=minimum_confidence,
+        fact_policy=fact_policy,
     )
     if style == "weekend-vlog":
         suggestions["style"] = style

@@ -8,7 +8,7 @@ import sys
 import textwrap
 import time
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 import pytest
 
@@ -146,6 +146,29 @@ def test_service_stops_after_idle_timeout(tmp_path: Path) -> None:
     thread.join(timeout=3)
     assert not thread.is_alive()
     assert not state.exists()
+
+
+def test_stop_service_reports_timeout_when_process_remains_alive(tmp_path: Path, monkeypatch) -> None:
+    from facut.voice.service import VoiceServiceError
+
+    state = tmp_path / "stuck.json"
+    state.write_text(
+        json.dumps(
+            {
+                "protocol": "facut-voice-service/1.0",
+                "host": "127.0.0.1",
+                "port": 12345,
+                "token": "x" * 32,
+                "pid": 54321,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("facut.voice.service._service_request", lambda *args, **kwargs: {})
+    monkeypatch.setattr("facut.voice.service.os.kill", lambda *args, **kwargs: None)
+    with pytest.raises(VoiceServiceError, match="did not stop"):
+        stop_voice_service(state_path=state, timeout=0)
+    assert state.exists()
 
 
 def test_require_cuda_rejects_cpu_provider(tmp_path: Path) -> None:

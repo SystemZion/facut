@@ -5,25 +5,48 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.8.1` 稳定了质量优先的 Vlog Director：公开 Agent 可原子应用 StoryGraph，自动硬件选择会试跑编码器，事件链保持同一人物的“发生—恢复—结果”，标题模板遵循显式参数优先级，带转场时间线也能复用未变化渲染节点。它不会内置本地视觉模型，也不会用 Token 限制跳过有效素材。
+当前开发版本 `0.9.3` 在 Director Loop 上增加了稳定快捷命令、自适应长镜头采样、Trip Bible审计、实测声音证据、质量门禁状态和缓存完整性验证。Scene Atlas仍由外部视觉AI完成画面判断；可选C++ Native Accelerator负责批量技术分析，FACUT不会用Token限制跳过有效素材。
+
+最常用的人类入口现在可以保持很短，同时仍执行完整质量流程：
+
+```powershell
+facut scan D:\Trip -p D:\TripProject --deep
+facut cut D:\Trip -o D:\Final\review.mp4 -s comedy -l 8m --draft
+facut next -p D:\TripProject
+facut resume -p D:\TripProject
+facut cut D:\Trip -o D:\Final\final.mp4 -p D:\TripProject --final --4k
+facut say "今天继续出发。" -v roger -s chat -o narration.wav
+facut check video D:\Final\final.mp4
+```
+
+`facut explain cut ...` 可以在不执行、不修改工程的前提下显示快捷命令对应的标准动作和有效默认值。默认值通过 `facut defaults set/show/reset` 管理，优先级为“显式参数 > 工程 > 用户 > 内置”。快捷命令不会跳过外部画面观察、1080p审片或最终QC。
 
 最短工作流：
 
 ```powershell
 facut vlog prepare D:\Trip --project D:\Trip-Project
-facut --project D:\Trip-Project vlog inspect next --json
-facut --project D:\Trip-Project vlog observe observations.json
-facut --project D:\Trip-Project vlog plan --style comedy-vlog --target-duration 480
+facut --project D:\Trip-Project vlog bible import trip-bible.json
+facut --project D:\Trip-Project vlog inspect batch --json
+facut --project D:\Trip-Project vlog atlas observe observations.json
+facut --project D:\Trip-Project vlog story brief -o story-brief.json
+facut --project D:\Trip-Project vlog story submit story-candidates.json
+facut --project D:\Trip-Project vlog continuity check
+facut --project D:\Trip-Project vlog opening plan
+facut --project D:\Trip-Project vlog ending plan
 facut --project D:\Trip-Project vlog preview --all-candidates
 facut --project D:\Trip-Project vlog refine candidate-narrative --auto
+facut --project D:\Trip-Project vlog soundscape plan
+facut --project D:\Trip-Project vlog review create --pass story
 facut --project D:\Trip-Project vlog build candidate-narrative --preset youtube-4k -o D:\Trip-Final\final.mp4
 ```
+
+`Scene Atlas` 和 `Director Inbox` 都不代替全素材覆盖：Atlas保证每个有效非重复素材至少进入一个基础审阅包，再把低置信、重要动作、事件链和高价值原声升级为深审；Inbox负责后续歧义与事实复核。`Trip Bible` 保存经确认的人物、地点、日期、专名和事实；只有 `confirmed` 事实可进入生成口播或标题，`uncertain` 会进入Inbox，`rejected`不得作为成片断言。
 
 `vlog run ... --auto` 也遵守同一质量门：缺少外部视觉观察或 ASR 中存在待复审词时返回 `REVIEW_REQUIRED`，不会伪造成功。字幕正文使用统一易读字体；科技、人文、风景、喜剧、家庭和美食标题通过逻辑字体角色匹配本机已授权字体，最终渲染前强制检查缺字。
 
 ## 安装
 
-Windows 普通用户可从 [GitHub Releases](https://github.com/SystemZion/facut/releases/latest) 下载单文件 `facut.exe`。源码开发需要 Python 3.11 或更高版本，以及可在 `PATH` 中找到的 FFmpeg/FFprobe。
+Windows 普通用户可从 [GitHub Releases](https://github.com/SystemZion/facut/releases/latest) 下载 `facut-windows-x64.zip`。解压后保留 `facut.exe`、`facut-native.exe`、FFmpeg DLL 和授权说明在同一目录；只下载单文件 `facut.exe` 仍可使用 Python/FFmpeg 回退。源码开发需要 Python 3.11 或更高版本，以及可在 `PATH` 中找到的 FFmpeg/FFprobe。
 
 首次下载 EXE 后可让 FACUT 安装自身、替换旧版并写入当前用户 PATH：
 
@@ -40,7 +63,7 @@ facut update --check
 facut update
 ```
 
-更新从 `SystemZion/facut` 最新 GitHub Release 断点续传 `facut.exe`；若正在运行的正是已安装 EXE，FACUT 会在当前进程退出后完成替换。
+Windows 更新优先从 `SystemZion/facut` 最新 GitHub Release 断点续传完整的 `facut-windows-x64.zip`，校验并暂存整个便携目录；若正在运行的正是已安装 EXE，FACUT 会在当前进程退出后原子切换目录并保留失败回滚。旧版单文件 Release 仍可兼容更新。
 
 ```bash
 python -m venv .venv
@@ -177,6 +200,14 @@ facut --project vlog clip motion clip_01 --preset slow-push --intensity 0.35
 facut --project vlog clip speed clip_01 --rate 2
 facut --project vlog clip speed clip_01 --reverse
 facut --project vlog clip speed clip_01 --curve speed.json
+```
+
+安装命令会自动复制同目录下完整的原生加速包；可用 `--no-native` 明确跳过。检查与批量测试：
+
+```powershell
+facut native doctor
+facut native benchmark D:\Trip --limit 20
+facut analyze batch D:\Trip --engine auto --mode fast
 ```
 
 速度曲线使用源片段相对秒数，支持 `step` 和确定性采样的 `linear`：`{"version":"1.0","mode":"linear","steps":8,"points":[{"at":0,"rate":1},{"at":2,"rate":2},{"at":4,"rate":0.75}]}`。曲线节点会进入缓存、Recipe 和 CutGraph；倒放同时反转画面与原音。
@@ -325,7 +356,9 @@ facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --output 
 facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --delivery natural-vlog --takes 3 --output narration.wav
 facut --json voice styles
 facut voice record <VOICE_ID> --script vlog-style-capsules-v1
-facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,comedy,excited --output narration.wav
+facut --json voice synthesize <VOICE_ID> "今天我们出去走走。" --style natural,broadcast,chat,daily-chat,comedy,excited --output narration.wav
+facut voice sample propose candidate.wav --profile <VOICE_ID> --style daily-chat
+facut voice sample approve <CANDIDATE_ID> --speaker-confirmed --confirmation-statement "我确认这段录音属于该声音档案中的已授权本人。"
 facut voice studio
 facut voice studio --voice Zion --mode styles
 facut voice alias set Zion zion
@@ -336,13 +369,29 @@ facut voice serve status --json
 
 `voice record` 在 `127.0.0.1` 打开 FACUT 自带录音页，可选择麦克风、逐条朗读、试听、重录并在保存时执行 QC。浏览器把音频转换为 48 kHz、16-bit、单声道 PCM WAV，只发送给本机临时服务；完成后服务自动关闭。已有 PCM WAV 仍可通过 `voice profile import` 由 AI/CLI 批量导入。
 
-本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（聊天版）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
+本地 CosyVoice3 提供器默认使用自然版语气指令、按语义分句并加入自然停顿。面向用户和 Agent 的稳定版本为 `natural`（自然版）、`broadcast`（播音版）、`chat`（有组织的熟人聊天）、`daily-chat`（旅行现场随口交流）、`comedy`（搞笑版）和 `excited`（激动版）；逗号分隔可一次生成多个版本。`--instruction` 可追加简短表演要求，`--takes 2` 或 `--takes 3` 可为每个版本生成多个候选。
 
-原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 只增加 5 条、约 2 分钟风格参考；新样本会保存明确的风格标签，生成时优先匹配。未补录时五种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
+从视频中提取、仅凭“声音相似”判断的录音必须先通过 `voice sample propose` 进入隔离候选区。候选音频不会参与合成；只有用户用 `--speaker-confirmed` 明确确认它属于已授权本人后，`voice sample approve` 才会把副本加入档案。拒绝的候选保留审查证据，不会修改或删除源视频和原始 WAV。
+
+原有平衡录音继续负责音色，不需要重录。可选的 `vlog-style-capsules-v1` 增加 5 条、约 2 分钟风格参考；现场确认样本可进一步覆盖 `daily-chat`。新样本会保存明确的风格标签，生成时优先匹配。未补录时六种版本仍可使用模型指令生成，但个性化语气相似度会较弱。
 
 `voice studio` 不要求预先创建声音 ID。首次打开可直接输入任意名称并确认本人/已授权关系；`quick` 为 3 条快速试录，`recommended` 为 8 条常见 VLOG 句型，`styles` 为 5 条风格胶囊。档案内部继续使用稳定 ID，命令可使用唯一 alias 或唯一显示名称；重名时返回 `VOICE_AMBIGUOUS`，不会猜测。
 
 `voice serve` 只绑定 `127.0.0.1`，使用随机令牌和本机状态文件。新版 CosyVoice provider 的 `--facut-voice-jsonl` 模式会在同一进程中保留模型；`--require-cuda` 下无法验证 CUDA 时直接失败，不静默回到 CPU。模型目录继续通过 `facut models link voice_model <path>` 独立配置，不进入 EXE 或 GitHub。
+
+FACUT 默认在普通命令启动后异步预热已配置的重服务，前台命令不等待模型加载；目前注册的可常驻重服务为 `voice`。可以精确选择要预热或释放的服务：
+
+```powershell
+facut autoload status
+facut autoload disable voice             # 以后不再自动预热，但不停止当前服务
+facut autoload disable voice --stop-now  # 同时释放当前语音模型内存
+facut autoload enable voice
+facut warmup --service voice
+facut cleanram --service voice
+facut cleanram --service all --dry-run
+```
+
+`cleanram` 强制要求 `--service`，避免误停所有后台任务；`all` 只代表 FACUT 已注册的可重建服务，不会结束任意系统进程。它不会删除模型、代理、缓存、声音样本或工程文件。自动预热失败仅写入本地运行时日志，不会阻断当前剪辑命令。`facut --version` 和这些生命周期命令走轻量启动入口，其余高频 Agent 编辑仍推荐使用 `facut serve` 的 JSON-RPC 常驻会话。
 
 没有 NVIDIA GPU 时，可在用户配置的 `[voice]` 段设置外部 CPU PyTorch
 `cpu_overlay`。此时 `--device auto` 会在一次性合成和常驻服务中统一选择
@@ -555,4 +604,4 @@ src/facut/
 └── responses.py      JSON 响应协议
 ```
 
-Windows 发行物通过 PyInstaller 打包为单文件 `facut.exe`，并内置 FFmpeg/FFprobe；源码安装方式用于开发和测试。
+Windows 默认发行物通过 PyInstaller 打包为便携目录：入口仍是 `facut.exe`，运行库与内置 FFmpeg/FFprobe 放在旁边的 `facut_runtime`，避免单文件版每次自解压造成数秒冷启动。`tools/build_exe.ps1 -Mode onefile` 仍可生成兼容单文件版；源码安装方式用于开发和测试。

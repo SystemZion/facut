@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.9.3 — 2026-08-26
+
+- Added clear top-level `scan`, `cut`, `resume`, `next`, `say`, `check`,
+  `explain`, and `defaults` commands while preserving every canonical command.
+- Added shortcut-to-canonical metadata to structured responses and Agent
+  capability discovery without changing canonical response payloads.
+- Added adaptive Scene Atlas sampling with a configurable maximum blind gap.
+- Added Trip Bible ambiguity/evidence auditing and safe entity rename with
+  dependent-plan invalidation.
+- Added optional original-source EBU R128 measurements to Soundscape analysis
+  and explicit quality-gate readiness in VLOG status.
+- Added render-cache size and SHA-256 integrity checks so empty or corrupted
+  segment artifacts cannot be reused.
+
+## 0.9.2 — 2026-08-23
+
+- Added hard speech-span and atomic-event cut protection with an explicit reviewed override.
+- Made LRF/proxy files video-only for preview; camera audio always comes from original media.
+- Added speaker identity guards for existing profiles and recoverable per-sample removal.
+- Isolated TTS requests by request ID and restart desynchronized warm providers after timeout.
+- Added optional ASR round-trip narration verification for entities and factual numbers.
+- Added build commit/hash identity, PATH shadowing diagnostics, and a strict GitHub Release gate.
+- Restored structured JSON errors for malformed and unknown CLI commands.
+
+## 0.9.1 — 2026-08-22
+
+- Fixed fresh external-director proposals so they bind the current project,
+  evidence and Trip Bible and can be refined without first generating a legacy
+  deterministic plan.
+- Rejected stale evidence/project plans, invalid media ranges, timeline overlap,
+  reversed event chains, mixed subjects and incident-only stories when matching
+  recovery evidence exists.
+- Kept chapter/location text and subtitle layers identical between candidate
+  preview and the applied final timeline, with a plan digest for safe retries.
+- Made Director Review creation idempotent until submission, counted only
+  submitted rounds, embedded review evidence references and rejected unknown
+  citations.
+- Converted decoded frames to a real gray8 analysis plane before native quality
+  metrics and perceptual hashing, fixing 10/12/16-bit HEVC interpretation.
+- Removed stale single-file executables when producing the preferred onedir
+  Windows build so the output directory cannot silently offer an older FACUT.
+
+## 0.9.0 — 2026-08-22
+
+- Added Scene Atlas with stable 12-asset review batches, content-hash resume,
+  partial idempotent submissions, explicit exclusions and adaptive deep review.
+- Added StoryGraph 3 external-director briefs and proposals with episodes,
+  events, causal constraints, visual motifs and a clearly labeled deterministic
+  fallback.
+- Added Opening Lab, Ending Lab and Continuity Guard for location, daypart,
+  motion, composition, B-roll, event-outcome and hard-stop checks.
+- Added a three-round evidence-bound Director Review Loop. Approved commands
+  apply as one atomic CutGraph revision and stale plans are rejected.
+- Added review-first Soundscape role inventory, ducking/mastering plans and
+  atomic approved settings without claiming unmeasured audio results.
+- Registered executable VLOG transitions and restrained effects; unsupported
+  anchor-dependent polish remains explicitly review-required.
+- Exposed the new workflow through CLI, Agent schemas, Recipes and loopback
+  JSON-RPC while keeping all visual interpretation external.
+
+## 0.8.3 — 2026-08-22
+
+- Updated Windows install and self-update to carry the complete portable ZIP,
+  including `facut_runtime`, with safe extraction, staged directory switching
+  and rollback; legacy single-file releases remain supported.
+- Bound StoryGraph and narration plans to a semantic Trip Bible digest so a
+  changed or rejected fact invalidates stale plans before timeline mutation.
+- Bound resolved Director Inbox items to source fingerprints and made status
+  reconstruction non-persistent, preventing stale decisions and query writes.
+- Reclaimed abandoned background-warmup locks and made `cleanram` verify that
+  the voice process actually stopped instead of reporting success on timeout.
+- Corrected the lightweight `cleanram` and `warmup` help syntax.
+
+## 0.8.2 — 2026-08-19
+
+- Added the optional C++20 `facut-native` sidecar for persistent batch probing,
+  targeted representative-frame extraction, cached waveforms, lightweight
+  quality metrics and media fingerprints.
+- Added `native doctor`, `native benchmark` and `analyze batch`, plus native
+  acceleration in `vlog prepare` with explicit `auto/native/python` selection.
+- Kept the versioned JSONL boundary process-safe: one native crash is restarted
+  once, then `auto` reports the failure and uses the Python/FFmpeg path.
+- Added an allowlisted Windows x64 bundle and installer support for the native
+  executable, replaceable LGPL FFmpeg DLLs and third-party notices. Models,
+  user media, voice data and fonts remain outside the application package.
+- Kept the Python project engine, StoryGraph, Agent contract and final rendering
+  authoritative; the native layer is optional acceleration, not a second editor.
+- Added continuous `analyze batch --jsonl-progress` events with current media,
+  completion rate and ETA; per-asset timeouts and failures remain isolated.
+- Added the public `daily-chat` delivery across CLI, Agent schema, JSON-RPC and
+  CosyVoice reference selection.
+- Added a quarantine/review/approve workflow for audio found in source videos.
+  Similarity alone never makes a recording synthesis-eligible; explicit
+  same-speaker confirmation is required and raw files remain unchanged.
+- Voice validation now separates file quality, synthesis usability and optional
+  style coverage instead of treating a fixed ten-minute target as one verdict.
+- Added default non-blocking background warmup for registered heavy services,
+  with per-service `autoload`, `warmup`, and explicit `cleanram --service`
+  controls. RAM cleanup never removes models, media caches, or recordings.
+- Added a lightweight console bootstrap for version and runtime lifecycle
+  commands; background warmup failure never blocks the requested edit command.
+- Exposed runtime status, warmup, selective cleanup and autoload configuration
+  to the Agent schema and JSON-RPC session.
+
 ## 0.8.1 — 2026-08-18
 
 - Registered atomic `vlog.apply` across Agent schema, batch, Recipe, and JSON-RPC surfaces.

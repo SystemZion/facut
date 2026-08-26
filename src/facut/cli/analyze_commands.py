@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -27,6 +28,158 @@ from facut.media.probe import probe_media
 analyze_app = typer.Typer(
     help="Analyze quality, scenes, beats, speech, travel metadata, and song metadata."
 )
+
+
+@analyze_app.command("batch")
+def analyze_batch(
+    ctx: typer.Context,
+    folder: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+    engine: Annotated[str, typer.Option("--engine", help="auto, native, or python.")] = "auto",
+    mode: Annotated[str, typer.Option("--mode", help="fast or deep native sampling.")] = "fast",
+    output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+    jobs: Annotated[int, typer.Option("--jobs", min=1, max=8)] = 3,
+    asset_timeout: Annotated[float, typer.Option("--asset-timeout", min=1)] = 180.0,
+    jsonl_progress: Annotated[
+        bool,
+        typer.Option("--jsonl-progress", help="Stream machine-readable progress events."),
+    ] = False,
+    full: Annotated[bool, typer.Option("--full", help="Return inline evidence instead of a compact file reference.")] = False,
+) -> None:
+    """Analyze a media tree with the persistent native sidecar when available."""
+
+    from facut.cli.main import emit
+
+    command = "analyze.batch"
+    try:
+        state = _state(ctx)
+        if jsonl_progress:
+            state.json_output = True
+
+        def report_progress(event: dict[str, Any]) -> None:
+            payload = {"command": command, **event}
+            if jsonl_progress:
+                typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            elif not state.quiet and not state.json_output and event.get("event") == "progress":
+                completed = int(event.get("completed", 0))
+                total = int(event.get("total", 0))
+                eta = float(event.get("eta_seconds", 0))
+                typer.echo(
+                    f"Analyzing {completed}/{total}: {event.get('media_id')} (ETA {eta:.0f}s)",
+                    err=True,
+                )
+        if engine not in {"auto", "native", "python"}:
+            raise ValueError("--engine must be auto, native, or python.")
+        if mode not in {"fast", "deep"}:
+            raise ValueError("--mode must be fast or deep.")
+        root = folder.expanduser().resolve()
+        cache = (output_directory or root / ".facut-native").expanduser().resolve()
+        from facut.native import collect_batch_inputs
+
+        inputs, collection = collect_batch_inputs(root, output_directory=cache, limit=limit)
+        if not inputs:
+            raise ValueError("No supported original video or image files were found.")
+        files = [Path(str(item["original_path"])) for item in inputs]
+        native_path = None
+        native_warning: str | None = None
+        if engine != "python":
+            from facut.native import (
+                NativeClient,
+                batch_failure_warnings,
+                compact_batch_result,
+                discover_native,
+            )
+
+            native_path = discover_native()
+            if native_path:
+                try:
+                    data = NativeClient(native_path).batch_scan(
+                        inputs,
+                        output_directory=cache,
+                        mode=mode,
+                        jobs=jobs,
+                        asset_timeout_seconds=asset_timeout,
+                        progress=report_progress,
+                    )
+                    payload = data if full else compact_batch_result(data)
+                    payload.update({
+                        "engine": "native", "executable": str(native_path),
+                        "asset_count": len(files), "collection": collection,
+                        "jobs": jobs, "asset_timeout_seconds": asset_timeout,
+                    })
+                    emit(
+                        _state(ctx),
+                        success_response(
+                            command,
+                            payload,
+                            warnings=batch_failure_warnings(payload),
+                        ),
+                        human=f"Analyzed {len(files)} assets with FACUT Native.",
+                    )
+                    return
+                except Exception as error:
+                    if engine == "native":
+                        raise
+                    native_warning = (
+                        "FACUT Native failed twice; the Python/FFmpeg fallback was used: "
+                        f"{error}"
+                    )
+            if engine == "native":
+                NativeClient()
+        results = []
+        failures = []
+        python_started = time.monotonic()
+        for index, path in enumerate(files, 1):
+            try:
+                results.append(
+                    analyze_quality(
+                        path,
+                        ffmpeg=state.config.tools.ffmpeg,
+                        ffprobe=state.config.tools.ffprobe,
+                    )
+                )
+            except Exception as error:
+                failure = {"source": str(path), "status": "error", "error": str(error)}
+                results.append(failure)
+                failures.append(failure)
+            elapsed = max(time.monotonic() - python_started, 1e-9)
+            rate = index / elapsed
+            report_progress({
+                "event": "progress", "stage": "python.batch_scan",
+                "completed": index, "total": len(files), "progress": index / len(files),
+                "media_id": inputs[index - 1]["media_id"],
+                "elapsed_seconds": round(elapsed, 3),
+                "assets_per_second": round(rate, 3),
+                "eta_seconds": round((len(files) - index) / rate, 3),
+            })
+        from facut.native import batch_failure_warnings
+
+        payload = {
+            "engine": "python",
+            "asset_count": len(files),
+            "succeeded": len(files) - len(failures),
+            "failed": len(failures),
+            "failures": failures[:50],
+            "results": results,
+            "collection": collection,
+        }
+        failure_warnings = batch_failure_warnings(payload)
+        fallback_warnings = (
+            [native_warning or "FACUT Native was unavailable; the existing Python/FFmpeg path was used."]
+            if engine == "auto"
+            else []
+        )
+        emit(
+            state,
+            success_response(
+                command,
+                payload,
+                warnings=fallback_warnings + failure_warnings,
+            ),
+            human=f"Analyzed {len(files)} assets with the Python fallback.",
+        )
+    except Exception as error:
+        _abort(ctx, command, error)
 
 
 def _state(ctx: typer.Context):

@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from facut import __version__
 from facut.config import AppConfig
 from facut.media.cuda_runtime import configure_cuda_dll_directories
 
@@ -209,6 +208,14 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
     """Collect bounded diagnostics without decoding any user media."""
 
     warnings: list[str] = []
+    from facut.runtime_identity import runtime_identity
+
+    identity = runtime_identity()
+    if identity["path_shadowed"]:
+        warnings.append(
+            "PATH resolves FACUT to a different executable before this build: "
+            f"{identity['path_winner']}"
+        )
     cuda_dll_directories = configure_cuda_dll_directories()
     try:
         import ctranslate2
@@ -341,7 +348,7 @@ def collect_diagnostics(config: AppConfig) -> tuple[dict[str, Any], list[str]]:
     filters_to_check = ("xfade", "overlay", "scale", "concat", "loudnorm", "subtitles")
     return (
         {
-            "facut": {"version": __version__},
+            "facut": identity,
             "platform": {
                 "system": platform.system(),
                 "release": platform.release(),

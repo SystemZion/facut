@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import click
 from rich.console import Console
 from rich.table import Table
 
 from facut import __version__
 from facut.cli.doctor import collect_diagnostics, run_sample_render
 from facut.config import AppConfig, load_config
-from facut.exceptions import ExitCode, FacutError
+from facut.exceptions import ExitCode, FacutError, InvalidArgumentError
 from facut.logging_config import configure_logging
 from facut.responses import Response, error_response, success_response
 
@@ -39,11 +40,15 @@ class CliState:
     project: Path | None
     config: AppConfig
     logger: logging.Logger
+    requested_command: str | None = None
+    canonical_action: str | None = None
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"facut {__version__}")
+        from facut.runtime_identity import version_label
+
+        typer.echo(version_label())
         raise typer.Exit(ExitCode.SUCCESS)
 
 
@@ -102,6 +107,9 @@ def emit(
 ) -> None:
     """Respect global output mode for all command implementations."""
 
+    if state.requested_command:
+        response.requested_command = state.requested_command
+        response.canonical_action = state.canonical_action or response.command
     if state.json_output:
         typer.echo(response.as_json())
     elif not state.quiet and human:
@@ -113,6 +121,9 @@ def fail(state: CliState, command: str, error: FacutError) -> None:
 
     state.logger.error("%s: %s", command, error.message)
     response = error_response(command, error)
+    if state.requested_command:
+        response.requested_command = state.requested_command
+        response.canonical_action = state.canonical_action or command
     if state.json_output:
         typer.echo(response.as_json())
     else:
@@ -134,6 +145,22 @@ def help_command(ctx: typer.Context) -> None:
 
     if ctx.parent is not None:
         typer.echo(ctx.parent.get_help())
+
+
+@app.command("version")
+def version_command(ctx: typer.Context) -> None:
+    """Report version, build commit, artifact hash and PATH precedence."""
+
+    from facut.runtime_identity import runtime_identity, version_label
+
+    state: CliState = ctx.ensure_object(CliState)
+    data = runtime_identity()
+    emit(
+        state,
+        success_response("version", data),
+        human=version_label()
+        + (f"\nPATH winner: {data['path_winner']}" if data.get("path_winner") else ""),
+    )
 
 
 @app.command("doctor")
@@ -203,14 +230,38 @@ def main() -> None:
 
         _daemon_entry(sys.argv[2:])
         return
-    app()
+    try:
+        result = app(standalone_mode=False)
+        # Click converts ``Exit`` into its numeric return value when
+        # ``standalone_mode`` is disabled.  Preserve that code at the real
+        # console boundary so agents never mistake a structured error for a
+        # successful command.
+        if isinstance(result, int) and result != ExitCode.SUCCESS:
+            raise SystemExit(result)
+    except click.ClickException as error:
+        # Click normally prints usage prose before FACUT gets control. Agents
+        # require the global --json contract even for unknown/malformed CLI
+        # invocations, so normalize parser failures at the console boundary.
+        if "--json" in sys.argv[1:]:
+            domain_error = InvalidArgumentError(
+                error.format_message(),
+                suggestion="Run `facut help` or `facut schema commands`.",
+            )
+            typer.echo(error_response("cli", domain_error).as_json())
+        else:
+            error.show()
+        raise SystemExit(error.exit_code) from error
+    except click.exceptions.Exit as error:
+        raise SystemExit(error.exit_code) from error
 
 
 # The console-script imports this module before calling ``main``.  Avoid loading
 # every editing subsystem for the eager version query; this keeps automation
 # health checks fast without changing normal Typer registration or tests.
 if len(sys.argv) == 2 and sys.argv[1] == "--version":
-    typer.echo(f"facut {__version__}")
+    from facut.runtime_identity import version_label
+
+    typer.echo(version_label())
     raise SystemExit(ExitCode.SUCCESS)
 
 
@@ -257,6 +308,7 @@ from facut.cli.travel_commands import map_app, reframe_app  # noqa: E402
 from facut.cli.voice_commands import voice_app  # noqa: E402
 from facut.cli.recipe_commands import recipe_app  # noqa: E402
 from facut.cli.vlog_commands import vlog_app  # noqa: E402
+from facut.cli.native_commands import native_app  # noqa: E402
 from facut.cli.font_commands import font_app  # noqa: E402
 from facut.cli.typography_commands import typography_app  # noqa: E402
 from facut.cli.library_commands import library_app, style_app  # noqa: E402
@@ -264,7 +316,23 @@ from facut.cli.download_commands import download_command  # noqa: E402
 from facut.cli.install_commands import (  # noqa: E402
     install_command,
     models_app,
+    release_app,
     update_command,
+)
+from facut.cli.runtime_commands import (  # noqa: E402
+    autoload_app,
+    cleanram_command,
+    warmup_command,
+)
+from facut.cli.shortcut_commands import (  # noqa: E402
+    check_app,
+    cut_command,
+    defaults_app,
+    explain_command,
+    next_command,
+    resume_command,
+    say_command,
+    scan_command,
 )
 
 app.command("init")(init_command)
@@ -305,6 +373,7 @@ app.add_typer(voice_app, name="voice")
 app.add_typer(recipe_app, name="recipe")
 app.add_typer(effect_app, name="effect")
 app.add_typer(vlog_app, name="vlog")
+app.add_typer(native_app, name="native")
 app.add_typer(font_app, name="font")
 app.add_typer(typography_app, name="typography")
 app.add_typer(library_app, name="library")
@@ -313,6 +382,21 @@ app.command("download")(download_command)
 app.command("install")(install_command)
 app.command("update")(update_command)
 app.add_typer(models_app, name="models")
+app.add_typer(release_app, name="release")
+app.command("cleanram")(cleanram_command)
+app.command("warmup")(warmup_command)
+app.add_typer(autoload_app, name="autoload")
+app.command("scan")(scan_command)
+app.command("cut")(cut_command)
+app.command("resume")(resume_command)
+app.command("next")(next_command)
+app.command("say")(say_command)
+app.command(
+    "explain",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(explain_command)
+app.add_typer(check_app, name="check")
+app.add_typer(defaults_app, name="defaults")
 
 
 if __name__ == "__main__":

@@ -32,9 +32,25 @@ FACUT 的主线是日常 VLOG、旅行、City Walk、亲子出行与周末记录
 - 对话增强、风噪/低频/混响处理、环境声延续与更完整的 J-cut/L-cut 工作流。
 - 每个口播区间生成调整前/后 A/B 试听，明确 apply 后才写入可撤销分支。
 
-## 0.9 — 旅行包装与多平台派生
+## 0.8.2 — Native 与声音收口
 
-- GPX/KML 地图模板、Day/地点卡、旅程数据动画和照片缓推。
-- 主体跟踪横竖自动重构图。
-- 一个主序列派生 YouTube/B站、Shorts、预告、无字幕母版和字幕文件。
-- 自动章节、封面候选和完整 QC/发布包。
+- 1000 条素材压力测试、逐素材超时、失败隔离、恢复和 JSONL 实时进度。
+- `daily-chat` 日常聊天风格贯通 CLI、Provider、Agent Schema 与 JSON-RPC。
+- 相似声音先隔离、人工确认同一说话人后才允许进入授权档案。
+- 声音 QC 分离文件质量、合成可用性和六种风格覆盖率。
+
+## 0.9 — Director Loop
+
+- Scene Atlas 将大素材库组成稳定批次，支持部分提交、断点恢复和自适应深审。
+- StoryGraph 3 接收外部AI导演提案，验证旅行章节、事件因果、人物结果和证据引用；原启发式计划明确标记为确定性基线。
+- Opening/Ending Lab、Continuity Guard 与最多三轮 Director Review 已形成可审计修订闭环。
+- Soundscape 按六类声音角色生成审核优先的闪避和母版设置，不伪造未测量的响度或降噪结果。
+- 可确定执行的地点板、动作匹配、克制叠化和喜剧强调进入RenderGraph；需要眼睛或物体锚点的效果继续要求外部证据。
+- CLI、Agent Schema、Recipe、批处理和JSON-RPC保持同一能力面。
+
+## 0.10 — Travel Delivery
+
+- GPX/KML路线动画与地点数据卡。
+- 一个4K主序列派生横版、Shorts、预告、无字幕母版、章节和封面候选。
+- 主体轨迹由外部视觉AI提供，FACUT只做确定性横竖重构图。
+- RenderGraph继续优化跨版本缓存复用和变化区间审片。

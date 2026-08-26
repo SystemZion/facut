@@ -246,13 +246,17 @@ class GraphBuilder:
             asset = self.project.find_media(clip.media_id)
             if asset is None:
                 raise ValueError(f"Clip {clip.id} references missing media {clip.media_id}.")
-            source = self._source(asset.path)
+            original_source = self._source(asset.path)
+            source = original_source
             if preview and asset.proxy_path:
                 proxy = self._source(asset.proxy_path)
                 if proxy.is_file():
                     source = proxy
             if not source.is_file():
                 raise FileNotFoundError(f"Media file is offline: {asset.original_name}")
+            if not original_source.is_file():
+                raise FileNotFoundError(f"Original media file is offline: {asset.original_name}")
+            video_input_index = len(paths)
             paths.append(source)
             transform = clip.transform
             if asset.kind == MediaKind.IMAGE:
@@ -266,7 +270,7 @@ class GraphBuilder:
             speed = abs(clip.speed)
             if clip.freeze_frame is not None:
                 video_chain = [
-                    f"[{index}:v:0]trim=start={_fmt(clip.freeze_frame)}:"
+                    f"[{video_input_index}:v:0]trim=start={_fmt(clip.freeze_frame)}:"
                     f"end={_fmt(clip.freeze_frame + 1 / fps)}",
                     "setpts=PTS-STARTPTS",
                     f"tpad=stop_mode=clone:stop_duration={_fmt(clip.duration)}",
@@ -274,7 +278,7 @@ class GraphBuilder:
                 ]
             else:
                 video_chain = [
-                    f"[{index}:v:0]trim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
+                    f"[{video_input_index}:v:0]trim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
                     "setpts=PTS-STARTPTS",
                 ]
             if clip.speed < 0:
@@ -354,8 +358,16 @@ class GraphBuilder:
                 and not clip.muted
                 and not clip.audio.muted
             ):
+                # Proxies are picture-only accelerators. Their audio is never
+                # trusted: DJI LRF files can expose a valid but silent stream.
+                # Add the original as a separate audio input during preview.
+                audio_input_index = video_input_index
+                if source != original_source:
+                    audio_input_index = len(paths)
+                    paths.append(original_source)
+                    inputs.extend(["-i", str(original_source)])
                 audio_chain = [
-                    f"[{index}:a:0]atrim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
+                    f"[{audio_input_index}:a:0]atrim=start={_fmt(clip.source_in)}:end={_fmt(clip.source_out)}",
                     "asetpts=PTS-STARTPTS",
                 ]
                 if clip.speed < 0:
@@ -413,7 +425,6 @@ class GraphBuilder:
         for index in range(1, len(clips)):
             previous, clip = clips[index - 1], clips[index]
             transition = transitions.get((previous.id, clip.id))
-            overlap = previous.end - clip.timeline_start
             out_v, out_a = f"vc{index}", f"ac{index}"
             if transition is not None:
                 definition = transition_registry.get(transition.type)

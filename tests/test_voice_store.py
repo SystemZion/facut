@@ -218,7 +218,7 @@ def test_selector_alias_rename_and_ambiguous_display_name(tmp_path: Path) -> Non
         store.resolve("旅行旁白")
     assert ambiguous.value.code == "VOICE_AMBIGUOUS"
 
-    aliased = store.set_alias(first.id, "zion")
+    store.set_alias(first.id, "zion")
     assert store.resolve("ZION").id == first.id
     renamed = store.rename("zion", "Zion 自然口播")
     assert renamed.id == first.id
@@ -270,3 +270,59 @@ def test_profile_metadata_updates_do_not_modify_raw_samples(tmp_path: Path) -> N
     store.set_default("raw-voice")
 
     assert sample_path.read_bytes() == before
+
+
+def test_candidate_audio_is_quarantined_until_same_speaker_confirmation(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    profile = store.create(
+        "Roger",
+        speaker_id="self",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    source = _wav(tmp_path / "possible-chat.wav", seconds=3.2)
+    original = source.read_bytes()
+    candidate = store.propose_candidate(
+        profile.id,
+        source,
+        transcript="其实这里还挺好看的。",
+        category="conversation",
+        delivery="daily-chat",
+        source_media_id="media_01",
+        source_start=12.0,
+        source_end=15.2,
+    )
+    assert candidate.status == "pending"
+    assert store.get(profile.id).samples == []
+    assert candidate.public_dict()["confirmation_statement_recorded"] is False
+    with pytest.raises(PermissionError):
+        store.approve_candidate(
+            candidate.id,
+            speaker_confirmed=False,
+            confirmation_statement="This has not actually been confirmed.",
+        )
+    approved, updated = store.approve_candidate(
+        candidate.id,
+        speaker_confirmed=True,
+        confirmation_statement="I confirm this recording is the authorized speaker Roger.",
+    )
+    assert approved.status == "approved"
+    assert approved.public_dict()["confirmation_statement_recorded"] is True
+    assert "confirmation_statement" not in approved.public_dict()
+    assert len(updated.samples) == 1
+    assert updated.samples[0].delivery == "daily-chat"
+    assert source.read_bytes() == original
+
+
+def test_rejected_candidate_never_enters_profile_samples(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    profile = store.create(
+        "Candidate review",
+        speaker_id="self",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    candidate = store.propose_candidate(profile.id, _wav(tmp_path / "not-speaker.wav"))
+    rejected = store.reject_candidate(candidate.id, reason="The speaker is another person.")
+    assert rejected.status == "rejected"
+    assert store.get(profile.id).samples == []

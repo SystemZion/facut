@@ -95,12 +95,19 @@ def test_generate_plan_is_strict_and_never_fakes_provider(tmp_path) -> None:
             ]
         },
         style="weekend-vlog",
+        fact_policy={
+            "allowed_facts": ["地点是林芝"],
+            "withheld_uncertain_facts": ["当天有雨"],
+            "rule": "Only confirmed facts may be asserted.",
+        },
     )
     assert plan.provider == "deterministic"
     assert plan.style == "weekend-vlog"
     assert plan.lines[0].status == NarrationLineStatus.DRAFT
     assert plan.lines[0].candidates[0].source == "deterministic"
     assert plan.lines[0].draft_text == plan.lines[0].selected_text
+    assert plan.fact_policy["allowed_facts"] == ["地点是林芝"]
+    assert plan.fact_policy["withheld_uncertain_facts"] == ["当天有雨"]
     with pytest.raises(NarrationProviderNotConfigured) as error:
         generate_narration_plan(document, {"observations": []}, provider="imaginary-llm")
     assert error.value.code == "PROVIDER_NOT_CONFIGURED"
@@ -215,3 +222,32 @@ def test_stale_plan_is_blocked_before_mutation(tmp_path) -> None:
     with pytest.raises(NarrationPlanError, match="targets revision 0"):
         CommandEngine(manager).execute("narration.apply", {"plan_path": str(path)})
     assert manager.require_document().revision == 1
+
+
+def test_trip_bible_change_blocks_narration_apply(tmp_path) -> None:
+    from facut.vlog.context import fact_policy_sha256, save_trip_bible
+
+    manager = ProjectManager.create(tmp_path / "project")
+    policy = {
+        "trip_name": "trip",
+        "confirmed_people": [],
+        "confirmed_places": [],
+        "confirmed_dates": [],
+        "glossary": {},
+        "allowed_facts": ["地点是林芝"],
+        "withheld_uncertain_facts": [],
+        "rejected_facts": [],
+        "forbidden_claims": [],
+        "rule": "confirmed only",
+    }
+    plan = NarrationPlan(
+        project_id=manager.require_document().project.id,
+        project_revision=0,
+        fact_policy=policy,
+        fact_policy_sha256=fact_policy_sha256(policy),
+        lines=[_line("stale-fact", tmp_path / "never-read.wav")],
+    )
+    path = save_narration_plan(plan, tmp_path / "fact-plan.json")
+    save_trip_bible(manager.project_dir, {"trip_name": "trip", "forbidden_claims": ["地点是林芝"]})
+    with pytest.raises(NarrationPlanError, match="Trip Bible changed"):
+        CommandEngine(manager).execute("narration.apply", {"plan_path": str(path)})

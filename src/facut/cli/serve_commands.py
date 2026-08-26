@@ -33,8 +33,7 @@ from facut.voice import (
     VoiceProfileStore,
     build_recording_plan,
     provider_status,
-    synthesize_with_provider,
-    validate_voice_samples,
+    validate_voice_profile,
 )
 from facut.voice.say import synthesize_voice_say
 from facut.voice.service import voice_service_status
@@ -45,6 +44,15 @@ def _write(payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
     )
     sys.stdout.flush()
+
+
+def _configure_stdio_utf8() -> None:
+    """Keep the Agent JSONL transport UTF-8 on Windows pipes and consoles."""
+
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def _success(request_id: Any, result: Any) -> dict[str, Any]:
@@ -86,6 +94,7 @@ def serve_command(
 
     from facut.cli.main import CliState
 
+    _configure_stdio_utf8()
     state: CliState = ctx.ensure_object(CliState)
     try:
         manager = manager_for(state)
@@ -135,14 +144,30 @@ def serve_command(
             if not isinstance(params, dict):
                 raise ValueError("Request params must be an object.")
             if method in {
-                "voice.say", "narration.synthesize", "vlog.prepare",
+                "voice.say", "voice.sample.propose", "voice.sample.list",
+                "voice.sample.show", "voice.sample.approve", "voice.sample.reject",
+                "voice.profile.sample.remove",
+                "narration.synthesize", "vlog.prepare",
                 "vlog.inspect.next", "vlog.observe", "vlog.status", "vlog.plan",
+                "vlog.atlas.build", "vlog.atlas.status", "vlog.inspect.batch",
+                "vlog.observe.batch",
+                "vlog.story.brief", "vlog.story.submit", "vlog.story.validate",
+                "vlog.opening.plan", "vlog.ending.plan", "vlog.continuity.check",
+                "vlog.review.create", "vlog.review.submit", "vlog.review.plan",
+                "vlog.review.apply", "vlog.soundscape.analyze",
+                "vlog.soundscape.plan", "vlog.soundscape.apply",
                 "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
+                "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
+                "vlog.bible.show", "vlog.bible.import", "vlog.bible.audit",
+                "vlog.bible.rename",
                 "subtitle.glossary.add", "typography.plan", "typography.apply",
                 "font.scan", "font.register", "font.match", "font.audit",
                 "vlog.preview", "vlog.build", "library.music.add", "library.sfx.add",
                 "library.search", "library.audit", "style.list", "style.describe",
                 "style.validate",
+                "native.doctor", "analyze.batch",
+                "runtime.status", "runtime.cleanram", "runtime.warmup",
+                "runtime.autoload.configure",
             }:
                 _validate_declared_params(method, params)
             if method == "ping":
@@ -156,6 +181,147 @@ def serve_command(
                 return
             elif method == "project.snapshot":
                 result = compact_project(manager.require_document())
+            elif method == "native.doctor":
+                from facut.native import NativeClient, discover_native
+
+                native_path = discover_native()
+                data = NativeClient(native_path).doctor()
+                data["executable"] = str(native_path) if native_path else None
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.status":
+                from facut.runtime_control import autoload_status
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": autoload_status(), "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.cleanram":
+                from facut.runtime_control import clean_services
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": clean_services(
+                        params["services"], dry_run=bool(params.get("dry_run", False))
+                    ),
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.warmup":
+                from facut.runtime_control import warm_services
+
+                result = {
+                    "status": "success", "command": method,
+                    "data": warm_services(params["services"]),
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "runtime.autoload.configure":
+                from facut.runtime_control import clean_services, configure_autoload
+
+                data = configure_autoload(
+                    str(params["service"]), enabled=bool(params["enabled"])
+                )
+                if not params["enabled"] and bool(params.get("stop_now", False)):
+                    data["stop"] = clean_services([str(params["service"])])
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "analyze.batch":
+                from facut.analysis import analyze_quality
+                from facut.native import (
+                    NativeClient,
+                    batch_failure_warnings,
+                    collect_batch_inputs,
+                    compact_batch_result,
+                    discover_native,
+                )
+
+                engine_name = str(params.get("engine", "auto"))
+                mode = str(params.get("mode", "fast"))
+                folder = Path(str(params["folder"])).expanduser().resolve()
+                output_directory = Path(str(
+                    params.get("output_directory") or folder / ".facut-native"
+                )).expanduser().resolve()
+                inputs, collection = collect_batch_inputs(
+                    folder,
+                    output_directory=output_directory,
+                    limit=int(params["limit"]) if params.get("limit") is not None else None,
+                )
+                files = [Path(str(item["original_path"])) for item in inputs]
+                jobs = int(params.get("jobs", 3))
+                asset_timeout = float(params.get("asset_timeout", 180.0))
+                native_path = discover_native() if engine_name != "python" else None
+                warnings = []
+                if native_path:
+                    try:
+                        full_data = NativeClient(native_path).batch_scan(
+                            inputs,
+                            output_directory=output_directory,
+                            mode=mode,
+                            jobs=jobs,
+                            asset_timeout_seconds=asset_timeout,
+                        )
+                        data = compact_batch_result(full_data)
+                        data.update({
+                            "engine": "native", "asset_count": len(files),
+                            "collection": collection, "jobs": jobs,
+                            "asset_timeout_seconds": asset_timeout,
+                        })
+                        warnings.extend(batch_failure_warnings(data))
+                    except Exception as error:
+                        if engine_name == "native":
+                            raise
+                        warnings.append(
+                            "FACUT Native failed twice; Python/FFmpeg fallback was used: "
+                            f"{error}"
+                        )
+                        native_path = None
+                elif engine_name == "native":
+                    NativeClient()
+                if not native_path and engine_name != "native":
+                    results = []
+                    failures = []
+                    for path in files:
+                        try:
+                            results.append(
+                                analyze_quality(
+                                    path,
+                                    ffmpeg=state.config.tools.ffmpeg,
+                                    ffprobe=state.config.tools.ffprobe,
+                                )
+                            )
+                        except Exception as error:
+                            failure = {
+                                "source": str(path),
+                                "status": "error",
+                                "error": str(error),
+                            }
+                            results.append(failure)
+                            failures.append(failure)
+                    data = {
+                        "engine": "python",
+                        "asset_count": len(files),
+                        "succeeded": len(files) - len(failures),
+                        "failed": len(failures),
+                        "failures": failures[:50],
+                        "results": results,
+                        "collection": collection,
+                    }
+                    warnings.extend(batch_failure_warnings(data))
+                    if engine_name == "auto" and not warnings:
+                        warnings.append("FACUT Native was unavailable; Python/FFmpeg fallback was used.")
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": warnings, "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
             elif method == "agent.capabilities":
                 result = capabilities()
             elif method == "agent.schema":
@@ -462,6 +628,8 @@ def serve_command(
                     "project_revision": manager.require_document().revision,
                 }
             elif method == "narration.generate":
+                from facut.vlog import load_trip_bible, trip_bible_fact_policy
+
                 output = Path(str(params["output"])).expanduser().resolve()
                 if output.exists() and not bool(params.get("overwrite", False)):
                     raise FileExistsError(f'Output "{output}" already exists; use overwrite=true.')
@@ -473,6 +641,12 @@ def serve_command(
                     provider=str(params.get("provider", "deterministic")),
                     max_lines=int(params.get("max_lines", 12)),
                     minimum_confidence=float(params.get("minimum_confidence", 0.55)),
+                    fact_policy=trip_bible_fact_policy(
+                        load_trip_bible(
+                            manager.project_dir,
+                            default_name=manager.require_document().project.name,
+                        )
+                    ),
                 )
                 save_narration_plan(plan, output)
                 data = plan.model_dump(mode="json")
@@ -484,7 +658,17 @@ def serve_command(
                 }
             elif method in {
                 "vlog.prepare", "vlog.inspect.next", "vlog.observe", "vlog.status",
+                "vlog.atlas.build", "vlog.atlas.status", "vlog.inspect.batch",
+                "vlog.observe.batch",
                 "vlog.plan", "vlog.compare", "vlog.refine",
+                "vlog.story.brief", "vlog.story.submit", "vlog.story.validate",
+                "vlog.opening.plan", "vlog.ending.plan", "vlog.continuity.check",
+                "vlog.review.create", "vlog.review.submit", "vlog.review.plan",
+                "vlog.review.apply", "vlog.soundscape.analyze",
+                "vlog.soundscape.plan", "vlog.soundscape.apply",
+                "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
+                "vlog.bible.show", "vlog.bible.import", "vlog.bible.audit",
+                "vlog.bible.rename",
             }:
                 from facut.media.proxy_manager import ProxyManager
                 from facut.vlog import (
@@ -493,12 +677,44 @@ def serve_command(
                     director_status,
                     ingest_observations,
                     import_source_resumable,
+                    load_trip_bible,
                     next_inspection_task,
+                    next_inbox_items,
                     prepare_evidence_manifest,
+                    rebuild_director_inbox,
                     refine_story_candidate,
+                    resolve_inbox_item,
+                    save_trip_bible,
+                )
+                from facut.vlog.context import audit_trip_bible, rename_trip_entity
+                from facut.vlog.labs import (
+                    build_story_brief,
+                    check_continuity,
+                    plan_endings,
+                    plan_openings,
+                    submit_story_proposal,
+                    validate_story_plan,
+                )
+                from facut.vlog.atlas import (
+                    build_scene_atlas,
+                    ingest_atlas_observations,
+                    next_atlas_inspection_batch,
+                    scene_atlas_status,
+                )
+                from facut.vlog.review import (
+                    apply_review,
+                    create_review,
+                    plan_review,
+                    submit_review,
+                )
+                from facut.vlog.soundscape import (
+                    analyze_soundscape,
+                    apply_soundscape_plan,
+                    plan_soundscape,
                 )
 
                 if method == "vlog.prepare":
+                    native_warnings = []
                     source_value = params.get("source")
                     if source_value:
                         source = Path(str(source_value)).expanduser().resolve()
@@ -511,14 +727,99 @@ def serve_command(
                             ffmpeg=state.config.tools.ffmpeg,
                             ffprobe=state.config.tools.ffprobe,
                         ).scan(search_directories=[source] if source else None, link=True)
+                    engine_name = str(params.get("engine", "auto"))
+                    native_mode = str(params.get("native_mode", "fast"))
+                    native_results = None
+                    if engine_name != "python":
+                        from facut.native import NativeClient, discover_native, scan_project_media
+
+                        native_path = discover_native()
+                        if native_path:
+                            try:
+                                native_payload = scan_project_media(
+                                    manager, mode=native_mode, executable=native_path
+                                )
+                                native_results = {
+                                    item["media_id"]: item
+                                    for item in native_payload.get("results", [])
+                                    if item.get("media_id")
+                                }
+                            except Exception as error:
+                                if engine_name == "native":
+                                    raise
+                                native_warnings.append(
+                                    "FACUT Native failed twice; vlog preparation used the "
+                                    f"Python/FFmpeg path: {error}"
+                                )
+                        elif engine_name == "native":
+                            NativeClient()
                     data = prepare_evidence_manifest(
                         manager,
                         ffmpeg=state.config.tools.ffmpeg,
                         generate_frames=bool(params.get("frames", True)),
                         batch_size=int(params.get("batch_size", 12)),
+                        native_results=native_results,
                     )
+                    data["scene_atlas"] = build_scene_atlas(
+                        manager, batch_size=int(params.get("batch_size", 12))
+                    )
+                    data["analysis_engine"] = "native" if native_results is not None else "python"
+                    if native_warnings:
+                        data["warnings"] = [*data.get("warnings", []), *native_warnings]
                 elif method == "vlog.inspect.next":
                     data = next_inspection_task(manager.project_dir)
+                elif method == "vlog.atlas.build":
+                    data = build_scene_atlas(
+                        manager,
+                        batch_size=int(params.get("batch_size", 12)),
+                        sampling=str(params.get("sampling", "adaptive")),
+                        max_gap=float(params.get("max_gap", 15.0)),
+                    )
+                elif method == "vlog.atlas.status":
+                    data = scene_atlas_status(manager.project_dir)
+                elif method == "vlog.inspect.batch":
+                    data = next_atlas_inspection_batch(
+                        manager.project_dir, task_id=params.get("task_id")
+                    )
+                elif method == "vlog.observe.batch":
+                    payload = {
+                        "observations": params["observations"],
+                        "asset_hashes": params.get("asset_hashes"),
+                    }
+                    data = ingest_atlas_observations(
+                        manager.require_document(),
+                        manager.project_dir,
+                        payload,
+                        task_id=params.get("task_id"),
+                    )
+                elif method == "vlog.inbox.next":
+                    data = next_inbox_items(
+                        manager.project_dir, limit=int(params.get("limit", 8))
+                    )
+                elif method == "vlog.inbox.list":
+                    data = rebuild_director_inbox(manager.project_dir)
+                elif method == "vlog.inbox.resolve":
+                    data = resolve_inbox_item(
+                        manager.project_dir, str(params["item_id"]),
+                        resolution=str(params["resolution"]),
+                    )
+                elif method == "vlog.bible.show":
+                    data = load_trip_bible(
+                        manager.project_dir,
+                        default_name=manager.require_document().project.name,
+                    ).model_dump(mode="json")
+                elif method == "vlog.bible.import":
+                    data = save_trip_bible(manager.project_dir, dict(params["bible"]))
+                    data["director_inbox"] = rebuild_director_inbox(manager.project_dir)
+                elif method == "vlog.bible.audit":
+                    data = audit_trip_bible(manager.project_dir)
+                elif method == "vlog.bible.rename":
+                    data = rename_trip_entity(
+                        manager.project_dir,
+                        str(params["entity"]),
+                        str(params["new_name"]),
+                        kind=str(params.get("kind", "auto")),
+                    )
                 elif method == "vlog.observe":
                     data = ingest_observations(
                         manager.require_document(),
@@ -535,6 +836,55 @@ def serve_command(
                         style=str(params.get("style", "natural-vlog")),
                         target_duration=float(params.get("target_duration", 480)),
                     ).model_dump(mode="json")
+                elif method == "vlog.story.brief":
+                    data = build_story_brief(manager.project_dir)
+                elif method == "vlog.story.submit":
+                    data = submit_story_proposal(
+                        manager.project_dir, dict(params["proposal"])
+                    ).model_dump(mode="json")
+                elif method == "vlog.story.validate":
+                    data = validate_story_plan(manager.project_dir)
+                elif method == "vlog.opening.plan":
+                    data = plan_openings(manager.project_dir)
+                elif method == "vlog.ending.plan":
+                    data = plan_endings(manager.project_dir)
+                elif method == "vlog.continuity.check":
+                    data = check_continuity(
+                        manager.project_dir, params.get("candidate_id")
+                    )
+                elif method == "vlog.review.create":
+                    data = create_review(
+                        manager, str(params.get("review_pass", "story"))
+                    )
+                elif method == "vlog.review.submit":
+                    data = submit_review(manager, dict(params["submission"]))
+                elif method == "vlog.review.plan":
+                    data = plan_review(manager, dict(params["submission"]))
+                elif method == "vlog.review.apply":
+                    data = apply_review(
+                        manager,
+                        dict(params["plan"]),
+                        approved_only=bool(params.get("approved_only", True)),
+                    )
+                elif method == "vlog.soundscape.analyze":
+                    data = analyze_soundscape(
+                        manager,
+                        measure=bool(params.get("measure", False)),
+                        ffmpeg=state.config.tools.ffmpeg,
+                    )
+                elif method == "vlog.soundscape.plan":
+                    data = plan_soundscape(
+                        manager,
+                        style=str(params.get("style", "natural-vlog")),
+                        target_lufs=float(params.get("target_lufs", -14.0)),
+                        true_peak_db=float(params.get("true_peak_db", -1.0)),
+                    )
+                elif method == "vlog.soundscape.apply":
+                    data = apply_soundscape_plan(
+                        manager,
+                        dict(params["plan"]),
+                        approved_only=bool(params.get("approved_only", True)),
+                    )
                 elif method == "vlog.compare":
                     data = compare_story_candidates(manager.project_dir)
                 else:
@@ -846,6 +1196,33 @@ def serve_command(
                         "require_cuda": bool(params.get("require_cuda", False)),
                     },
                 )
+                if bool(params.get("verify", False)):
+                    from facut.analysis.engine import transcribe_local
+                    from facut.voice.verification import verify_outputs
+
+                    model_path = state.config.models.resolve("srt_model")
+                    if not model_path.is_dir():
+                        raise FileNotFoundError(
+                            "TTS verification requires srt_model. Run `facut download srt_model`."
+                        )
+                    reports = verify_outputs(
+                        [item["output"] for item in data["outputs"]],
+                        str(params["text"]),
+                        required_entities=[str(item) for item in params.get("verify_entity", [])],
+                        minimum_similarity=float(params.get("verify_min_similarity", 0.70)),
+                        transcribe=lambda path: transcribe_local(
+                            path,
+                            model_path=model_path,
+                            language="zh",
+                            external_python=state.config.tools.analysis_python,
+                        ),
+                    )
+                    data["verification"] = reports
+                    if any(not item["passed"] for item in reports):
+                        raise ValueError(
+                            "TTS_ASR_MISMATCH: synthesized narration did not match this request; "
+                            "no final output was written."
+                        )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 for item, final_path in zip(data["outputs"], outputs, strict=True):
                     generated = Path(str(item["output"])).resolve()
@@ -858,24 +1235,87 @@ def serve_command(
                         temporary.unlink(missing_ok=True)
                     item["output"] = str(final_path)
                 result = {"status": "success", "command": method, "data": data, "warnings": data.get("warnings", []), "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.propose":
+                store = VoiceProfileStore()
+                candidate = store.propose_candidate(
+                    str(params["profile"]),
+                    str(params["source"]),
+                    transcript=params.get("transcript"),
+                    category=params.get("category"),
+                    delivery=params.get("delivery"),
+                    source_media_id=params.get("source_media_id"),
+                    source_start=params.get("source_start"),
+                    source_end=params.get("source_end"),
+                    identity_basis=str(params.get("identity_basis", "similarity")),
+                )
+                result = {"status": "success", "command": method, "data": {**candidate.public_dict(), "synthesis_eligible": False}, "warnings": ["Candidate audio is quarantined until the speaker is manually confirmed."], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.profile.sample.remove":
+                if not bool(params.get("confirm", False)):
+                    raise ValueError("Voice sample removal requires confirm=true.")
+                sample, trash_name = VoiceProfileStore().remove_sample(
+                    str(params["profile"]), str(params["sample_id"])
+                )
+                result = {
+                    "status": "success", "command": method,
+                    "data": {"sample_id": sample.id, "sha256": sample.sha256,
+                             "recoverable": True, "trash_name": trash_name,
+                             "derived_cache_cleared": True},
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method == "voice.sample.list":
+                store = VoiceProfileStore()
+                candidates = store.list_candidates(params.get("profile"))
+                if params.get("status") is not None:
+                    candidates = [item for item in candidates if item.status == params["status"]]
+                result = {"status": "success", "command": method, "data": {"count": len(candidates), "candidates": [item.public_dict() for item in candidates]}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.show":
+                candidate = VoiceProfileStore().get_candidate(str(params["candidate_id"]))
+                result = {"status": "success", "command": method, "data": candidate.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.approve":
+                candidate, profile = VoiceProfileStore().approve_candidate(
+                    str(params["candidate_id"]),
+                    speaker_confirmed=bool(params["speaker_confirmed"]),
+                    confirmation_statement=str(params["confirmation_statement"]),
+                )
+                result = {"status": "success", "command": method, "data": {"candidate": candidate.public_dict(), "profile_id": profile.id, "sample_count": len(profile.samples), "synthesis_eligible": True}, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method == "voice.sample.reject":
+                candidate = VoiceProfileStore().reject_candidate(
+                    str(params["candidate_id"]), reason=str(params["reason"])
+                )
+                result = {"status": "success", "command": method, "data": candidate.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.import":
                 store = VoiceProfileStore()
                 profile = store.import_samples(
                     store.resolve(str(params["profile_id"])).id,
                     [str(item) for item in params["samples"]],
                     transcript=params.get("transcript"),
+                    speaker_similarity=(
+                        float(params["speaker_similarity"])
+                        if params.get("speaker_similarity") is not None
+                        else None
+                    ),
+                    speaker_confirmed=bool(params.get("speaker_confirmed", False)),
+                    confirmation_statement=params.get("confirmation_statement"),
                 )
                 result = {"status": "success", "command": method, "data": profile.public_dict(), "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.validate":
                 store = VoiceProfileStore()
                 profile = store.resolve(str(params["profile_id"]))
-                data = validate_voice_samples(
+                data = validate_voice_profile(
+                    profile,
                     store.sample_paths(profile),
-                    recommended_total_seconds=float(params.get("recommended_seconds", 600)),
+                    recommended_total_seconds=float(params.get("recommended_seconds", 120)),
                 )
                 profile = store.set_status(
                     profile.id,
-                    {"pass": "ready", "warning": "warning", "fail": "invalid"}[data["status"]],
+                    (
+                        "invalid"
+                        if data["status"] == "fail"
+                        else "ready"
+                        if data["profile_assessment"]["synthesis_usable"]
+                        else "warning"
+                    ),
                 )
                 result = {"status": "success", "command": method, "data": {"profile_id": profile.id, "profile_status": profile.status, "report": data}, "warnings": [item["message"] for item in data["issues"]], "errors": [], "project_revision": manager.require_document().revision}
             elif method == "voice.profile.delete":

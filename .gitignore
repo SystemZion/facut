@@ -31,6 +31,7 @@ venv/
 /artifacts/
 /.playwright-cli/
 /output/
+/work/
 /demos/
 /providers/*/build/
 /tools/cosyvoice_smoke.py

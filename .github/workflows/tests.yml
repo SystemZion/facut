@@ -48,3 +48,50 @@ jobs:
 
       - name: Release privacy scan
         run: python tools/privacy_scan.py
+
+  native-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      FFMPEG_ARCHIVE: ffmpeg-n8.1.2-44-g7c533d0f86-win64-lgpl-shared-8.1.zip
+      FFMPEG_SHA256: c057a7b631a8425e6247ee2a632370045662229564aa1a2ca7ecd42c00123121
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Download pinned LGPL shared FFmpeg SDK
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/$env:FFMPEG_ARCHIVE"
+          curl.exe -L --fail --retry 5 --output $env:FFMPEG_ARCHIVE $url
+          $actual = (Get-FileHash -LiteralPath $env:FFMPEG_ARCHIVE -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:FFMPEG_SHA256) { throw "FFmpeg SDK SHA-256 mismatch: $actual" }
+          Expand-Archive -LiteralPath $env:FFMPEG_ARCHIVE -DestinationPath ffmpeg-sdk
+
+      - name: Build native accelerator
+        shell: pwsh
+        run: |
+          $ffRoot = (Get-ChildItem ffmpeg-sdk -Directory | Select-Object -First 1).FullName
+          powershell -ExecutionPolicy Bypass -File tools\build_native.ps1 -FFmpegRoot $ffRoot
+
+      - name: Native and Python bridge smoke test
+        shell: pwsh
+        run: |
+          python -m pip install -e "."
+          $ffRoot = (Get-ChildItem ffmpeg-sdk -Directory | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force native-smoke | Out-Null
+          & "$ffRoot\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "testsrc2=size=640x360:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 2 -c:v mpeg4 -c:a aac native-smoke\sample.mp4
+          & "$ffRoot\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "color=c=blue:size=640x360" -frames:v 1 native-smoke\photo.jpg
+          $env:FACUT_NATIVE = (Resolve-Path build\native-win64\facut-native.exe)
+          python -m facut --json native doctor
+          python -m facut --json analyze batch native-smoke --engine native --mode fast --output-directory native-smoke\results
+          $result = Get-Content -Raw -Encoding UTF8 native-smoke\results\native-results.json | ConvertFrom-Json
+          $photo = @($result.results | Where-Object { $_.kind -eq "image" })
+          if ($photo.Count -ne 1 -or @($photo[0].representative_frames).Count -ne 1) {
+            throw "FACUT Native did not produce one representative frame for the still image."
+          }

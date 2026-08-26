@@ -33,15 +33,16 @@ def test_delivery_instruction_and_pause_are_natural() -> None:
     assert _pause_seconds("一句话。") > _pause_seconds("半句话，")
 
 
-def test_five_user_styles_have_distinct_guidance() -> None:
-    styles = ["natural", "broadcast", "chat", "comedy", "excited"]
+def test_six_user_styles_have_distinct_guidance() -> None:
+    styles = ["natural", "broadcast", "chat", "daily-chat", "comedy", "excited"]
     instructions = [_instruction({}, style) for style in styles]
-    assert len(set(instructions)) == 5
+    assert len(set(instructions)) == 6
     assert "播音腔" in instructions[0]
     assert "信息感" in instructions[1]
     assert "朋友聊天" in instructions[2]
-    assert "笑意" in instructions[3]
-    assert "兴奋" in instructions[4]
+    assert "旅行现场" in instructions[3]
+    assert "笑意" in instructions[4]
+    assert "兴奋" in instructions[5]
 
 
 def test_cache_key_changes_with_delivery_and_candidate(tmp_path) -> None:

@@ -18,6 +18,10 @@ def new_voice_id() -> str:
     return f"voice_{uuid4().hex[:16].upper()}"
 
 
+def new_candidate_id() -> str:
+    return f"candidate_{uuid4().hex[:16].upper()}"
+
+
 class VoiceModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -41,6 +45,7 @@ class VoiceSample(VoiceModel):
     transcript: str | None = None
     category: str | None = Field(default=None, max_length=80)
     delivery: str | None = Field(default=None, max_length=80)
+    identity_verification: dict[str, str | float | bool] | None = None
     imported_at: datetime = Field(default_factory=_now)
 
     @field_validator("stored_path")
@@ -95,4 +100,50 @@ class VoiceProfile(VoiceModel):
         payload["consent"]["statement_sha256"] = hashlib.sha256(
             statement.encode("utf-8")
         ).hexdigest()
+        return payload
+
+
+class VoiceSampleCandidate(VoiceModel):
+    """Quarantined source audio that cannot influence synthesis before approval."""
+
+    version: str = "1.0"
+    id: str = Field(default_factory=new_candidate_id, pattern=r"^candidate_[A-Z0-9_]{4,64}$")
+    profile_id: str = Field(pattern=r"^voice_[A-Z0-9_]{4,64}$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stored_path: str
+    original_name: str
+    size: int = Field(ge=1)
+    duration: float = Field(gt=0)
+    sample_rate: int = Field(gt=0)
+    channels: int = Field(gt=0)
+    sample_width: int = Field(gt=0)
+    transcript: str | None = None
+    category: str | None = Field(default=None, max_length=80)
+    delivery: str | None = Field(default=None, max_length=80)
+    source_media_id: str | None = Field(default=None, max_length=120)
+    source_start: float | None = Field(default=None, ge=0)
+    source_end: float | None = Field(default=None, gt=0)
+    identity_basis: Literal["unknown", "similarity", "manual"] = "unknown"
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    speaker_confirmed: bool = False
+    confirmation_statement: str | None = Field(default=None, max_length=2000)
+    resolution_reason: str | None = Field(default=None, max_length=1000)
+    proposed_at: datetime = Field(default_factory=_now)
+    resolved_at: datetime | None = None
+
+    @field_validator("stored_path")
+    @classmethod
+    def relative_candidate_storage_only(cls, value: str) -> str:
+        normalized = value.replace("\\", "/")
+        if normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
+            raise ValueError("stored_path must be a safe relative path")
+        return normalized
+
+    def public_dict(self) -> dict:
+        payload = self.model_dump(mode="json")
+        statement = payload.pop("confirmation_statement", None)
+        payload["confirmation_statement_recorded"] = bool(statement)
+        payload["confirmation_statement_sha256"] = (
+            hashlib.sha256(statement.encode("utf-8")).hexdigest() if statement else None
+        )
         return payload

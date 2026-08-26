@@ -81,6 +81,13 @@ def timeline_add(
         typer.Option("--duration", help="Timeline duration; still images default to 5s."),
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    allow_protected_cut: Annotated[
+        bool,
+        typer.Option(
+            "--allow-protected-cut",
+            help="Allow a reviewed cut through a protected speech/event span.",
+        ),
+    ] = False,
 ) -> None:
     """Place a source range on a timeline track."""
 
@@ -96,6 +103,7 @@ def timeline_add(
         "at": at or "0",
         "append": append,
         "in": source_in,
+        "allow_protected_cut": allow_protected_cut,
     }
     if source_out is not None:
         params["out"] = source_out
@@ -393,8 +401,19 @@ def clip_split(
     at: Annotated[str, typer.Option("--at")],
     timeline_position: Annotated[bool, typer.Option("--timeline-position")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    allow_protected_cut: Annotated[bool, typer.Option("--allow-protected-cut")] = False,
 ) -> None:
-    _execute(ctx, "clip.split", {"clip_id": clip_id, "at": at, "timeline_position": timeline_position}, dry_run)
+    _execute(
+        ctx,
+        "clip.split",
+        {
+            "clip_id": clip_id,
+            "at": at,
+            "timeline_position": timeline_position,
+            "allow_protected_cut": allow_protected_cut,
+        },
+        dry_run,
+    )
 
 
 @clip_app.command("trim")
@@ -406,6 +425,7 @@ def clip_trim(
     source_in: Annotated[str | None, typer.Option("--in")] = None,
     source_out: Annotated[str | None, typer.Option("--out")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    allow_protected_cut: Annotated[bool, typer.Option("--allow-protected-cut")] = False,
 ) -> None:
     params = {
         "clip_id": clip_id,
@@ -413,6 +433,7 @@ def clip_trim(
         "end_delta": end,
         "source_in": source_in,
         "source_out": source_out,
+        "allow_protected_cut": allow_protected_cut,
     }
     _execute(ctx, "clip.trim", {key: value for key, value in params.items() if value is not None}, dry_run)
 

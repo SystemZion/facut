@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 from enum import Enum
@@ -132,6 +133,8 @@ class NarrationPlan(PlanModel):
     style: str = "natural-vlog"
     language: str = "zh-CN"
     lines: list[NarrationLine] = Field(default_factory=list)
+    fact_policy: dict[str, Any] = Field(default_factory=dict)
+    fact_policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     warnings: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
@@ -178,6 +181,16 @@ def narration_plan_from_suggestions(
                 ],
             )
         )
+    fact_policy = dict(suggestions.get("fact_policy") or {})
+    fact_digest = (
+        hashlib.sha256(
+            json.dumps(
+                fact_policy, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        if fact_policy
+        else None
+    )
     return NarrationPlan(
         project_id=document.project.id,
         project_revision=document.revision,
@@ -186,6 +199,8 @@ def narration_plan_from_suggestions(
         style=str(suggestions.get("style") or "natural-vlog"),
         language=str(suggestions.get("language") or "zh-CN"),
         lines=lines,
+        fact_policy=fact_policy,
+        fact_policy_sha256=fact_digest,
         warnings=list(suggestions.get("warnings") or []),
         limitations=list(suggestions.get("limitations") or []),
     )
@@ -253,6 +268,21 @@ def prepare_narration_apply(
             f"Narration plan targets revision {plan.project_revision}, but the project is at revision {document.revision}.",
             suggestion="Regenerate the narration plan, or explicitly allow a stale plan after reviewing every range.",
         )
+    if plan.fact_policy_sha256 is not None and not allow_stale:
+        from facut.vlog.context import (
+            fact_policy_sha256,
+            load_trip_bible,
+            trip_bible_fact_policy,
+        )
+
+        current_policy = trip_bible_fact_policy(
+            load_trip_bible(manager.project_dir, default_name=document.project.name)
+        )
+        if plan.fact_policy_sha256 != fact_policy_sha256(current_policy):
+            raise NarrationPlanError(
+                "The Trip Bible changed after this narration plan was generated.",
+                suggestion="Regenerate and review the narration plan before applying it.",
+            )
     if not preserve_original:
         raise NarrationPlanError(
             "Segment-level replacement of original sound is not implemented safely.",

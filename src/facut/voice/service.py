@@ -265,7 +265,23 @@ class ProviderWorker:
                 raise RuntimeError("Voice provider exited before synthesis.")
             self.process.stdin.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n")
             self.process.stdin.flush()
-            response = self._read_payload(timeout)
+            try:
+                response = self._read_payload(timeout)
+            except TimeoutError as error:
+                # The stream has lost request/response synchronization. Kill
+                # the worker before another request can enter; unique output
+                # directories also quarantine any write already in flight.
+                self.close()
+                try:
+                    self.start()
+                except Exception as restart_error:
+                    raise TimeoutError(
+                        "Voice provider timed out and could not be restarted: "
+                        f"{restart_error}"
+                    ) from error
+                raise TimeoutError(
+                    "Voice provider timed out; the worker was restarted and its late output discarded."
+                ) from error
             if response.get("status") == "error":
                 error = response.get("error") or {}
                 raise RuntimeError(str(error.get("message") or "Voice provider synthesis failed."))
@@ -686,7 +702,30 @@ def stop_voice_service(*, state_path: str | Path | None = None, timeout: float =
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and state_file.exists():
         time.sleep(0.05)
-    return {"protocol": SERVICE_PROTOCOL, "running": False, "stopped": True}
+    if not state_file.exists():
+        return {"protocol": SERVICE_PROTOCOL, "running": False, "stopped": True}
+    pid = int(state.get("pid") or 0)
+    if pid <= 0:
+        process_alive = False
+    else:
+        try:
+            os.kill(pid, 0)
+            process_alive = True
+        except OSError:
+            process_alive = False
+    if not process_alive:
+        state_file.unlink(missing_ok=True)
+        return {
+            "protocol": SERVICE_PROTOCOL,
+            "running": False,
+            "stopped": True,
+            "stale_state_removed": True,
+        }
+    raise VoiceServiceError(
+        "The voice service did not stop before the timeout.",
+        suggestion="Retry `facut cleanram --service voice`, then inspect `facut voice serve status`.",
+        details={"pid": pid, "timeout_seconds": timeout},
+    )
 
 
 def synthesize_with_voice_service(
@@ -753,7 +792,9 @@ def synthesize_with_voice_service(
     payload = _service_request(
         state, "/synthesize", payload={"request": request, "timeout": timeout}, timeout=timeout + 5
     )
-    return validate_provider_response(payload, destination, profile.id)
+    return validate_provider_response(
+        payload, destination, profile.id, request=request
+    )
 
 
 def _daemon_entry(argv: list[str] | None = None) -> None:

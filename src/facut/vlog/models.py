@@ -44,6 +44,23 @@ class EvidenceObservation(VlogModel):
     event_chain: str | None = None
     event_order: int | None = Field(default=None, ge=0)
     story_role: Literal["setup", "incident", "recovery", "outcome"] | None = None
+    episode_id: str | None = None
+    location_id: str | None = None
+    event_id: str | None = None
+    event_role: Literal[
+        "setup", "action", "reaction", "incident", "recovery", "outcome", "transition"
+    ] | None = None
+    causes: list[str] = Field(default_factory=list)
+    requires_before: list[str] = Field(default_factory=list)
+    requires_after: list[str] = Field(default_factory=list)
+    emotion: str | None = None
+    original_audio_quote: str | None = None
+    visual_motifs: list[str] = Field(default_factory=list)
+    movement_direction: Literal[
+        "left", "right", "up", "down", "in", "out", "static", "mixed"
+    ] | None = None
+    composition_signature: str | None = None
+    broll_topics: list[str] = Field(default_factory=list)
     provider: str = "external-agent"
     warnings: list[str] = Field(default_factory=list)
 
@@ -61,6 +78,17 @@ class StorySegment(VlogModel):
     evidence_frames: list[int] = Field(default_factory=list)
     preserve_original_audio: bool = False
     alternatives: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_source_range(self) -> "StorySegment":
+        if self.source_out <= self.source_in:
+            raise ValueError("source_out must be greater than source_in")
+        source_duration = self.source_out - self.source_in
+        if abs(self.duration - source_duration) > 0.05:
+            raise ValueError(
+                "duration must match source_out - source_in within 50 milliseconds"
+            )
+        return self
 
 
 class StoryCandidate(VlogModel):
@@ -82,6 +110,7 @@ class StoryPlan(VlogModel):
     version: Literal["2.0"] = "2.0"
     project_revision: int = Field(ge=0)
     evidence_sha256: str
+    trip_bible_sha256: str | None = None
     style: str
     target_duration: float = Field(gt=0)
     status: Literal["review_required", "ready"] = "review_required"
@@ -89,10 +118,15 @@ class StoryPlan(VlogModel):
     selected_candidate_id: str | None = None
     quality_weights: dict[str, float]
     warnings: list[str] = Field(default_factory=list)
+    generation_mode: Literal["deterministic-baseline", "external-director"] = (
+        "deterministic-baseline"
+    )
 
 
 def vlog_workflow_schema() -> dict[str, Any]:
     """Machine-readable workflow contract used by independent AI agents."""
+
+    from .context import DirectorInboxItem, TripBible
 
     return {
         "version": "1.0",
@@ -104,14 +138,35 @@ def vlog_workflow_schema() -> dict[str, Any]:
         },
         "steps": [
             {"action": "vlog.prepare", "mutates_project": True},
-            {"action": "vlog.inspect.next", "repeat_until": "pending_tasks == 0"},
-            {"action": "vlog.observe", "idempotent_by": "observation_id"},
-            {"action": "vlog.plan", "default_candidates": 3},
+            {"action": "vlog.atlas.build", "default_batch_size": 12},
+            {"action": "vlog.bible.import", "requires": "reviewed facts or an empty bible"},
+            {"action": "vlog.bible.audit", "requires": "zero blocking identity issues"},
+            {"action": "vlog.inbox.next", "repeat_until": "baseline and high-priority gaps resolved"},
+            {"action": "vlog.inspect.batch", "repeat_until": "atlas pending_tasks == 0"},
+            {"action": "vlog.observe.batch", "idempotent_by": "task_id and observation_id"},
+            {"action": "vlog.story.brief", "visual_provider": "external-agent"},
+            {"action": "vlog.story.submit", "preferred": True},
+            {"action": "vlog.plan", "fallback": "deterministic-baseline", "default_candidates": 3},
+            {"action": "vlog.continuity.check"},
+            {"action": "vlog.opening.plan", "default_candidates": 3},
+            {"action": "vlog.ending.plan", "default_candidates": 3},
             {"action": "vlog.compare"},
             {"action": "vlog.refine"},
             {"action": "vlog.apply", "requires": "ready candidate"},
+            {"action": "vlog.soundscape.analyze", "measure": True, "source": "original media"},
+            {"action": "vlog.soundscape.plan", "requires": "audition before approval"},
+            {"action": "vlog.review.create", "maximum_rounds": 3},
+            {"action": "vlog.review.apply", "requires": "approved deterministic edits"},
             {"action": "vlog.build", "requires": "ready candidate"},
         ],
         "evidence_schema": EvidenceObservation.model_json_schema(),
+        "director_inbox_schema": DirectorInboxItem.model_json_schema(),
+        "trip_bible_schema": TripBible.model_json_schema(),
         "story_plan_schema": StoryPlan.model_json_schema(),
+        "shortcut_examples": [
+            "facut scan <source> -p <project> --deep",
+            "facut cut <source> -o <review.mp4> -s comedy -l 8m --draft",
+            "facut next -p <project>",
+            "facut resume -p <project>",
+        ],
     }

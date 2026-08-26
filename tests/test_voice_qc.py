@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 import wave
 
-from facut.voice import validate_voice_samples
+from facut.voice import VoiceProfileStore, validate_voice_profile, validate_voice_samples
 
 
 def _write(
@@ -57,3 +57,23 @@ def test_short_profile_is_reported_without_false_success(tmp_path: Path) -> None
     )
     assert report["status"] == "warning"
     assert report["issues"][0]["code"] == "INSUFFICIENT_DURATION"
+
+
+def test_profile_assessment_separates_usability_from_optional_style_coverage(tmp_path: Path) -> None:
+    store = VoiceProfileStore(tmp_path / "voices")
+    profile = store.create(
+        "Roger",
+        speaker_id="self",
+        consent_relationship="self",
+        consent_statement="I confirm this is my own voice and authorize local synthesis.",
+    )
+    source = _write(tmp_path / "natural.wav", seconds=31)
+    profile = store.import_samples(profile.id, [source], delivery="natural")
+    report = validate_voice_profile(
+        profile, store.sample_paths(profile), recommended_total_seconds=120
+    )
+    assessment = report["profile_assessment"]
+    assert assessment["synthesis_usable"] is True
+    assert assessment["coverage_status"] == "partial"
+    assert "daily-chat" in assessment["missing_styles"]
+    assert assessment["derived_reference_processing"]["raw_samples_modified"] is False

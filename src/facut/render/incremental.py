@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -449,6 +448,7 @@ class IncrementalRenderer:
                     overwrite=False,
                     progress=segment_progress,
                 )
+                self.cache.commit(segment)
                 encoder = rendered.encoder
                 selected_hardware = rendered.hardware
                 warnings.extend(rendered.warnings)
