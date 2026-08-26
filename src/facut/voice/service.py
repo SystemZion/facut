@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http import HTTPStatus
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -18,8 +19,6 @@ import tempfile
 import threading
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import ProxyHandler, Request, build_opener
 
 from facut.exceptions import DependencyMissingError, FacutError
 
@@ -524,33 +523,34 @@ class VoiceServiceServer:
 def _service_request(
     state: dict[str, Any], path: str, *, payload: dict[str, Any] | None = None, timeout: float = 5.0
 ) -> dict[str, Any]:
-    url = f"http://{state['host']}:{int(state['port'])}{path}"
     content = json.dumps(payload, ensure_ascii=True).encode("ascii") if payload is not None else None
-    request = Request(
-        url,
-        data=content,
-        method="POST" if payload is not None else "GET",
-        headers={
-            "Authorization": f"Bearer {state['token']}",
-            **({"Content-Type": "application/json"} if content is not None else {}),
-        },
-    )
+    connection = HTTPConnection(str(state["host"]), int(state["port"]), timeout=timeout)
     try:
-        # Loopback control traffic must never inherit a corporate/system proxy.
-        # Besides leaking the bearer token, proxy discovery can make localhost
-        # health checks stall on macOS runners and managed workstations.
-        opener = build_opener(ProxyHandler({}))
-        with opener.open(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        try:
-            detail = json.loads(error.read().decode("utf-8"))
-            message = detail.get("error", {}).get("message")
-        except (ValueError, AttributeError):
-            message = None
-        raise VoiceServiceError(message or f"Voice service returned HTTP {error.code}.") from error
-    except (URLError, TimeoutError, OSError) as error:
+        connection.request(
+            "POST" if payload is not None else "GET",
+            path,
+            body=content,
+            headers={
+                "Authorization": f"Bearer {state['token']}",
+                **({"Content-Type": "application/json"} if content is not None else {}),
+            },
+        )
+        response = connection.getresponse()
+        raw = response.read()
+        if response.status >= 400:
+            try:
+                detail = json.loads(raw.decode("utf-8"))
+                message = detail.get("error", {}).get("message")
+            except (ValueError, AttributeError):
+                message = None
+            raise VoiceServiceError(message or f"Voice service returned HTTP {response.status}.")
+        return json.loads(raw.decode("utf-8"))
+    except VoiceServiceError:
+        raise
+    except (TimeoutError, OSError) as error:
         raise VoiceServiceError("The local voice service is not reachable.") from error
+    finally:
+        connection.close()
 
 
 def voice_service_status(*, state_path: str | Path | None = None) -> dict[str, Any]:
