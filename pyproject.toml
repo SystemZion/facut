@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "facut"
-version = "0.9.3"
+version = "1.0.0"
 description = "Fast AI Cut — a deterministic, agent-friendly command-line video editor"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "facut contributors" }]
 keywords = ["video", "editing", "ffmpeg", "cli", "ai-agent"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",

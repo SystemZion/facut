@@ -201,6 +201,24 @@ class CommandEngine:
                 command["plan"],
                 approved_only=bool(command.get("approved_only", True)),
             )
+        if action == "review.patch.apply":
+            from facut.director.review_room import prepare_patch_apply
+
+            if "patch" not in command:
+                raise CommandEngineError("review.patch.apply requires patch.")
+            return prepare_patch_apply(
+                self.manager, command["patch"],
+                approved_only=bool(command.get("approved_only", True)),
+            )
+        if action == "library.music.apply":
+            from facut.director.music import prepare_music_plan_apply
+
+            if "plan" not in command:
+                raise CommandEngineError("library.music.apply requires plan.")
+            return prepare_music_plan_apply(
+                self.manager, command["plan"],
+                approved_only=bool(command.get("approved_only", True)),
+            )
         return deepcopy(command)
 
     @staticmethod
@@ -294,6 +312,14 @@ class CommandEngine:
             from facut.vlog.soundscape import apply_prepared_soundscape
 
             return apply_prepared_soundscape(document, command)
+        if action == "review.patch.apply.prepared":
+            from facut.director.review_room import apply_prepared_patch
+
+            return apply_prepared_patch(document, command)
+        if action == "library.music.apply.prepared":
+            from facut.director.music import apply_prepared_music_plan
+
+            return apply_prepared_music_plan(document, command)
         handler = handlers.get(action)
         if handler is None:
             raise CommandEngineError(f"Unsupported action: {action}")

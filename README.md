@@ -5,7 +5,24 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.9.3` 在 Director Loop 上增加了稳定快捷命令、自适应长镜头采样、Trip Bible审计、实测声音证据、质量门禁状态和缓存完整性验证。Scene Atlas仍由外部视觉AI完成画面判断；可选C++ Native Accelerator负责批量技术分析，FACUT不会用Token限制跳过有效素材。
+正式版本 `1.0.0` 新增 Director Studio：本地 Review Room、证据约束的 Timeline Patch、SQLite Music Library v2、安全的公开音乐发现会话，以及只有用户明确确认才会跨项目生效的导演偏好。Scene Atlas仍由外部视觉AI完成画面判断；可选C++ Native Accelerator负责批量技术分析，FACUT不会用Token限制跳过有效素材。
+
+Director Studio 的最短审片与音乐流程：
+
+```powershell
+facut review open -p D:\TripProject
+facut edit "滑雪段缩短十秒，但保留完整摔倒和爬起过程" -p D:\TripProject
+facut --project D:\TripProject review patch preview timeline.patch.json --approved-only
+facut --project D:\TripProject review patch apply timeline.patch.json --approved-only
+
+facut music ingest D:\Music --recursive --platform youtube --platform bilibili --license-file D:\Music\license.txt
+facut music find "轻松但有一点尴尬的旅行音乐" --style comedy-vlog --scene comedy-failure --duration 45 --platform bilibili --top 3
+facut music source search pixabay "cinematic space"
+```
+
+`review open` 只监听 `127.0.0.1`，使用随机端口和随机令牌。意见只会生成或等待 `timeline.patch.v1`，批准前不会修改工程；Patch 干跑会返回语义差异、缓存失效节点和变化区间。自然语言由外部 Agent 解释，FACUT 只验证证据、保护语音/完整事件链并确定性执行。Review Room 不提供绕过1080p审片直接生成4K的入口。
+
+Music Library v2 以 SQLite＋FTS 保存技术数据、结构候选、固定维度标签、来源和授权证据。检索先硬过滤文件哈希、授权平台与曲长，再给出创意排序理由。Pixabay 和 YouTube Audio Library 使用系统浏览器的可见页面；需要登录、验证码或授权确认时暂停，不调用隐藏接口。未完成授权复核的曲目不能进入正式交付。
 
 最常用的人类入口现在可以保持很短，同时仍执行完整质量流程：
 
