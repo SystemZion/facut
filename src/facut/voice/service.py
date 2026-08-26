@@ -653,7 +653,10 @@ def start_voice_service(
         )
         if os.name == "nt"
         else 0,
-        start_new_session=os.name != "nt",
+        # macOS can otherwise fall off the posix_spawn fast path and stall at
+        # fork/exec when FACUT is hosted by a multi-threaded app or test runner.
+        # Linux keeps a detached session; Windows uses creation flags above.
+        start_new_session=os.name != "nt" and sys.platform != "darwin",
     )
     log_stream.close()
     deadline = time.monotonic() + startup_timeout
