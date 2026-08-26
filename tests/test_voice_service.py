@@ -287,14 +287,19 @@ def test_explicit_device_rejects_an_already_running_service_on_another_device(
 
 def test_start_status_stop_manage_a_hidden_daemon(tmp_path: Path) -> None:
     state = tmp_path / "daemon.json"
-    started = start_voice_service(
-        provider=_fake_provider(tmp_path),
-        device="cuda",
-        require_cuda=True,
-        idle_timeout=30,
-        state_path=state,
-        startup_timeout=20,
-    )
+    try:
+        started = start_voice_service(
+            provider=_fake_provider(tmp_path),
+            device="cuda",
+            require_cuda=True,
+            idle_timeout=30,
+            state_path=state,
+            startup_timeout=20,
+        )
+    except Exception as error:
+        log = state.parent / "voice-service.log"
+        diagnostics = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else "<missing>"
+        pytest.fail(f"{error}\nvoice-service.log:\n{diagnostics}")
     try:
         assert started["running"] is True
         assert started["already_running"] is False
