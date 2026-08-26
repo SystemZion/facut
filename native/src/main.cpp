@@ -114,7 +114,7 @@ int run_jsonl() {
                         if (std::filesystem::is_regular_file(checkpoint)) {
                             data = facut_native::read_checkpoint(checkpoint);
                             const bool incomplete_still =
-                                data.value("format", std::string()) == "image2" &&
+                                data.value("kind", std::string()) == "image" &&
                                 data.value("representative_frames", json::array()).empty();
                             cached = !incomplete_still;
                         }

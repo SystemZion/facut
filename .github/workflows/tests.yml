@@ -91,7 +91,7 @@ jobs:
           python -m facut --json native doctor
           python -m facut --json analyze batch native-smoke --engine native --mode fast --output-directory native-smoke\results
           $result = Get-Content -Raw -Encoding UTF8 native-smoke\results\native-results.json | ConvertFrom-Json
-          $photo = @($result.results | Where-Object { $_.format -eq "image2" })
+          $photo = @($result.results | Where-Object { $_.kind -eq "image" })
           if ($photo.Count -ne 1 -or @($photo[0].representative_frames).Count -ne 1) {
             throw "FACUT Native did not produce one representative frame for the still image."
           }

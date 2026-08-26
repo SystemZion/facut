@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -40,6 +41,25 @@ std::string path_utf8(const std::filesystem::path& path) {
 #else
     return path.string();
 #endif
+}
+
+bool is_still_image(
+    const std::filesystem::path& source,
+    const AVFormatContext* format
+) {
+    auto extension = source.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    static const std::array<const char*, 8> image_extensions{
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif"
+    };
+    if (std::find(image_extensions.begin(), image_extensions.end(), extension) != image_extensions.end()) {
+        return true;
+    }
+    const std::string format_name = format && format->iformat ? format->iformat->name : "";
+    return format_name.find("image2") != std::string::npos ||
+        format_name.ends_with("_pipe");
 }
 
 std::string ff_error(int code) {
@@ -295,7 +315,8 @@ json sample_video(
     int stream_index,
     const std::vector<double>& sample_times,
     const std::filesystem::path& output_directory,
-    int thumbnail_width
+    int thumbnail_width,
+    bool still_image
 ) {
     if (stream_index < 0) {
         return json::array();
@@ -306,8 +327,6 @@ json sample_video(
     PacketPtr packet(av_packet_alloc());
     std::vector<std::uint8_t> previous;
     json samples = json::array();
-    const std::string format_name = format->iformat ? format->iformat->name : "";
-    const bool still_image = format_name.find("image2") != std::string::npos;
     for (std::size_t index = 0; index < sample_times.size(); ++index) {
         const auto target = sample_times[index];
         if (!still_image) {
@@ -553,10 +572,10 @@ json scan_media(
     const int audio_index = av_find_best_stream(format.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     AVStream* video = video_index >= 0 ? format->streams[video_index] : nullptr;
     const double duration = duration_seconds(format.get(), video);
+    const bool still_image = is_still_image(source, format.get());
     std::vector<double> sample_times;
     if (video) {
-        const std::string format_name = format->iformat ? format->iformat->name : "";
-        if (format_name.find("image2") != std::string::npos) {
+        if (still_image) {
             // Still-image demuxers expose a synthetic 0.04 s duration. Seeking to
             // its midpoint can consume the only packet without returning a frame.
             sample_times = {0.0};
@@ -580,7 +599,8 @@ json scan_media(
     const auto asset_directory = options.output_directory / fingerprint_value.substr(0, 16);
     std::filesystem::create_directories(asset_directory);
     const auto frames = sample_video(
-        format.get(), video_index, sample_times, asset_directory, options.thumbnail_width
+        format.get(), video_index, sample_times, asset_directory, options.thumbnail_width,
+        still_image
     );
     json video_data = nullptr;
     if (video) {
@@ -607,6 +627,7 @@ json scan_media(
         {"source", path_utf8(source)},
         {"duration", duration},
         {"format", format->iformat ? format->iformat->name : "unknown"},
+        {"kind", still_image ? "image" : "media"},
         {"video", video_data},
         {"audio", audio_data},
         {"representative_frames", frames},
