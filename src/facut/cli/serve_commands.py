@@ -168,6 +168,11 @@ def serve_command(
                 "native.doctor", "analyze.batch",
                 "runtime.status", "runtime.cleanram", "runtime.warmup",
                 "runtime.autoload.configure",
+                "review.session.create", "review.session.status", "review.feedback.submit",
+                "review.patch.plan", "review.patch.preview", "review.patch.apply",
+                "library.ingest", "library.search.v2", "library.audition",
+                "library.music.plan", "library.music.apply", "library.source.search", "library.source.import",
+                "taste.show", "taste.remember", "taste.forget", "review.preference.remember",
             }:
                 _validate_declared_params(method, params)
             if method == "ping":
@@ -1024,6 +1029,69 @@ def serve_command(
                     "warnings": [], "errors": [],
                     "project_revision": manager.require_document().revision,
                 }
+            elif method in {
+                "review.session.create", "review.session.status", "review.feedback.submit",
+                "review.patch.plan", "review.patch.preview", "review.patch.apply",
+            }:
+                from facut.director.review_room import (
+                    apply_patch, create_feedback, create_patch, open_room,
+                    preview_patch, room_status,
+                )
+
+                if method == "review.session.create":
+                    data = open_room(manager, open_browser=bool(params.get("open_browser", False)))
+                elif method == "review.session.status":
+                    data = room_status(manager)
+                elif method == "review.feedback.submit":
+                    data = create_feedback(manager, params)
+                elif method == "review.patch.plan":
+                    data = create_patch(manager, dict(params["patch"]))
+                elif method == "review.patch.preview":
+                    data = preview_patch(manager, params["patch"], approved_only=bool(params.get("approved_only", False)))
+                else:
+                    data = apply_patch(manager, params["patch"], approved_only=bool(params.get("approved_only", True)))
+                result = {
+                    "status": "success", "command": method, "data": data,
+                    "warnings": [], "errors": [],
+                    "project_revision": manager.require_document().revision,
+                }
+            elif method in {
+                "library.ingest", "library.search.v2", "library.audition",
+                "library.music.plan", "library.music.apply", "library.source.search", "library.source.import",
+            }:
+                from facut.director.music import MusicCatalog, apply_music_plan
+
+                catalog = MusicCatalog()
+                if method == "library.ingest":
+                    source = Path(str(params["source"])).expanduser().resolve()
+                    options = {
+                        "ffmpeg": state.config.tools.ffmpeg, "ffprobe": state.config.tools.ffprobe,
+                        "tags": dict(params.get("tags", {})), "platforms": list(params.get("platforms", [])),
+                        "license_file": params.get("license_file"), "license_type": params.get("license_type"),
+                        "analyze": bool(params.get("analyze", True)),
+                    }
+                    data = catalog.ingest_directory(source, recursive=bool(params.get("recursive", False)), **options) if source.is_dir() else catalog.ingest_file(source, **options)
+                elif method == "library.search.v2":
+                    data = catalog.find(str(params["query"]), style=params.get("style"), scene=params.get("scene"), duration=params.get("duration"), platforms=list(params.get("platforms", [])), top=int(params.get("top", 3)), offset=int(params.get("offset", 0)))
+                elif method == "library.audition":
+                    data = {"asset": catalog.get(str(params["asset_id"])), "status": "review_required", "autoplay": False}
+                elif method == "library.music.plan":
+                    data = catalog.plan(str(params["asset_id"]), start=float(params.get("start", 0)), duration=params.get("duration"))
+                elif method == "library.music.apply":
+                    data = apply_music_plan(manager, params["plan"], approved_only=bool(params.get("approved_only", True)))
+                elif method == "library.source.search":
+                    data = catalog.create_source_session(str(params["source"]), str(params["query"]))
+                else:
+                    data = catalog.import_source_download(str(params["source"]), str(params["session_id"]), platforms=list(params.get("platforms", [])), license_file=params.get("license_file"), license_text=params.get("license_text"), license_type=params.get("license_type"), ffmpeg=state.config.tools.ffmpeg, ffprobe=state.config.tools.ffprobe)
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
+            elif method in {"taste.show", "taste.remember", "taste.forget", "review.preference.remember"}:
+                from facut.director.taste import TasteStore
+
+                store = TasteStore()
+                if method == "taste.show": data = store.show()
+                elif method in {"taste.remember", "review.preference.remember"}: data = store.remember(str(params["feedback_id"]), category=str(params["category"]), value=str(params["value"]), original_feedback=str(params["original_feedback"]), applies_to=list(params.get("applies_to", [])))
+                else: data = store.forget(str(params["preference_id"]))
+                result = {"status": "success", "command": method, "data": data, "warnings": [], "errors": [], "project_revision": manager.require_document().revision}
             elif method in {"typography.plan", "typography.apply"}:
                 from facut.subtitles import apply_typography_plan, build_typography_plan
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0 — 2026-08-27
+
+- Added Director Studio Review Room on loopback-only random ports with token
+  authentication, A/B playback, timeline, StoryGraph, waveform, evidence and
+  timecode-feedback panels. Large media is streamed with HTTP byte ranges.
+- Added evidence-bound `timeline_patch.v1` planning, semantic dry-run diff,
+  protected speech/event gates and one-commit CutGraph application. Natural
+  language feedback remains unapplied until an external Agent returns a valid
+  patch.
+- Added Music Library v2 with non-destructive JSON-to-SQLite migration, FTS,
+  content hashes, beats, loudness, technical energy/section candidates, fixed
+  semantic dimensions, license evidence and platform hard filters.
+- Added review-first music search, audition, cue planning and approved-loop
+  duration coverage. Unreviewed loop candidates and unverified licenses cannot
+  satisfy delivery gates.
+- Added visible-browser source sessions for Pixabay music and YouTube Audio
+  Library. Downloads require captured license evidence; YouTube-only rights are
+  not inferred to cover other platforms.
+- Added explicit `taste show/remember/forget/export`; project feedback never
+  becomes a global preference unless the user deliberately remembers it.
+- Added Director Studio action schemas, Recipe Timeline Patch support, JSON-RPC
+  parity, paged music results, macOS CI, and version-aligned C++ native builds.
+
 ## 0.9.3 — 2026-08-26
 
 - Added clear top-level `scan`, `cut`, `resume`, `next`, `say`, `check`,

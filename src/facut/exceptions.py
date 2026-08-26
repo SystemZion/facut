@@ -78,3 +78,11 @@ class ReviewRequiredError(FacutError):
 
     code = "REVIEW_REQUIRED"
     exit_code = ExitCode.INVALID_ARGUMENT
+
+
+class LicenseReviewRequiredError(ReviewRequiredError):
+    code = "LICENSE_REVIEW_REQUIRED"
+
+
+class SourceInteractionRequiredError(ReviewRequiredError):
+    code = "SOURCE_INTERACTION_REQUIRED"

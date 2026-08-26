@@ -88,3 +88,27 @@ def subtitle_director(ctx: typer.Context) -> None:
     from facut.subtitles import subtitle_director_schemas
 
     _emit(ctx, "schema.subtitle-director", subtitle_director_schemas())
+
+
+@schema_app.command("director-studio")
+def director_studio(ctx: typer.Context) -> None:
+    """Return Review Room, Timeline Patch, music and preference schemas."""
+
+    from facut.director.review_room import TimelinePatch
+    from facut.director.taste import DirectorPreference
+
+    _emit(ctx, "schema.director-studio", {
+        "review_session.v1": {
+            "type": "object", "required": ["project", "host", "port", "pid"],
+            "properties": {"project": {"type": "string"}, "host": {"const": "127.0.0.1"}, "port": {"type": "integer"}, "pid": {"type": "integer"}},
+        },
+        "review_feedback.v1": {
+            "type": "object", "required": ["start", "end", "action"],
+            "properties": {"start": {"type": "number", "minimum": 0}, "end": {"type": "number", "minimum": 0}, "action": {"type": "string"}, "comment": {"type": "string"}},
+        },
+        "timeline_patch.v1": TimelinePatch.model_json_schema(),
+        "music_asset.v2": {"type": "object", "required": ["id", "sha256", "path", "duration", "tags", "license_status", "platforms"]},
+        "music_query.v1": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "style": {"type": ["string", "null"]}, "scene": {"type": ["string", "null"]}, "duration": {"type": ["number", "null"]}, "platforms": {"type": "array"}}},
+        "music_cue_plan.v1": {"type": "object", "required": ["asset_id", "timeline_start", "duration", "approved"]},
+        "director_preference.v1": DirectorPreference.model_json_schema(),
+    })

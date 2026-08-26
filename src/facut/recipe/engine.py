@@ -194,6 +194,14 @@ class RecipeEngine:
                     "approved_only": recipe.soundscape.approved_only,
                 }
             )
+        if recipe.timeline_patch is not None:
+            patch_path = Path(recipe.timeline_patch.patch).expanduser()
+            if not patch_path.is_absolute():
+                patch_path = source_dir / patch_path
+            commands.append({
+                "action": "review.patch.apply", "patch": str(patch_path.resolve()),
+                "approved_only": recipe.timeline_patch.approved_only,
+            })
         track_types: dict[str, str] = {
             track.id: track.type.value for track in document.tracks
         }

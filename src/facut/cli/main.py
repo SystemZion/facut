@@ -230,6 +230,13 @@ def main() -> None:
 
         _daemon_entry(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "__review_room_daemon__":
+        from facut.director.review_room import run_server
+
+        if len(sys.argv) != 5:
+            raise SystemExit(2)
+        run_server(sys.argv[2], sys.argv[3], sys.argv[4])
+        return
     try:
         result = app(standalone_mode=False)
         # Click converts ``Exit`` into its numeric return value when
@@ -312,6 +319,8 @@ from facut.cli.native_commands import native_app  # noqa: E402
 from facut.cli.font_commands import font_app  # noqa: E402
 from facut.cli.typography_commands import typography_app  # noqa: E402
 from facut.cli.library_commands import library_app, style_app  # noqa: E402
+from facut.cli.director_commands import music_app, taste_app  # noqa: E402
+from facut.cli.review_commands import edit_command, review_app  # noqa: E402
 from facut.cli.download_commands import download_command  # noqa: E402
 from facut.cli.install_commands import (  # noqa: E402
     install_command,
@@ -378,6 +387,10 @@ app.add_typer(font_app, name="font")
 app.add_typer(typography_app, name="typography")
 app.add_typer(library_app, name="library")
 app.add_typer(style_app, name="style")
+app.add_typer(music_app, name="music")
+app.add_typer(taste_app, name="taste")
+app.add_typer(review_app, name="review")
+app.command("edit")(edit_command)
 app.command("download")(download_command)
 app.command("install")(install_command)
 app.command("update")(update_command)

@@ -99,6 +99,11 @@ class RecipeSoundscape(RecipeModel):
     approved_only: bool = True
 
 
+class RecipeTimelinePatch(RecipeModel):
+    patch: str = Field(min_length=1)
+    approved_only: bool = True
+
+
 class RecipeRender(RecipeModel):
     output: str | None = None
     preset: str | None = None
@@ -116,6 +121,7 @@ class RecipeDocument(RecipeModel):
     vlog: RecipeVlogDirector | None = None
     review: RecipeDirectorReview | None = None
     soundscape: RecipeSoundscape | None = None
+    timeline_patch: RecipeTimelinePatch | None = None
     render: RecipeRender | None = None
     qc: dict[str, Any] | None = None
 
@@ -130,7 +136,7 @@ class RecipeDocument(RecipeModel):
         for command in self.commands:
             if not isinstance(command.get("action"), str) or not command["action"]:
                 raise ValueError("every recipe command requires a non-empty action")
-        if not any((self.tracks, self.clips, self.transitions, self.commands, self.narration, self.vlog, self.review, self.soundscape, self.render, self.qc)):
+        if not any((self.tracks, self.clips, self.transitions, self.commands, self.narration, self.vlog, self.review, self.soundscape, self.timeline_patch, self.render, self.qc)):
             raise ValueError("recipe must declare at least one operation")
         return self
 

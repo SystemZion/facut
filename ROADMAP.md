@@ -48,7 +48,16 @@ FACUT 的主线是日常 VLOG、旅行、City Walk、亲子出行与周末记录
 - 可确定执行的地点板、动作匹配、克制叠化和喜剧强调进入RenderGraph；需要眼睛或物体锚点的效果继续要求外部证据。
 - CLI、Agent Schema、Recipe、批处理和JSON-RPC保持同一能力面。
 
-## 0.10 — Travel Delivery
+## 1.0 — Director Studio
+
+- 本地令牌化 Review Room 同时呈现候选成片、A/B播放、时间线、StoryGraph、波形、字幕、证据和音乐计划。
+- `timeline.patch.v1` 将自然语言意见转成证据约束的确定性修改；先干跑语义差异和变化区间，再在实验分支形成一次可撤销提交。
+- Music Library v2 非破坏迁移到 SQLite＋FTS，技术标签、外部AI标签、授权证据与平台范围可以完整审计。
+- Pixabay 与 YouTube Audio Library 只通过系统浏览器可见界面发现；登录、验证码、限流和授权不清时停止并要求人工处理。
+- 个人导演偏好仅在用户明确 `taste remember` 后跨项目生效，普通审片意见保持项目局部。
+- Windows正式便携包与C++加速器版本统一；Python包在Windows、Linux和macOS的3.11/3.13矩阵验证。
+
+## 1.1 — Travel Delivery
 
 - GPX/KML路线动画与地点数据卡。
 - 一个4K主序列派生横版、Shorts、预告、无字幕母版、章节和封面候选。

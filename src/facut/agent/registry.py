@@ -1302,6 +1302,98 @@ _ACTIONS: dict[str, dict[str, Any]] = {
     },
 }
 
+# FACUT 1.0 Director Studio.  Kept in one explicit update block so the public
+# Agent vocabulary, CLI and JSON-RPC names remain identical.
+_ACTIONS.update({
+    "review.session.create": {
+        "summary": "Start a loopback-only token-authenticated local Review Room.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"open_browser": {"type": "boolean", "default": False}}),
+    },
+    "review.session.status": {
+        "summary": "Report the local Review Room process without exposing its token.",
+        "mutates": False, "rpc": True, "parameters": _object({}),
+    },
+    "review.feedback.submit": {
+        "summary": "Save one time-ranged review opinion without modifying the timeline.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({
+            "start": {"type": "number", "minimum": 0}, "end": {"type": "number", "minimum": 0},
+            "action": {"type": "string"}, "comment": {"type": "string"},
+            "target": {"type": ["string", "null"]},
+        }, ["start", "end", "action"]),
+    },
+    "review.patch.plan": {
+        "summary": "Validate and persist an evidence-bound timeline.patch.v1.",
+        "mutates": False, "rpc": True, "plan_first": True,
+        "parameters": _object({"patch": {"type": "object"}}, ["patch"]),
+    },
+    "review.patch.preview": {
+        "summary": "Dry-run a Timeline Patch and return semantic diff and changed ranges.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"patch": {}, "approved_only": {"type": "boolean", "default": False}}, ["patch"]),
+    },
+    "review.patch.apply": {
+        "summary": "Apply approved Timeline Patch operations in one CutGraph revision.",
+        "mutates": True, "rpc": True, "plan_first": True,
+        "parameters": _object({"patch": {}, "approved_only": {"type": "boolean", "default": True}}, ["patch"]),
+    },
+    "review.preference.remember": {
+        "summary": "Explicitly remember one approved review preference globally.",
+        "mutates": True, "rpc": True,
+        "parameters": _object({"feedback_id": {"type": "string"}, "category": {"type": "string"}, "value": {"type": "string"}, "original_feedback": {"type": "string"}, "applies_to": {"type": "array", "items": {"type": "string"}}}, ["feedback_id", "category", "value", "original_feedback"]),
+    },
+    "library.ingest": {
+        "summary": "Index local music in SQLite without copying or modifying source audio.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"source": {"type": "string"}, "recursive": {"type": "boolean", "default": False}, "tags": {"type": "object"}, "platforms": {"type": "array", "items": {"type": "string"}}, "license_file": {"type": ["string", "null"]}, "license_type": {"type": ["string", "null"]}, "analyze": {"type": "boolean", "default": True}}, ["source"]),
+    },
+    "library.search.v2": {
+        "summary": "Hard-filter license/platform/duration, then rank music with auditable reasons.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"query": {"type": "string"}, "style": {"type": ["string", "null"]}, "scene": {"type": ["string", "null"]}, "duration": {"type": ["number", "null"]}, "platforms": {"type": "array", "items": {"type": "string"}}, "top": {"type": "integer", "default": 3}, "offset": {"type": "integer", "minimum": 0, "default": 0}}, ["query"]),
+    },
+    "library.audition": {
+        "summary": "Return one eligible local asset for Review Room audition.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"asset_id": {"type": "string"}}, ["asset_id"]),
+    },
+    "library.music.plan": {
+        "summary": "Create a review-required cue plan with duration and license gates.",
+        "mutates": False, "rpc": True, "plan_first": True,
+        "parameters": _object({"asset_id": {"type": "string"}, "start": {"type": "number", "default": 0}, "duration": {"type": ["number", "null"]}}, ["asset_id"]),
+    },
+    "library.music.apply": {
+        "summary": "Atomically apply one explicitly approved, licensed music cue plan.",
+        "mutates": True, "rpc": True, "plan_first": True,
+        "parameters": _object({"plan": {}, "approved_only": {"type": "boolean", "default": True}}, ["plan"]),
+    },
+    "library.source.search": {
+        "summary": "Create a visible-browser public music discovery session.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"source": {"type": "string"}, "query": {"type": "string"}}, ["source", "query"]),
+    },
+    "library.source.import": {
+        "summary": "Import a downloaded track only with captured source and license evidence.",
+        "mutates": False, "rpc": True,
+        "parameters": _object({"source": {"type": "string"}, "session_id": {"type": "string"}, "platforms": {"type": "array", "items": {"type": "string"}}, "license_file": {"type": ["string", "null"]}, "license_text": {"type": ["string", "null"]}, "license_type": {"type": ["string", "null"]}}, ["source", "session_id"]),
+    },
+    "taste.show": {
+        "summary": "Show only preferences the user explicitly remembered.",
+        "mutates": False, "rpc": True, "parameters": _object({}),
+    },
+    "taste.remember": {
+        "summary": "Explicitly persist one director preference with source feedback.",
+        "mutates": True, "rpc": True,
+        "parameters": _object({"feedback_id": {"type": "string"}, "category": {"type": "string"}, "value": {"type": "string"}, "original_feedback": {"type": "string"}, "applies_to": {"type": "array", "items": {"type": "string"}}}, ["feedback_id", "category", "value", "original_feedback"]),
+    },
+    "taste.forget": {
+        "summary": "Remove one explicitly remembered director preference.",
+        "mutates": True, "rpc": True,
+        "parameters": _object({"preference_id": {"type": "string"}}, ["preference_id"]),
+    },
+})
+
 
 def capabilities() -> dict[str, Any]:
     """Return a compact self-description suitable for an Agent handshake."""
