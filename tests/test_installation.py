@@ -67,6 +67,7 @@ def test_install_copies_portable_runtime_directory(tmp_path: Path) -> None:
     assert (tmp_path / "installed" / "facut_runtime" / "python311.dll").read_bytes() == b"runtime"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows portable bundle semantics")
 def test_update_replaces_complete_portable_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -100,6 +101,7 @@ def test_update_replaces_complete_portable_bundle(
     assert json.loads((install_dir / "install.json").read_text("utf-8"))["version"] == "local"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows portable bundle semantics")
 def test_portable_update_refuses_a_directory_with_unrelated_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -120,6 +122,7 @@ def test_portable_update_refuses_a_directory_with_unrelated_files(
     assert (install_dir / "unrelated.txt").read_text("utf-8") == "keep"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows native sidecar bundle")
 def test_install_copies_complete_adjacent_native_bundle(tmp_path: Path) -> None:
     source = _fake_executable(tmp_path / "bundle" / "facut.exe")
     (source.parent / "facut-native.exe").write_bytes(b"native")
