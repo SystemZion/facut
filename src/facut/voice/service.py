@@ -15,6 +15,7 @@ import queue
 import secrets
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -622,11 +623,19 @@ def start_voice_service(
         if getattr(sys, "frozen", False):
             daemon_command = [sys.executable, "__voice_service_daemon__"]
         else:
-            daemon_command = [
-                sys.executable,
-                "-c",
-                "from facut.voice.service import _daemon_entry; _daemon_entry()",
+            scripts = Path(sysconfig.get_path("scripts"))
+            candidates = [
+                scripts / ("facut-voice-daemon.exe" if os.name == "nt" else "facut-voice-daemon"),
+                scripts / "facut-voice-daemon",
             ]
+            launcher = next((item for item in candidates if item.is_file()), None)
+            daemon_command = (
+                [str(launcher)] if launcher is not None else [
+                    sys.executable,
+                    "-c",
+                    "from facut.voice.service import _daemon_entry; _daemon_entry()",
+                ]
+            )
     command = [
         *daemon_command,
         "--provider",

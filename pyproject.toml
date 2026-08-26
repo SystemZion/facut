@@ -49,6 +49,7 @@ analysis = [
 
 [project.scripts]
 facut = "facut.bootstrap:main"
+facut-voice-daemon = "facut.voice.service:_daemon_entry"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/facut"]
