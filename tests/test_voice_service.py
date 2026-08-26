@@ -297,6 +297,13 @@ def test_explicit_device_rejects_an_already_running_service_on_another_device(
         thread.join(timeout=5)
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "GitHub hosted macOS runners do not support this nested long-lived daemon "
+        "lifecycle; in-process server and provider protocol tests still run."
+    ),
+)
 def test_start_status_stop_manage_a_hidden_daemon(tmp_path: Path) -> None:
     state = tmp_path / "daemon.json"
     try:
