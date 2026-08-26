@@ -12,6 +12,7 @@ import typer
 
 from facut.cli.common import manager_for, public_error
 from facut.core.project_manager import ProjectManager
+from facut.core.timeline_engine import parse_time
 from facut.media.proxy_manager import ProxyManager
 from facut.render import FFmpegBackend
 from facut.render.presets import resolve_render_preset
@@ -64,6 +65,7 @@ from facut.vlog.soundscape import (
     apply_soundscape_plan,
     plan_soundscape,
 )
+from facut.vlog.context import audit_trip_bible, rename_trip_entity
 
 
 vlog_app = typer.Typer(help="Quality-first travel VLOG director workflow.")
@@ -323,7 +325,8 @@ def _build_and_render(
     ffmpeg: str | Path | None,
 ) -> tuple[dict, object]:
     _apply_candidate(manager, candidate_id=candidate_id, preset=preset)
-    return _render_active(
+    soundscape = _measure_delivery_soundscape(manager, ffmpeg)
+    data, result = _render_active(
         manager,
         candidate_id=candidate_id,
         output=output,
@@ -332,6 +335,30 @@ def _build_and_render(
         overwrite=overwrite,
         ffmpeg=ffmpeg,
     )
+    data["soundscape"] = soundscape
+    return data, result
+
+
+def _measure_delivery_soundscape(
+    manager: ProjectManager, ffmpeg: str | Path | None
+) -> dict[str, Any]:
+    analysis = analyze_soundscape(
+        manager,
+        measure=True,
+        ffmpeg=str(ffmpeg) if ffmpeg is not None else None,
+    )
+    failed = [
+        media_id
+        for media_id, measurement in analysis.get("measurements", {}).items()
+        if measurement.get("status") in {"fail", "failed"}
+    ]
+    if failed:
+        raise ReviewRequiredError(
+            "Original-source audio measurement failed before final delivery.",
+            suggestion="Inspect the listed source audio, then run `facut vlog soundscape analyze --measure`.",
+            details={"media_ids": failed},
+        )
+    return analysis
 
 
 def _auto_caption_and_typography(manager: ProjectManager, state, *, subtitle: str, typography: str) -> dict:
@@ -484,6 +511,47 @@ def vlog_bible_import(
         data = save_trip_bible(manager.project_dir, payload)
         data["director_inbox"] = rebuild_director_inbox(manager.project_dir)
         _emit(ctx, command, data, revision=manager.require_document().revision)
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@bible_app.command("audit")
+def vlog_bible_audit(ctx: typer.Context) -> None:
+    """Audit entity ambiguity and unsupported confirmed facts."""
+
+    command = "vlog.bible.audit"
+    try:
+        manager = manager_for(_state(ctx))
+        data = audit_trip_bible(manager.project_dir)
+        _emit(
+            ctx,
+            command,
+            data,
+            warnings=[] if data["valid"] else ["Trip Bible has blocking identity or evidence issues."],
+            revision=manager.require_document().revision,
+        )
+    except Exception as error:
+        _fail(ctx, command, error)
+
+
+@bible_app.command("rename")
+def vlog_bible_rename(
+    ctx: typer.Context,
+    entity: Annotated[str, typer.Argument(help="Stable ID, unique name, or alias.")],
+    new_name: Annotated[str, typer.Argument()],
+    kind: Annotated[str, typer.Option("--kind")] = "auto",
+) -> None:
+    """Rename one person or place and invalidate dependent generated plans."""
+
+    command = "vlog.bible.rename"
+    try:
+        manager = manager_for(_state(ctx))
+        _emit(
+            ctx,
+            command,
+            rename_trip_entity(manager.project_dir, entity, new_name, kind=kind),
+            revision=manager.require_document().revision,
+        )
     except Exception as error:
         _fail(ctx, command, error)
 
@@ -686,13 +754,20 @@ def vlog_review_apply(
 
 
 @soundscape_app.command("analyze")
-def vlog_soundscape_analyze(ctx: typer.Context) -> None:
+def vlog_soundscape_analyze(
+    ctx: typer.Context,
+    measure: Annotated[bool, typer.Option("--measure/--metadata-only")] = False,
+) -> None:
     """Inventory audio roles without inventing unmeasured signal quality."""
 
     command = "vlog.soundscape.analyze"
     try:
         manager = manager_for(_state(ctx))
-        data = analyze_soundscape(manager)
+        data = analyze_soundscape(
+            manager,
+            measure=measure,
+            ffmpeg=_state(ctx).config.tools.ffmpeg,
+        )
         _emit(ctx, command, data, warnings=data["warnings"], revision=manager.require_document().revision)
     except Exception as error:
         _fail(ctx, command, error)
@@ -893,6 +968,8 @@ def vlog_inspect_batch(
 def vlog_atlas_build(
     ctx: typer.Context,
     batch_size: Annotated[int, typer.Option("--batch-size", min=1, max=100)] = 12,
+    sampling: Annotated[str, typer.Option("--sampling")] = "adaptive",
+    max_gap: Annotated[str, typer.Option("--max-gap")] = "15s",
 ) -> None:
     """Build or resume stable quality-first inspection batches."""
 
@@ -902,7 +979,12 @@ def vlog_atlas_build(
         _emit(
             ctx,
             command,
-            build_scene_atlas(manager, batch_size=batch_size),
+            build_scene_atlas(
+                manager,
+                batch_size=batch_size,
+                sampling=sampling,
+                max_gap=float(parse_time(max_gap).seconds),
+            ),
             revision=manager.require_document().revision,
         )
     except Exception as error:
@@ -1209,6 +1291,7 @@ def vlog_run(
         packaging = _auto_caption_and_typography(
             manager, state, subtitle=subtitle, typography=typography
         )
+        soundscape = _measure_delivery_soundscape(manager, state.config.tools.ffmpeg)
         data, result = _render_active(
             manager,
             candidate_id=selected.id,
@@ -1225,6 +1308,7 @@ def vlog_run(
                 "quality_policy": "quality-first",
                 "preserve_original_audio": preserve_original_audio,
                 "packaging": packaging,
+                "soundscape": soundscape,
                 "import": import_result,
             }
         )

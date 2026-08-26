@@ -6,6 +6,7 @@ from facut.core.models import Clip, MediaAsset, MediaTechnicalInfo, Track, Track
 from facut.core.command_engine import CommandEngine
 from facut.core.project_manager import ProjectManager
 from facut.exceptions import InvalidArgumentError, ReviewRequiredError
+from facut.qc.models import CheckResult, QCStatus
 from facut.vlog.soundscape import (
     analyze_soundscape,
     apply_soundscape_plan,
@@ -81,6 +82,31 @@ def test_soundscape_analysis_is_metadata_only_and_role_aware(tmp_path) -> None:
         }
     ]
     assert "not run" in result["warnings"][0].lower()
+
+
+def test_soundscape_measurement_uses_original_media_and_persists_metrics(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _manager(tmp_path)
+    for asset in manager.document.media:
+        (manager.project_dir / asset.path).write_bytes(b"audio")
+
+    def measured(source, ffmpeg, **_kwargs):
+        assert source.parent == manager.project_dir
+        assert ffmpeg == "ffmpeg-modern"
+        return CheckResult(
+            status=QCStatus.PASS,
+            summary="measured",
+            data={"integrated_lufs": -16.0, "true_peak_dbfs": -2.0},
+        )
+
+    monkeypatch.setattr("facut.qc.detectors.check_loudness", measured)
+    result = analyze_soundscape(manager, measure=True, ffmpeg="ffmpeg-modern")
+    assert result["signal_analysis"] == "provided"
+    assert result["measurements"]["voice"]["metrics"]["integrated_lufs"] == -16.0
+    assert result["roles"]["dialogue"][0]["measurement"]["source_kind"] == "original"
+    cached = analyze_soundscape(manager, measure=True, ffmpeg=None)
+    assert cached["cached"] is True
 
 
 def test_soundscape_plan_is_draft_and_does_not_mutate(tmp_path) -> None:

@@ -261,3 +261,15 @@ def test_perceptual_duplicates_are_candidates_not_exclusions() -> None:
         {"media_id": "two", "hamming_distance": 2}
     ]
     assert assets[1]["near_duplicate_candidates"][0]["media_id"] == "one"
+
+
+def test_adaptive_sampling_bounds_long_clip_blind_regions(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    manager.document.media[0].technical.duration = 65
+    manager.save(create_snapshot=False)
+    result = build_scene_atlas(manager, sampling="adaptive", max_gap=15)
+    assert result["sampling"] == "adaptive"
+    task = next_atlas_inspection_batch(manager.project_dir)
+    times = task["assets"][0]["baseline"]["sample_times"]
+    assert len(times) > 3
+    assert max(right - left for left, right in zip(times, times[1:])) <= 15.0

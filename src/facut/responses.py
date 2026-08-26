@@ -30,6 +30,8 @@ class Response(BaseModel, Generic[T]):
 
     status: str
     command: str
+    requested_command: str | None = None
+    canonical_action: str | None = None
     data: T | None = None
     warnings: list[str] = Field(default_factory=list)
     errors: list[ErrorItem] = Field(default_factory=list)
@@ -38,8 +40,16 @@ class Response(BaseModel, Generic[T]):
     def as_json(self, *, pretty: bool = False) -> str:
         """Serialize without leaking implementation-specific Python objects."""
 
+        payload = self.model_dump(mode="json")
+        # Keep the long-standing response contract byte-for-byte stable for
+        # canonical commands. Shortcut metadata is present only when a user or
+        # Agent actually entered through a convenience command.
+        if self.requested_command is None:
+            payload.pop("requested_command", None)
+        if self.canonical_action is None:
+            payload.pop("canonical_action", None)
         return json.dumps(
-            self.model_dump(mode="json"),
+            payload,
             # ASCII escaping keeps structured output valid even when a frozen
             # Windows console is still using GBK and paths contain characters
             # unavailable in that code page. JSON parsers recover the original

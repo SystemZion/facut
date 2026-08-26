@@ -448,6 +448,7 @@ class IncrementalRenderer:
                     overwrite=False,
                     progress=segment_progress,
                 )
+                self.cache.commit(segment)
                 encoder = rendered.encoder
                 selected_hardware = rendered.hardware
                 warnings.extend(rendered.warnings)

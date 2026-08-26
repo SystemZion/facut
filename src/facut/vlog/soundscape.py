@@ -108,12 +108,36 @@ def _role(track_role: Any, clip_role: Any, track_type: TrackType) -> AudioRole |
     return None
 
 
-def analyze_soundscape(manager: ProjectManager) -> dict[str, Any]:
-    """Inventory audio roles and timeline overlaps without inventing signal metrics."""
+def analyze_soundscape(
+    manager: ProjectManager,
+    *,
+    measure: bool = False,
+    ffmpeg: str | None = None,
+) -> dict[str, Any]:
+    """Inventory audio roles and optionally attach measured EBU R128 evidence."""
 
     document = manager.require_document()
+    path = _root(manager.project_dir) / "analysis.json"
+    if measure and path.is_file():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            existing.get("project_sha256") == _document_sha256(document)
+            and existing.get("signal_analysis") == "provided"
+        ):
+            cached_measurements = {
+                str(clip["media_id"]): clip["measurement"]
+                for clips in existing.get("roles", {}).values()
+                for clip in clips
+                if clip.get("measurement")
+            }
+            return {
+                **existing,
+                "measurements": cached_measurements,
+                "path": str(path.resolve()),
+                "cached": True,
+            }
     roles: dict[str, list[dict[str, Any]]] = {role: [] for role in sorted(_ROLES)}
-    warnings = [
+    warnings = [] if measure else [
         "Signal analysis was not run; loudness, clipping, wind noise, and intelligibility remain unknown."
     ]
     for track in document.tracks:
@@ -156,17 +180,58 @@ def analyze_soundscape(manager: ProjectManager) -> dict[str, Any]:
                         "measurement_required": True,
                     }
                 )
+    measurements: dict[str, dict[str, Any]] = {}
+    if measure:
+        if not ffmpeg:
+            raise ValueError("Measured soundscape analysis requires an FFmpeg executable.")
+        from facut.qc.detectors import check_loudness
+
+        for role, clips in roles.items():
+            for clip in clips:
+                media_id = str(clip["media_id"])
+                if media_id in measurements:
+                    clip["measurement"] = measurements[media_id]
+                    continue
+                asset = document.find_media(media_id)
+                if asset is None:
+                    continue
+                # Audio is always measured from the original asset. LRF proxy
+                # audio is intentionally never trusted by the VLOG workflow.
+                source = manager.resolve_path(asset.path)
+                try:
+                    result = check_loudness(source, ffmpeg, timeout=300.0)
+                    measurement = {
+                        "status": result.status.value,
+                        "metrics": result.data,
+                        "errors": result.errors,
+                        "source_kind": "original",
+                    }
+                except Exception as error:
+                    measurement = {
+                        "status": "failed",
+                        "metrics": {},
+                        "errors": [str(error)],
+                        "source_kind": "original",
+                    }
+                    warnings.append(f'Audio measurement failed for "{media_id}".')
+                measurements[media_id] = measurement
+                clip["measurement"] = measurement
     analysis = SoundscapeAnalysis(
         project_id=document.project.id,
         project_revision=document.revision,
         project_sha256=_document_sha256(document),
+        signal_analysis="provided" if measure else "not_run",
         roles=roles,
         overlaps=overlaps,
         warnings=warnings,
     )
-    path = _root(manager.project_dir) / "analysis.json"
     _atomic_write(path, analysis.model_dump(mode="json"))
-    return {**analysis.model_dump(mode="json"), "path": str(path.resolve())}
+    return {
+        **analysis.model_dump(mode="json"),
+        "measurements": measurements,
+        "path": str(path.resolve()),
+        "cached": False,
+    }
 
 
 def plan_soundscape(
@@ -178,9 +243,24 @@ def plan_soundscape(
 ) -> dict[str, Any]:
     """Create draft-only mix recommendations from timeline metadata."""
 
-    analysis_data = analyze_soundscape(manager)
+    existing_path = _root(manager.project_dir) / "analysis.json"
+    existing = (
+        json.loads(existing_path.read_text(encoding="utf-8"))
+        if existing_path.is_file()
+        else {}
+    )
+    analysis_data = (
+        analyze_soundscape(manager, measure=True, ffmpeg=None)
+        if existing.get("project_sha256") == _document_sha256(manager.require_document())
+        and existing.get("signal_analysis") == "provided"
+        else analyze_soundscape(manager)
+    )
     analysis = SoundscapeAnalysis.model_validate(
-        {key: value for key, value in analysis_data.items() if key != "path"}
+        {
+            key: value
+            for key, value in analysis_data.items()
+            if key not in {"path", "measurements", "cached"}
+        }
     )
     operations: list[SoundscapeOperation] = []
     for overlap in analysis.overlaps:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "facut"
-version = "0.9.2"
+version = "0.9.3"
 description = "Fast AI Cut — a deterministic, agent-friendly command-line video editor"
 readme = "README.md"
 requires-python = ">=3.11"

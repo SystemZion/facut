@@ -140,6 +140,7 @@ def vlog_workflow_schema() -> dict[str, Any]:
             {"action": "vlog.prepare", "mutates_project": True},
             {"action": "vlog.atlas.build", "default_batch_size": 12},
             {"action": "vlog.bible.import", "requires": "reviewed facts or an empty bible"},
+            {"action": "vlog.bible.audit", "requires": "zero blocking identity issues"},
             {"action": "vlog.inbox.next", "repeat_until": "baseline and high-priority gaps resolved"},
             {"action": "vlog.inspect.batch", "repeat_until": "atlas pending_tasks == 0"},
             {"action": "vlog.observe.batch", "idempotent_by": "task_id and observation_id"},
@@ -152,6 +153,7 @@ def vlog_workflow_schema() -> dict[str, Any]:
             {"action": "vlog.compare"},
             {"action": "vlog.refine"},
             {"action": "vlog.apply", "requires": "ready candidate"},
+            {"action": "vlog.soundscape.analyze", "measure": True, "source": "original media"},
             {"action": "vlog.soundscape.plan", "requires": "audition before approval"},
             {"action": "vlog.review.create", "maximum_rounds": 3},
             {"action": "vlog.review.apply", "requires": "approved deterministic edits"},
@@ -161,4 +163,10 @@ def vlog_workflow_schema() -> dict[str, Any]:
         "director_inbox_schema": DirectorInboxItem.model_json_schema(),
         "trip_bible_schema": TripBible.model_json_schema(),
         "story_plan_schema": StoryPlan.model_json_schema(),
+        "shortcut_examples": [
+            "facut scan <source> -p <project> --deep",
+            "facut cut <source> -o <review.mp4> -s comedy -l 8m --draft",
+            "facut next -p <project>",
+            "facut resume -p <project>",
+        ],
     }

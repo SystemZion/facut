@@ -410,7 +410,7 @@ def director_status(
         "next_command": next_command,
         "quality_policy": "quality-first",
     }
-    from .context import load_trip_bible, rebuild_director_inbox
+    from .context import audit_trip_bible, load_trip_bible, rebuild_director_inbox
 
     inbox = rebuild_director_inbox(project_dir, persist=False)
     bible = load_trip_bible(project_dir)
@@ -458,6 +458,50 @@ def director_status(
             else []
         ),
     }
+    soundscape_analysis = _read_json(soundscape_root / "analysis.json", {})
+    sound_measurement_failures = [
+        clip.get("media_id")
+        for clips in soundscape_analysis.get("roles", {}).values()
+        for clip in clips
+        if (clip.get("measurement") or {}).get("status") in {"fail", "failed"}
+    ]
+    bible_audit = audit_trip_bible(project_dir)
+    gates = {
+        "source_coverage": {
+            "passed": atlas.get("stage") == "complete",
+            "detail": f'{atlas.get("pending_tasks", 0)} Atlas task(s) pending',
+        },
+        "trip_bible": {
+            "passed": bible_audit["blocking_count"] == 0,
+            "detail": f'{bible_audit["blocking_count"]} blocking issue(s)',
+        },
+        "story": {
+            "passed": bool(story and story.get("status") == "ready"),
+            "detail": "ready" if story and story.get("status") == "ready" else "review required",
+        },
+        "sound_measurement": {
+            "passed": (
+                soundscape_analysis.get("signal_analysis") == "provided"
+                and not sound_measurement_failures
+            ),
+            "detail": (
+                f"failed for {len(sound_measurement_failures)} source(s)"
+                if sound_measurement_failures
+                else soundscape_analysis.get("signal_analysis", "not_run")
+            ),
+        },
+        "timeline_applied": {
+            "passed": bool(applied.get("candidate_id")),
+            "detail": applied.get("candidate_id") or "not applied",
+        },
+        "delivery_qc": {
+            "passed": delivery.get("status") == "pass",
+            "detail": delivery.get("status", "not run"),
+        },
+    }
+    result["quality_gates"] = gates
+    result["blocking_gates"] = [name for name, gate in gates.items() if not gate["passed"]]
+    result["final_ready"] = not result["blocking_gates"]
     return result
 
 

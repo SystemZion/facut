@@ -158,7 +158,8 @@ def serve_command(
                 "vlog.soundscape.plan", "vlog.soundscape.apply",
                 "vlog.compare", "vlog.refine", "subtitle.transcribe", "subtitle.apply",
                 "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
-                "vlog.bible.show", "vlog.bible.import",
+                "vlog.bible.show", "vlog.bible.import", "vlog.bible.audit",
+                "vlog.bible.rename",
                 "subtitle.glossary.add", "typography.plan", "typography.apply",
                 "font.scan", "font.register", "font.match", "font.audit",
                 "vlog.preview", "vlog.build", "library.music.add", "library.sfx.add",
@@ -666,7 +667,8 @@ def serve_command(
                 "vlog.review.apply", "vlog.soundscape.analyze",
                 "vlog.soundscape.plan", "vlog.soundscape.apply",
                 "vlog.inbox.next", "vlog.inbox.list", "vlog.inbox.resolve",
-                "vlog.bible.show", "vlog.bible.import",
+                "vlog.bible.show", "vlog.bible.import", "vlog.bible.audit",
+                "vlog.bible.rename",
             }:
                 from facut.media.proxy_manager import ProxyManager
                 from facut.vlog import (
@@ -684,6 +686,7 @@ def serve_command(
                     resolve_inbox_item,
                     save_trip_bible,
                 )
+                from facut.vlog.context import audit_trip_bible, rename_trip_entity
                 from facut.vlog.labs import (
                     build_story_brief,
                     check_continuity,
@@ -767,7 +770,10 @@ def serve_command(
                     data = next_inspection_task(manager.project_dir)
                 elif method == "vlog.atlas.build":
                     data = build_scene_atlas(
-                        manager, batch_size=int(params.get("batch_size", 12))
+                        manager,
+                        batch_size=int(params.get("batch_size", 12)),
+                        sampling=str(params.get("sampling", "adaptive")),
+                        max_gap=float(params.get("max_gap", 15.0)),
                     )
                 elif method == "vlog.atlas.status":
                     data = scene_atlas_status(manager.project_dir)
@@ -805,6 +811,15 @@ def serve_command(
                 elif method == "vlog.bible.import":
                     data = save_trip_bible(manager.project_dir, dict(params["bible"]))
                     data["director_inbox"] = rebuild_director_inbox(manager.project_dir)
+                elif method == "vlog.bible.audit":
+                    data = audit_trip_bible(manager.project_dir)
+                elif method == "vlog.bible.rename":
+                    data = rename_trip_entity(
+                        manager.project_dir,
+                        str(params["entity"]),
+                        str(params["new_name"]),
+                        kind=str(params.get("kind", "auto")),
+                    )
                 elif method == "vlog.observe":
                     data = ingest_observations(
                         manager.require_document(),
@@ -852,7 +867,11 @@ def serve_command(
                         approved_only=bool(params.get("approved_only", True)),
                     )
                 elif method == "vlog.soundscape.analyze":
-                    data = analyze_soundscape(manager)
+                    data = analyze_soundscape(
+                        manager,
+                        measure=bool(params.get("measure", False)),
+                        ffmpeg=state.config.tools.ffmpeg,
+                    )
                 elif method == "vlog.soundscape.plan":
                     data = plan_soundscape(
                         manager,

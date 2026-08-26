@@ -27,6 +27,8 @@ def test_director_loop_actions_are_public_and_strict() -> None:
         "vlog.soundscape.analyze",
         "vlog.soundscape.plan",
         "vlog.soundscape.apply",
+        "vlog.bible.audit",
+        "vlog.bible.rename",
     }
     for action in expected:
         schema = action_schema(action)
@@ -34,6 +36,8 @@ def test_director_loop_actions_are_public_and_strict() -> None:
         assert schema["parameters"]["additionalProperties"] is False
     assert action_schema("vlog.review.apply")["mutates"] is True
     assert action_schema("vlog.soundscape.apply")["mutates"] is True
+    assert action_schema("vlog.atlas.build")["parameters"]["properties"]["sampling"]["default"] == "adaptive"
+    assert action_schema("vlog.soundscape.analyze")["parameters"]["properties"]["measure"]["default"] is False
 
 
 def test_workflow_prefers_external_story_and_keeps_deterministic_fallback() -> None:

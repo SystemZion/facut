@@ -115,6 +115,116 @@ def save_trip_bible(project_dir: str | Path, payload: dict[str, Any]) -> dict[st
     }
 
 
+def audit_trip_bible(project_dir: str | Path) -> dict[str, Any]:
+    """Report ambiguous entities and facts that cannot safely reach narration or titles."""
+
+    bible = load_trip_bible(project_dir)
+    issues: list[dict[str, Any]] = []
+    seen_ids: dict[str, str] = {}
+    seen_names: dict[str, str] = {}
+    for kind, entities in (("person", bible.people), ("place", bible.places)):
+        for entity in entities:
+            if entity.id in seen_ids:
+                issues.append({"code": "DUPLICATE_ENTITY_ID", "entity": entity.id})
+            seen_ids[entity.id] = kind
+            for name in [entity.display_name, *entity.aliases]:
+                normalized = name.strip().casefold()
+                owner = seen_names.get(normalized)
+                if owner is not None and owner != entity.id:
+                    issues.append(
+                        {
+                            "code": "AMBIGUOUS_ENTITY_NAME",
+                            "name": name,
+                            "entities": sorted({owner, entity.id}),
+                        }
+                    )
+                seen_names[normalized] = entity.id
+            if not entity.confirmed:
+                issues.append(
+                    {"code": "UNCONFIRMED_ENTITY", "kind": kind, "entity": entity.id}
+                )
+    for fact in bible.facts:
+        if fact.status == "uncertain":
+            issues.append({"code": "UNCERTAIN_FACT", "fact": fact.id})
+        if fact.status == "confirmed" and not fact.evidence_observation_ids and fact.source != "user":
+            issues.append({"code": "CONFIRMED_FACT_WITHOUT_EVIDENCE", "fact": fact.id})
+    blocking_codes = {
+        "DUPLICATE_ENTITY_ID",
+        "AMBIGUOUS_ENTITY_NAME",
+        "CONFIRMED_FACT_WITHOUT_EVIDENCE",
+    }
+    return {
+        "valid": not any(item["code"] in blocking_codes for item in issues),
+        "issue_count": len(issues),
+        "blocking_count": sum(item["code"] in blocking_codes for item in issues),
+        "issues": issues,
+        "policy_sha256": trip_bible_sha256(bible),
+    }
+
+
+def rename_trip_entity(
+    project_dir: str | Path,
+    reference: str,
+    new_name: str,
+    *,
+    kind: str = "auto",
+) -> dict[str, Any]:
+    """Rename one uniquely resolved person/place while retaining the old name as an alias."""
+
+    if kind not in {"auto", "person", "place"}:
+        raise ValueError("kind must be auto, person, or place")
+    normalized_reference = reference.strip().casefold()
+    selected: list[tuple[str, Any]] = []
+    bible = load_trip_bible(project_dir)
+    groups = []
+    if kind in {"auto", "person"}:
+        groups.append(("person", bible.people))
+    if kind in {"auto", "place"}:
+        groups.append(("place", bible.places))
+    for entity_kind, entities in groups:
+        for entity in entities:
+            names = [entity.id, entity.display_name, *entity.aliases]
+            if normalized_reference in {item.strip().casefold() for item in names}:
+                selected.append((entity_kind, entity))
+    if not selected:
+        raise ValueError(f'Trip Bible entity "{reference}" was not found.')
+    if len(selected) != 1:
+        raise ValueError(
+            f'Trip Bible entity "{reference}" is ambiguous; use a stable entity ID and --kind.'
+        )
+    entity_kind, entity = selected[0]
+    clean_name = new_name.strip()
+    if not clean_name:
+        raise ValueError("new_name must not be empty")
+    normalized_new = clean_name.casefold()
+    for other_kind, entities in (("person", bible.people), ("place", bible.places)):
+        for other in entities:
+            if other.id == entity.id and other_kind == entity_kind:
+                continue
+            if normalized_new in {
+                item.strip().casefold()
+                for item in [other.display_name, *other.aliases]
+            }:
+                raise ValueError(
+                    f'New Trip Bible name "{clean_name}" already belongs to "{other.id}".'
+                )
+    old_name = entity.display_name
+    if old_name != clean_name and old_name not in entity.aliases:
+        entity.aliases.append(old_name)
+    entity.display_name = clean_name
+    saved = save_trip_bible(project_dir, bible.model_dump(mode="json"))
+    return {
+        "kind": entity_kind,
+        "entity_id": entity.id,
+        "old_name": old_name,
+        "new_name": clean_name,
+        "aliases": entity.aliases,
+        "trip_bible_sha256": trip_bible_sha256(TripBible.model_validate(saved["bible"])),
+        "stale_dependents": ["story-plan", "narration-plan", "typography-plan"],
+        "path": saved["path"],
+    }
+
+
 def trip_bible_fact_policy(bible: TripBible) -> dict[str, Any]:
     """Return the compact allow/withhold contract consumed by generators."""
 

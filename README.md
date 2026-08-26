@@ -5,7 +5,21 @@
 
 **facut**（Fast AI Cut）是一款面向 AI Agent、自动化脚本与高级用户的非破坏性命令行视频编辑器。它使用稳定素材 ID、结构化工程、可组合子命令及统一 JSON 返回值，让复杂剪辑既能由人操作，也能可靠地被程序调用。
 
-当前开发版本 `0.9.2` 引入并稳定 Director Loop：Scene Atlas 默认把12条素材组成一个可恢复的外部AI审阅包，StoryGraph 3保存旅行章节、事件因果和视觉母题，Opening/Ending Lab、Continuity Guard、三轮审片与Soundscape把“看素材—出故事—审片—修订”连成可追溯闭环。可选C++ Native Accelerator继续负责批量技术分析；FACUT不内置本地视觉模型，也不会用Token限制跳过有效素材。
+当前开发版本 `0.9.3` 在 Director Loop 上增加了稳定快捷命令、自适应长镜头采样、Trip Bible审计、实测声音证据、质量门禁状态和缓存完整性验证。Scene Atlas仍由外部视觉AI完成画面判断；可选C++ Native Accelerator负责批量技术分析，FACUT不会用Token限制跳过有效素材。
+
+最常用的人类入口现在可以保持很短，同时仍执行完整质量流程：
+
+```powershell
+facut scan D:\Trip -p D:\TripProject --deep
+facut cut D:\Trip -o D:\Final\review.mp4 -s comedy -l 8m --draft
+facut next -p D:\TripProject
+facut resume -p D:\TripProject
+facut cut D:\Trip -o D:\Final\final.mp4 -p D:\TripProject --final --4k
+facut say "今天继续出发。" -v roger -s chat -o narration.wav
+facut check video D:\Final\final.mp4
+```
+
+`facut explain cut ...` 可以在不执行、不修改工程的前提下显示快捷命令对应的标准动作和有效默认值。默认值通过 `facut defaults set/show/reset` 管理，优先级为“显式参数 > 工程 > 用户 > 内置”。快捷命令不会跳过外部画面观察、1080p审片或最终QC。
 
 最短工作流：
 

@@ -40,6 +40,8 @@ class CliState:
     project: Path | None
     config: AppConfig
     logger: logging.Logger
+    requested_command: str | None = None
+    canonical_action: str | None = None
 
 
 def _version_callback(value: bool) -> None:
@@ -105,6 +107,9 @@ def emit(
 ) -> None:
     """Respect global output mode for all command implementations."""
 
+    if state.requested_command:
+        response.requested_command = state.requested_command
+        response.canonical_action = state.canonical_action or response.command
     if state.json_output:
         typer.echo(response.as_json())
     elif not state.quiet and human:
@@ -116,6 +121,9 @@ def fail(state: CliState, command: str, error: FacutError) -> None:
 
     state.logger.error("%s: %s", command, error.message)
     response = error_response(command, error)
+    if state.requested_command:
+        response.requested_command = state.requested_command
+        response.canonical_action = state.canonical_action or command
     if state.json_output:
         typer.echo(response.as_json())
     else:
@@ -316,6 +324,16 @@ from facut.cli.runtime_commands import (  # noqa: E402
     cleanram_command,
     warmup_command,
 )
+from facut.cli.shortcut_commands import (  # noqa: E402
+    check_app,
+    cut_command,
+    defaults_app,
+    explain_command,
+    next_command,
+    resume_command,
+    say_command,
+    scan_command,
+)
 
 app.command("init")(init_command)
 app.command("import")(import_command)
@@ -368,6 +386,17 @@ app.add_typer(release_app, name="release")
 app.command("cleanram")(cleanram_command)
 app.command("warmup")(warmup_command)
 app.add_typer(autoload_app, name="autoload")
+app.command("scan")(scan_command)
+app.command("cut")(cut_command)
+app.command("resume")(resume_command)
+app.command("next")(next_command)
+app.command("say")(say_command)
+app.command(
+    "explain",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(explain_command)
+app.add_typer(check_app, name="check")
+app.add_typer(defaults_app, name="defaults")
 
 
 if __name__ == "__main__":

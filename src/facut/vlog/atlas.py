@@ -23,7 +23,7 @@ from facut.core.project_manager import ProjectManager
 from .models import EvidenceObservation
 
 
-ATLAS_VERSION = "1.0"
+ATLAS_VERSION = "1.1"
 DEFAULT_BATCH_SIZE = 12
 DEEP_SAMPLE_COUNT = 12
 
@@ -71,6 +71,21 @@ def _sample_times(duration: float | None, count: int = 3) -> list[float]:
     return [round(margin + span * index / (count - 1), 6) for index in range(count)]
 
 
+def _adaptive_sample_times(duration: float | None, max_gap: float) -> list[float]:
+    """Cover long clips without letting adjacent requested samples exceed max_gap."""
+
+    if max_gap <= 0:
+        raise ValueError("max_gap must be greater than zero")
+    if duration is None or duration <= max_gap:
+        return _sample_times(duration)
+    # Include the normal entry/middle/exit anchors and enough evenly spaced
+    # samples to bound blind regions. These are requests for an external visual
+    # agent, not claims that FACUT interpreted the frames itself.
+    intervals = max(2, int((duration / max_gap) + 0.999999))
+    dense = _sample_times(duration, intervals + 1)
+    return sorted(set([*_sample_times(duration), *dense]))
+
+
 def _source_exists(manager: ProjectManager, asset: MediaAsset) -> tuple[bool, str | None]:
     source = manager.resolve_path(asset.path)
     if not source.is_file():
@@ -80,7 +95,13 @@ def _source_exists(manager: ProjectManager, asset: MediaAsset) -> tuple[bool, st
     return True, None
 
 
-def _asset_record(asset: MediaAsset, prepared: dict[str, Any] | None = None) -> dict[str, Any]:
+def _asset_record(
+    asset: MediaAsset,
+    prepared: dict[str, Any] | None = None,
+    *,
+    sampling: str = "adaptive",
+    max_gap: float = 15.0,
+) -> dict[str, Any]:
     duration = asset.technical.duration
     prepared = prepared or {}
     return {
@@ -103,7 +124,11 @@ def _asset_record(asset: MediaAsset, prepared: dict[str, Any] | None = None) -> 
         "waveform": prepared.get("waveform"),
         "baseline": {
             "required": True,
-            "sample_times": _sample_times(duration),
+            "sample_times": (
+                _adaptive_sample_times(duration, max_gap)
+                if sampling == "adaptive"
+                else _sample_times(duration)
+            ),
             "required_evidence": [
                 "entry-middle-exit",
                 "scene-change-or-action-peak",
@@ -114,17 +139,23 @@ def _asset_record(asset: MediaAsset, prepared: dict[str, Any] | None = None) -> 
     }
 
 
-def _task_id(kind: Literal["baseline", "deep"], assets: Iterable[dict[str, Any]]) -> str:
+def _task_id(
+    kind: Literal["baseline", "deep"],
+    assets: Iterable[dict[str, Any]],
+    evidence_policy: dict[str, Any],
+) -> str:
     members = sorted(
         (item["media_id"], item["content_sha256"]) for item in assets
     )
-    return f"atlas_{kind}_{_digest({'kind': kind, 'members': members}, length=16)}"
+    return f"atlas_{kind}_{_digest({'kind': kind, 'members': members, 'policy': evidence_policy}, length=16)}"
 
 
 def _make_task(
-    kind: Literal["baseline", "deep"], assets: list[dict[str, Any]]
+    kind: Literal["baseline", "deep"],
+    assets: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
 ) -> dict[str, Any]:
-    task_id = _task_id(kind, assets)
+    task_id = _task_id(kind, assets, evidence_policy)
     return {
         "task_id": task_id,
         "kind": kind,
@@ -132,6 +163,7 @@ def _make_task(
         "media_ids": [item["media_id"] for item in assets],
         "asset_hashes": {item["media_id"]: item["content_sha256"] for item in assets},
         "minimum_observations": len(assets),
+        "evidence_policy": evidence_policy,
     }
 
 
@@ -149,13 +181,23 @@ def _stored_observation_index(root: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 def _current_observed_media(
-    assets: list[dict[str, Any]], observations: dict[str, list[dict[str, Any]]]
+    assets: list[dict[str, Any]],
+    observations: dict[str, list[dict[str, Any]]],
+    evidence_policy: dict[str, Any],
 ) -> set[str]:
     hashes = {item["media_id"]: item["content_sha256"] for item in assets}
     return {
         media_id
         for media_id, records in observations.items()
-        if any(item.get("content_sha256") == hashes.get(media_id) for item in records)
+        if any(
+            item.get("content_sha256") == hashes.get(media_id)
+            and isinstance(item.get("evidence_policy"), dict)
+            and all(
+                item["evidence_policy"].get(key) == value
+                for key, value in evidence_policy.items()
+            )
+            for item in records
+        )
     }
 
 
@@ -214,6 +256,8 @@ def build_scene_atlas(
     manager: ProjectManager,
     *,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    sampling: str = "adaptive",
+    max_gap: float = 15.0,
 ) -> dict[str, Any]:
     """Build or resume an atlas without performing visual inference.
 
@@ -225,6 +269,10 @@ def build_scene_atlas(
 
     if batch_size < 1 or batch_size > 100:
         raise ValueError("batch_size must be between 1 and 100")
+    if sampling not in {"adaptive", "baseline"}:
+        raise ValueError("sampling must be adaptive or baseline")
+    if max_gap <= 0:
+        raise ValueError("max_gap must be greater than zero")
     root = _atlas_root(manager.project_dir)
     document = manager.require_document()
     prepared_manifest = _read_json(root.parent / "manifest.json", {"assets": []})
@@ -251,11 +299,19 @@ def build_scene_atlas(
             )
             continue
         first_by_hash[media.sha256] = media.id
-        assets.append(_asset_record(media, prepared_by_id.get(media.id)))
+        assets.append(
+            _asset_record(
+                media,
+                prepared_by_id.get(media.id),
+                sampling=sampling,
+                max_gap=max_gap,
+            )
+        )
 
     stored = _stored_observation_index(root)
     _annotate_near_duplicates(assets)
-    observed = _current_observed_media(assets, stored)
+    evidence_policy = {"sampling": sampling, "max_gap": float(max_gap)}
+    observed = _current_observed_media(assets, stored, evidence_policy)
     for asset in assets:
         reasons = _deep_review_reasons(stored.get(asset["media_id"], []))
         if reasons:
@@ -274,8 +330,14 @@ def build_scene_atlas(
     # idempotent after a process restart. Only new/changed assets are regrouped.
     current_hashes = {item["media_id"]: item["content_sha256"] for item in assets}
     assigned: set[str] = set()
+    same_sampling_policy = (
+        old.get("sampling", "baseline") == sampling
+        and float(old.get("max_gap", 15.0)) == float(max_gap)
+    )
     for previous_task in old.get("tasks", []):
         if (
+            same_sampling_policy
+            and
             previous_task.get("kind") == "baseline"
             and previous_task.get("asset_hashes")
             and all(
@@ -290,12 +352,16 @@ def build_scene_atlas(
             assigned.update(members)
     baseline = [item for item in assets if item["media_id"] not in assigned]
     for batch in _chunk(baseline, batch_size):
-        task = _make_task("baseline", batch)
+        task = _make_task("baseline", batch, evidence_policy)
         task["status"] = "complete" if set(task["media_ids"]) <= observed else "pending"
         tasks.append(task)
     deep = [item for item in assets if item["deep_review"]["required"]]
     for batch in _chunk(deep, batch_size):
-        task = _make_task("deep", batch)
+        task = _make_task(
+            "deep",
+            batch,
+            {**evidence_policy, "deep_sample_count": DEEP_SAMPLE_COUNT},
+        )
         task["status"] = old_status.get(task["task_id"], "pending")
         tasks.append(task)
 
@@ -305,6 +371,8 @@ def build_scene_atlas(
         "atlas_id": f"atlas_{_digest(identity, length=20)}",
         "project_revision": document.revision,
         "batch_size": batch_size,
+        "sampling": sampling,
+        "max_gap": max_gap,
         "visual_provider": "external-agent",
         "quality_policy": "Technical data prioritises review and never rejects valid media.",
         "assets": assets,
@@ -324,6 +392,8 @@ def build_scene_atlas(
             item["status"] == "pending" and item["kind"] == "deep" for item in tasks
         ),
         "path": str((root / "atlas.json").resolve()),
+        "sampling": sampling,
+        "max_gap": max_gap,
     }
 
 
@@ -341,6 +411,8 @@ def scene_atlas_status(project_dir: str | Path) -> dict[str, Any]:
     return {
         "stage": stage,
         "atlas_id": atlas["atlas_id"],
+        "sampling": atlas.get("sampling", "baseline"),
+        "max_gap": atlas.get("max_gap"),
         "asset_count": len(atlas["assets"]),
         "excluded_count": len(atlas["excluded"]),
         "pending_tasks": len(pending),
@@ -434,6 +506,7 @@ def ingest_atlas_observations(
         record = {
             "content_sha256": atlas_assets[item.media_id]["content_sha256"],
             "task_id": task_id,
+            "evidence_policy": task.get("evidence_policy"),
             "observation": item.model_dump(mode="json"),
         }
         previous = by_id.get(item.observation_id)
@@ -469,6 +542,7 @@ def ingest_atlas_observations(
         record["observation"]["media_id"]
         for record in output["observations"]
         if record.get("task_id") == task_id
+        and record.get("evidence_policy") == task.get("evidence_policy")
         and record.get("content_sha256")
         == task["asset_hashes"].get(record["observation"]["media_id"])
     }
@@ -479,7 +553,12 @@ def ingest_atlas_observations(
     # completed task IDs. It performs no media decoding or model inference.
     manager = ProjectManager(project_dir)
     manager.load()
-    build_scene_atlas(manager, batch_size=atlas["batch_size"])
+    build_scene_atlas(
+        manager,
+        batch_size=atlas["batch_size"],
+        sampling=atlas.get("sampling", "baseline"),
+        max_gap=float(atlas.get("max_gap", 15.0)),
+    )
     status = scene_atlas_status(project_dir)
     return {
         "inserted": inserted,

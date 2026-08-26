@@ -102,6 +102,18 @@ class RuntimeConfig(BaseModel):
     voice_idle_timeout: float = Field(default=600.0, ge=0)
 
 
+class WorkflowDefaultsConfig(BaseModel):
+    """Human-friendly defaults used only by top-level shortcut commands."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    style: str = "natural-vlog"
+    preset: str = "youtube-4k"
+    voice: str | None = None
+    hardware: str = "auto"
+    target_duration: float = Field(default=480.0, gt=0)
+
+
 class AppConfig(BaseModel):
     """Validated global facut settings."""
 
@@ -114,6 +126,7 @@ class AppConfig(BaseModel):
     models: ModelConfig = Field(default_factory=ModelConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    workflow: WorkflowDefaultsConfig = Field(default_factory=WorkflowDefaultsConfig)
     log_level: str = "INFO"
     temporary_directory: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()) / "facut")
 
@@ -209,7 +222,9 @@ def serialize_config(config: AppConfig) -> str:
                 raw["tools"][key] = "auto"
     lines = [f'log_level = {_toml_scalar(raw["log_level"])}']
     lines.append(f'temporary_directory = {_toml_scalar(raw["temporary_directory"])}')
-    for section in ("render", "preview", "cache", "tools", "models", "voice", "runtime"):
+    for section in (
+        "render", "preview", "cache", "tools", "models", "voice", "runtime", "workflow"
+    ):
         lines.extend(("", f"[{section}]"))
         lines.extend(
             f"{key} = {_toml_scalar(value)}"

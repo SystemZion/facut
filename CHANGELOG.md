@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.3 — 2026-08-26
+
+- Added clear top-level `scan`, `cut`, `resume`, `next`, `say`, `check`,
+  `explain`, and `defaults` commands while preserving every canonical command.
+- Added shortcut-to-canonical metadata to structured responses and Agent
+  capability discovery without changing canonical response payloads.
+- Added adaptive Scene Atlas sampling with a configurable maximum blind gap.
+- Added Trip Bible ambiguity/evidence auditing and safe entity rename with
+  dependent-plan invalidation.
+- Added optional original-source EBU R128 measurements to Soundscape analysis
+  and explicit quality-gate readiness in VLOG status.
+- Added render-cache size and SHA-256 integrity checks so empty or corrupted
+  segment artifacts cannot be reused.
+
 ## 0.9.2 — 2026-08-23
 
 - Added hard speech-span and atomic-event cut protection with an explicit reviewed override.

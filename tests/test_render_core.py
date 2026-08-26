@@ -20,7 +20,7 @@ from facut.core.models import (
     Transition,
 )
 from facut.core.timeline_engine import TimelineEngine
-from facut.render.cache import cache_key
+from facut.render.cache import RenderCache, cache_key
 from facut.render.ffmpeg_backend import FFmpegBackend
 from facut.render.graph_builder import GraphBuilder
 from facut.render.hardware import choose_h264_encoder
@@ -117,6 +117,23 @@ def test_cache_key_changes_with_source_state(tmp_path: Path) -> None:
     )
     assert len(first) == 64
     assert first != second
+
+
+def test_render_cache_rejects_empty_and_hash_mismatched_artifacts(tmp_path: Path) -> None:
+    cache = RenderCache(tmp_path / "cache")
+    key = "a" * 64
+    artifact = cache.path_for(key)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"")
+    assert cache.lookup(key) is None
+    assert not artifact.exists()
+
+    artifact.write_bytes(b"valid")
+    cache.commit(artifact)
+    assert cache.lookup(key) == artifact
+    artifact.write_bytes(b"corrupt")
+    assert cache.lookup(key) is None
+    assert not artifact.exists()
 
 
 def test_timeline_anchor_fade_out_is_applied_to_completed_video(tmp_path: Path) -> None:

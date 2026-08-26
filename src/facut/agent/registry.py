@@ -282,6 +282,25 @@ _ACTIONS: dict[str, dict[str, Any]] = {
             {"bible": {"type": "object", "additionalProperties": True}}, ["bible"]
         ),
     },
+    "vlog.bible.audit": {
+        "summary": "Audit Trip Bible entity ambiguity and unsupported confirmed facts.",
+        "mutates": False,
+        "rpc": True,
+        "parameters": _object({}),
+    },
+    "vlog.bible.rename": {
+        "summary": "Rename one uniquely resolved person or place and stale dependent plans.",
+        "mutates": True,
+        "rpc": True,
+        "parameters": _object(
+            {
+                "entity": {"type": "string", "minLength": 1},
+                "new_name": {"type": "string", "minLength": 1},
+                "kind": {"enum": ["auto", "person", "place"], "default": "auto"},
+            },
+            ["entity", "new_name"],
+        ),
+    },
     "native.doctor": {
         "summary": "Verify the optional C++ sidecar, protocol, FFmpeg ABI, and features.",
         "mutates": False,
@@ -368,7 +387,11 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "mutates": False,
         "rpc": True,
         "parameters": _object(
-            {"batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12}}
+            {
+                "batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+                "sampling": {"enum": ["adaptive", "baseline"], "default": "adaptive"},
+                "max_gap": {"type": "number", "exclusiveMinimum": 0, "default": 15.0},
+            }
         ),
     },
     "vlog.atlas.status": {
@@ -514,7 +537,7 @@ _ACTIONS: dict[str, dict[str, Any]] = {
         "summary": "Inventory dialogue, narration, original, ambience, music and SFX roles.",
         "mutates": False,
         "rpc": True,
-        "parameters": _object({}),
+        "parameters": _object({"measure": {"type": "boolean", "default": False}}),
     },
     "vlog.soundscape.plan": {
         "summary": "Create review-first ducking and mastering recommendations without fake measurements.",
@@ -1288,6 +1311,14 @@ def capabilities() -> dict[str, Any]:
         "protocol_version": "1.0",
         "facut_version": __version__,
         "transport": ["cli-json", "stdio-jsonrpc"],
+        "shortcuts": [
+            {"name": "scan", "canonical_action": "vlog.prepare"},
+            {"name": "cut", "canonical_action": "vlog.run"},
+            {"name": "resume", "canonical_action": "vlog.run"},
+            {"name": "next", "canonical_action": "vlog.status"},
+            {"name": "say", "canonical_action": "voice.say"},
+            {"name": "check", "canonical_action": "doctor/project.validate/qc"},
+        ],
         "response_contract": {
             "status": ["success", "error"],
             "revisioned": True,
