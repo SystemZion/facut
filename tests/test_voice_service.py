@@ -316,9 +316,14 @@ def test_start_status_stop_manage_a_hidden_daemon(tmp_path: Path) -> None:
             provider_log.read_text(encoding="utf-8", errors="replace")
             if provider_log.is_file() else "<missing>"
         )
+        state_diagnostics = (
+            state.read_text(encoding="utf-8", errors="replace")
+            if state.is_file() else "<missing>"
+        )
         pytest.fail(
             f"{error}\nvoice-service.log:\n{diagnostics}"
             f"\nvoice-provider.log:\n{provider_diagnostics}"
+            f"\ndaemon.json:\n{state_diagnostics}"
         )
     try:
         assert started["running"] is True
