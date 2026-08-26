@@ -47,6 +47,23 @@ def test_version() -> None:
     assert result.stdout.strip().startswith("facut ")
 
 
+def test_native_version_matches_python_package() -> None:
+    """Keep packaged C++ diagnostics aligned with the public FACUT version."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    cmake = (root / "native" / "CMakeLists.txt").read_text(encoding="utf-8")
+    package_version = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    native_version = re.search(
+        r"project\(facut_native VERSION ([^ )]+)", cmake, re.MULTILINE
+    )
+    assert package_version is not None
+    assert native_version is not None
+    assert native_version.group(1) == package_version.group(1)
+
+
 def test_render_help_exposes_clean_master_subtitle_switch() -> None:
     result = runner.invoke(app, ["render", "--help"], terminal_width=160)
     assert result.exit_code == 0

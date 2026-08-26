@@ -91,12 +91,20 @@ $ReleaseManifest = [ordered]@{
 }
 $ReleaseManifestPath = Join-Path $OutputRoot "facut-release.json"
 $ReleaseManifest | ConvertTo-Json | Set-Content -LiteralPath $ReleaseManifestPath -Encoding utf8
+$BundlePrefix = [System.IO.Path]::GetFullPath($Bundle).TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
 [pscustomobject]@{
     bundle = $Bundle
     archive = $Archive
     sha256 = $hash
     release_manifest = $ReleaseManifestPath
     files = @(Get-ChildItem -LiteralPath $Bundle -File -Recurse | ForEach-Object {
-        [System.IO.Path]::GetRelativePath($Bundle, $_.FullName)
+        $FilePath = [System.IO.Path]::GetFullPath($_.FullName)
+        if (-not $FilePath.StartsWith($BundlePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Packaged file escaped the bundle root: $FilePath"
+        }
+        $FilePath.Substring($BundlePrefix.Length)
     })
 }
