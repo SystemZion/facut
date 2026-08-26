@@ -53,8 +53,10 @@ def _daemon_environment() -> dict[str, str]:
         # and the daemon has no owner left to clean it after shutdown.
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     else:
-        source_paths = [item for item in sys.path if item and Path(item).exists()]
-        environment["PYTHONPATH"] = os.pathsep.join(source_paths)
+        # Pass only FACUT's import root. Re-exporting the parent's complete
+        # sys.path can inject pytest/site-packages and foreign framework paths
+        # into a fresh macOS interpreter before it reaches this module.
+        environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
     return environment
 
 

@@ -243,6 +243,18 @@ def test_frozen_daemon_uses_an_independent_pyinstaller_environment(
     assert environment["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
 
+def test_source_daemon_only_exports_facut_import_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from facut.voice import service
+
+    monkeypatch.delattr(service.sys, "frozen", raising=False)
+    environment = service._daemon_environment()
+
+    assert environment["PYTHONPATH"] == str(Path(service.__file__).resolve().parents[2])
+    assert os.pathsep not in environment["PYTHONPATH"]
+
+
 def test_require_cuda_rejects_an_already_running_cpu_service(tmp_path: Path) -> None:
     state = tmp_path / "cpu-running.json"
     server = VoiceServiceServer(
@@ -299,7 +311,15 @@ def test_start_status_stop_manage_a_hidden_daemon(tmp_path: Path) -> None:
     except Exception as error:
         log = state.parent / "voice-service.log"
         diagnostics = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else "<missing>"
-        pytest.fail(f"{error}\nvoice-service.log:\n{diagnostics}")
+        provider_log = state.parent / "voice-provider.log"
+        provider_diagnostics = (
+            provider_log.read_text(encoding="utf-8", errors="replace")
+            if provider_log.is_file() else "<missing>"
+        )
+        pytest.fail(
+            f"{error}\nvoice-service.log:\n{diagnostics}"
+            f"\nvoice-provider.log:\n{provider_diagnostics}"
+        )
     try:
         assert started["running"] is True
         assert started["already_running"] is False
