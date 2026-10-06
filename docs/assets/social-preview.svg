@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+<rect width="1280" height="640" fill="#0b1220"/>
+<rect x="64" y="64" width="1152" height="512" rx="32" fill="#111e31" stroke="#26415b"/>
+<text x="108" y="168" font-family="sans-serif" font-size="78" font-weight="700" fill="#eef6ff">FACUT</text>
+<text x="110" y="212" font-family="sans-serif" font-size="24" letter-spacing="5" fill="#68dbc8">FAST AI CUT</text>
+<text x="110" y="294" font-family="sans-serif" font-size="36" fill="#eef6ff">Video editing built for AI agents.</text>
+<text x="110" y="342" font-family="sans-serif" font-size="36" fill="#eef6ff">With human approval.</text>
+<path d="M110 418H1156" stroke="#34516c" stroke-width="3"/>
+<g font-family="monospace" font-size="26" fill="#68dbc8">
+<text x="110" y="470">PROMPT</text><text x="345" y="470">PATCH</text><text x="570" y="470">REVIEW</text><text x="810" y="470">APPROVE</text><text x="1050" y="470">RENDER</text>
+</g>
+<text x="110" y="538" font-family="sans-serif" font-size="20" fill="#9eb3c9">Deterministic · Non-destructive · FFmpeg-powered</text>
+</svg>
