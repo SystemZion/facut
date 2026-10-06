@@ -1,0 +1,27 @@
+{
+  "demo_type": "executed-workflow-visualization",
+  "ui_screen_recording": false,
+  "external_ai_used": false,
+  "human_approval_claimed": false,
+  "approval": "predefined synthetic test only",
+  "facut_version": "1.0.0",
+  "source_note": "Source checkout with Review CLI serialization fix; not the unmodified v1.0.0 portable release",
+  "source": "FFmpeg-generated testsrc2 and sine; no user media",
+  "checks": {
+    "source_hash_unchanged": true,
+    "preview_project_hash_unchanged": true,
+    "draft_apply_rejected": true,
+    "approved_dry_run_non_mutating": true,
+    "full_decode_before_after": true,
+    "monochrome_effect_measured": true
+  },
+  "durations_seconds": [
+    6.0,
+    6.0
+  ],
+  "gif_seconds": 19.200000000000003,
+  "sha256": {
+    "workflow-demo.gif": "a3e4f139f183ef4c5b76d5d99bfdddc1b7099cf469e5d18184da44a3014f144f"
+  },
+  "benchmark_note": "Not a creative quality or performance benchmark."
+}

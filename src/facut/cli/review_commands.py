@@ -28,7 +28,11 @@ def _emit(ctx: typer.Context, command: str, data, warnings: list[str] | None = N
     revision = None
     try: revision = manager_for(_state(ctx)).require_document().revision
     except Exception: pass
-    emit(_state(ctx), success_response(command, data, warnings=warnings or [], project_revision=revision), human=json.dumps(data, ensure_ascii=False, indent=2))
+    response = success_response(command, data, warnings=warnings or [], project_revision=revision)
+    # Patch apply returns domain models. Serialize them through the shared
+    # response model before formatting human output, even in --json mode.
+    human = json.dumps(response.model_dump(mode="json")["data"], ensure_ascii=False, indent=2)
+    emit(_state(ctx), response, human=human)
 
 def _fail(ctx: typer.Context, command: str, error: Exception) -> None:
     from facut.cli.main import fail
