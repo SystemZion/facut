@@ -174,3 +174,29 @@ def proxy_status(
         _emit(ctx, "proxy.status", data, revision)
     except Exception as error:
         _abort(ctx, "proxy.status", error)
+
+
+@proxy_app.command("evidence")
+def proxy_evidence(
+    ctx: typer.Context,
+    media_id: Annotated[str, typer.Argument()],
+    start: Annotated[float, typer.Option("--start")],
+    end: Annotated[float, typer.Option("--end")],
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    height: Annotated[int, typer.Option("--height")] = 540,
+    timings: Annotated[bool, typer.Option("--timings")] = False,
+) -> None:
+    """Export a <=60s continuous proxy clip with ORIGINAL audio and JSON provenance."""
+    from facut.media.segment_evidence import create_segment_evidence
+
+    try:
+        state = _state(ctx)
+        manager = manager_for(state)
+        data = create_segment_evidence(
+            manager, media_id, start=start, end=end, output=output, height=height,
+            ffmpeg=state.config.tools.ffmpeg, ffprobe=state.config.tools.ffprobe,
+            timings=timings,
+        )
+        _emit(ctx, "proxy.evidence", data, manager.require_document().revision)
+    except Exception as error:
+        _abort(ctx, "proxy.evidence", error)
