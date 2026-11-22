@@ -273,3 +273,118 @@ def test_adaptive_sampling_bounds_long_clip_blind_regions(tmp_path) -> None:
     times = task["assets"][0]["baseline"]["sample_times"]
     assert len(times) > 3
     assert max(right - left for left, right in zip(times, times[1:])) <= 15.0
+
+
+@pytest.mark.parametrize("changed", ["content", "sampling_gap"])
+def test_stale_observation_does_not_schedule_deep_review(tmp_path, changed) -> None:
+    manager = _manager(tmp_path, count=1)
+    build_scene_atlas(manager)
+    task = next_atlas_inspection_batch(manager.project_dir)
+    result = ingest_atlas_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {
+            "task_id": task["task_id"],
+            "observations": _observations(task, confidence=0.5, actions=["fall"]),
+        },
+    )
+    assert result["deep_pending"] == 1
+
+    max_gap = 15.0
+    if changed == "content":
+        replacement = tmp_path / "clip-000.mp4"
+        replacement.write_bytes(b"replacement-video")
+        manager.document.media[0].sha256 = hashlib_sha256(replacement.read_bytes())
+        manager.document.media[0].size = replacement.stat().st_size
+        manager.save(create_snapshot=False)
+    else:
+        max_gap = 10.0
+
+    rebuilt = build_scene_atlas(manager, max_gap=max_gap)
+    assert rebuilt["baseline_pending"] == 1
+    assert rebuilt["deep_pending"] == 0
+    next_task = next_atlas_inspection_batch(manager.project_dir)
+    assert next_task["assets"][0]["deep_review"]["reasons"] == []
+
+
+def test_deep_review_suggests_extra_samples_around_observed_event(tmp_path) -> None:
+    manager = _manager(tmp_path, count=1)
+    manager.document.media[0].technical.duration = 1800
+    manager.save(create_snapshot=False)
+    build_scene_atlas(manager)
+    baseline = next_atlas_inspection_batch(manager.project_dir)
+    records = _observations(baseline, actions=["fall"])
+    records[0]["range"] = {"start": 723.0, "end": 724.0}
+    ingest_atlas_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {"task_id": baseline["task_id"], "observations": records},
+    )
+
+    deep = next_atlas_inspection_batch(manager.project_dir)
+    review = deep["assets"][0]["deep_review"]
+    assert deep["kind"] == "deep"
+    assert review["sample_count"] == len(review["sample_times"]) == 12
+    assert review["event_sample_times"] == [722.0, 723.0, 723.5, 724.0, 725.0]
+    build_scene_atlas(manager)
+    assert next_atlas_inspection_batch(manager.project_dir) == deep
+
+
+def test_event_sample_times_are_bounded_and_use_only_baseline_evidence() -> None:
+    from facut.vlog.atlas import _event_sample_times
+
+    observations = [
+        {
+            "task_id": "atlas_baseline_example",
+            "observation": {
+                "range": {"start": float(i), "end": i + 0.8},
+                "actions": ["fall"],
+            },
+        }
+        for i in range(40)
+    ]
+    observations.append(
+        {
+            "task_id": "atlas_deep_example",
+            "observation": {"range": {"start": 48.0, "end": 49.0}, "actions": ["fall"]},
+        }
+    )
+    times = _event_sample_times(50.0, observations)
+    assert len(times) == 12
+    assert times == _event_sample_times(50.0, list(reversed(observations)))
+    assert times[0] == 0.4 and times[-1] == 39.4
+    assert _event_sample_times(None, observations) == []
+
+
+def test_near_duplicate_index_matches_exhaustive_and_ignores_invalid_hashes() -> None:
+    import random
+
+    rng = random.Random(42)
+    anchors = [rng.getrandbits(64) for _ in range(25)]
+    values = [
+        anchor ^ sum(1 << bit for bit in rng.sample(range(64), distance))
+        for anchor in anchors
+        for distance in range(6)
+    ]
+    # Distance four, with flips in four different bands; bit 63 must be covered.
+    values.extend([0, (1 << 63) | (1 << 51) | (1 << 30) | 2])
+    assets = [
+        {"media_id": str(i), "representative_frames": [{"perceptual_hash": f"{value:016x}"}]}
+        for i, value in enumerate(values)
+    ]
+    assets.extend(
+        [
+            {"media_id": "invalid", "representative_frames": [{"perceptual_hash": "x" * 16}]},
+            {"media_id": "null-frame", "representative_frames": [None]},
+        ]
+    )
+    _annotate_near_duplicates(assets)
+
+    for i, left in enumerate(values):
+        expected = [
+            {"media_id": str(j), "hamming_distance": distance}
+            for j, right in enumerate(values)
+            if i != j and (distance := (left ^ right).bit_count()) <= 4
+        ]
+        assert assets[i].get("near_duplicate_candidates", []) == expected
+    assert all("near_duplicate_candidates" not in item for item in assets[-2:])

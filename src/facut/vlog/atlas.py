@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -26,6 +27,11 @@ from .models import EvidenceObservation
 ATLAS_VERSION = "1.1"
 DEFAULT_BATCH_SIZE = 12
 DEEP_SAMPLE_COUNT = 12
+DEEP_EVENT_SAMPLE_LIMIT = 12
+NEAR_DUPLICATE_DISTANCE = 4
+# Split all 64 bits into five disjoint bands. Any pair within distance four
+# must share at least one band exactly; the exact distance is still checked.
+_HASH_BANDS = ((0, 13), (13, 13), (26, 13), (39, 13), (52, 12))
 
 
 def _atlas_root(project_dir: str | Path) -> Path:
@@ -180,25 +186,21 @@ def _stored_observation_index(root: Path) -> dict[str, list[dict[str, Any]]]:
     return result
 
 
-def _current_observed_media(
-    assets: list[dict[str, Any]],
-    observations: dict[str, list[dict[str, Any]]],
+def _current_observations(
+    asset: dict[str, Any],
+    observations: list[dict[str, Any]],
     evidence_policy: dict[str, Any],
-) -> set[str]:
-    hashes = {item["media_id"]: item["content_sha256"] for item in assets}
-    return {
-        media_id
-        for media_id, records in observations.items()
-        if any(
-            item.get("content_sha256") == hashes.get(media_id)
-            and isinstance(item.get("evidence_policy"), dict)
-            and all(
-                item["evidence_policy"].get(key) == value
-                for key, value in evidence_policy.items()
-            )
-            for item in records
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in observations
+        if item.get("content_sha256") == asset["content_sha256"]
+        and isinstance(item.get("evidence_policy"), dict)
+        and all(
+            item["evidence_policy"].get(key) == value
+            for key, value in evidence_policy.items()
         )
-    }
+    ]
 
 
 def _deep_review_reasons(observations: list[dict[str, Any]]) -> list[str]:
@@ -225,24 +227,80 @@ def _deep_review_reasons(observations: list[dict[str, Any]]) -> list[str]:
     return sorted(reasons)
 
 
-def _hash_distance(left: str, right: str) -> int:
-    return (int(left, 16) ^ int(right, 16)).bit_count()
+def _event_sample_times(
+    duration: float | None, observations: list[dict[str, Any]]
+) -> list[float]:
+    """Suggest bounded extra looks near evidence-backed events, not new claims."""
+
+    if duration is None or duration <= 0:
+        return []
+    windows: set[tuple[float, float]] = set()
+    for record in observations:
+        # Deep review must not feed its own suggested windows.
+        if not str(record.get("task_id", "")).startswith("atlas_baseline_"):
+            continue
+        if not _deep_review_reasons([record]):
+            continue
+        interval = record["observation"]["range"]
+        start = min(duration, max(0.0, interval["start"]))
+        end = min(duration, max(start, interval["end"]))
+        windows.add((start, end))
+    ordered = sorted(windows)
+    if len(ordered) > DEEP_EVENT_SAMPLE_LIMIT:
+        # Keep deterministic spread across a clip instead of taking only early events.
+        last = len(ordered) - 1
+        ordered = [
+            ordered[index * last // (DEEP_EVENT_SAMPLE_LIMIT - 1)]
+            for index in range(DEEP_EVENT_SAMPLE_LIMIT)
+        ]
+    whole_clip = set(_sample_times(duration, DEEP_SAMPLE_COUNT))
+    extra: set[float] = set()
+    # Give each distinct window a midpoint before spending spare slots around it.
+    for sample in (
+        lambda start, end: (start + end) / 2,
+        lambda start, end: start - 1,
+        lambda start, end: end + 1,
+        lambda start, end: start,
+        lambda start, end: end,
+    ):
+        for start, end in ordered:
+            # Avoid asking for a frame at the exact (exclusive) end of media.
+            last_frame = duration - min(0.01, duration / 2)
+            timestamp = round(min(last_frame, max(0.0, sample(start, end))), 6)
+            if timestamp not in whole_clip:
+                extra.add(timestamp)
+                if len(extra) == DEEP_EVENT_SAMPLE_LIMIT:
+                    return sorted(extra)
+    return sorted(extra)
 
 
 def _annotate_near_duplicates(assets: list[dict[str, Any]]) -> None:
     """Record perceptual candidates without excluding either source."""
 
-    fingerprints: list[tuple[dict[str, Any], str]] = []
+    fingerprints: list[tuple[dict[str, Any], int]] = []
+    bands: dict[tuple[int, int], list[int]] = {}
     for asset in assets:
         frames = asset.get("representative_frames") or []
         middle = frames[len(frames) // 2] if frames else {}
-        value = middle.get("perceptual_hash")
-        if isinstance(value, str) and len(value) == 16:
-            fingerprints.append((asset, value))
+        value = middle.get("perceptual_hash") if isinstance(middle, dict) else None
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Fa-f]{16}", value):
+            continue
+        index = len(fingerprints)
+        fingerprint = int(value, 16)
+        fingerprints.append((asset, fingerprint))
+        for shift, width in _HASH_BANDS:
+            key = (shift, (fingerprint >> shift) & ((1 << width) - 1))
+            bands.setdefault(key, []).append(index)
+
     for index, (left, left_hash) in enumerate(fingerprints):
-        for right, right_hash in fingerprints[index + 1 :]:
-            distance = _hash_distance(left_hash, right_hash)
-            if distance > 4:
+        possible: set[int] = set()
+        for shift, width in _HASH_BANDS:
+            key = (shift, (left_hash >> shift) & ((1 << width) - 1))
+            possible.update(right_index for right_index in bands[key] if right_index > index)
+        for right_index in sorted(possible):
+            right, right_hash = fingerprints[right_index]
+            distance = (left_hash ^ right_hash).bit_count()
+            if distance > NEAR_DUPLICATE_DISTANCE:
                 continue
             left.setdefault("near_duplicate_candidates", []).append(
                 {"media_id": right["media_id"], "hamming_distance": distance}
@@ -311,15 +369,20 @@ def build_scene_atlas(
     stored = _stored_observation_index(root)
     _annotate_near_duplicates(assets)
     evidence_policy = {"sampling": sampling, "max_gap": float(max_gap)}
-    observed = _current_observed_media(assets, stored, evidence_policy)
+    observed: set[str] = set()
     for asset in assets:
-        reasons = _deep_review_reasons(stored.get(asset["media_id"], []))
+        media_id = asset["media_id"]
+        current = _current_observations(asset, stored.get(media_id, []), evidence_policy)
+        if current:
+            observed.add(media_id)
+        reasons = _deep_review_reasons(current)
         if reasons:
             asset["deep_review"] = {
                 "required": True,
                 "reasons": reasons,
                 "sample_count": DEEP_SAMPLE_COUNT,
                 "sample_times": _sample_times(asset["duration"], DEEP_SAMPLE_COUNT),
+                "event_sample_times": _event_sample_times(asset["duration"], current),
             }
 
     old = _read_json(root / "atlas.json", {"tasks": []})
