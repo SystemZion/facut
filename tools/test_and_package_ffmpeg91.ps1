@@ -50,7 +50,7 @@ if ((Get-FileHash -LiteralPath $facut).Hash -ne $manifest.executable_sha256) { t
 $doctor = & $native --doctor | ConvertFrom-Json
 if (($doctor.ffmpeg.avcodec -shr 16) -ne 63 -or ($doctor.ffmpeg.avformat -shr 16) -ne 63 -or
     ($doctor.ffmpeg.avutil -shr 16) -ne 61 -or
-    $doctor.ffmpeg.license -notmatch 'Lesser General Public License' -or
+    $doctor.ffmpeg.license -notmatch '^(?:LGPL|(?:GNU )?Lesser General Public License) version 3 or later$' -or
     $doctor.ffmpeg.configuration -match '--enable-(gpl|nonfree)') {
     throw "Unexpected native FFmpeg ABI/license: $($doctor.ffmpeg | ConvertTo-Json -Compress)"
 }
