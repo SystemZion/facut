@@ -54,6 +54,12 @@ New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
 $FacutSourceRoot = Split-Path -Parent $FacutExe
 $RuntimeDirectory = Join-Path $FacutSourceRoot "facut_runtime"
 Copy-Item -LiteralPath $FacutExe -Destination (Join-Path $Bundle "facut.exe")
+foreach ($notice in @("FFMPEG_CLI_GPLv3.txt", "FFMPEG_CLI_BUILD_LICENSE.txt")) {
+    $source = Join-Path $FacutSourceRoot $notice
+    if (Test-Path -LiteralPath $source -PathType Leaf) {
+        Copy-Item -LiteralPath $source -Destination $Bundle
+    }
+}
 $BuildManifestSource = Join-Path $FacutSourceRoot "facut-build.json"
 if (Test-Path -LiteralPath $BuildManifestSource -PathType Leaf) {
     Copy-Item -LiteralPath $BuildManifestSource -Destination $Bundle
