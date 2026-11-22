@@ -74,3 +74,17 @@ $video = @($result.results | Where-Object { $_.kind -eq 'video' })
 if ($photo.Count -ne 1 -or @($photo[0].representative_frames).Count -ne 1) { throw 'Still-image scan failed' }
 if ($video.Count -ne 1 -or !$video[0].representative_frames -or !$video[0].waveform.peaks -or
     $video[0].waveform.sample_rate -ne 48000) { throw 'Video frames or original audio waveform missing' }
+
+# Test installation with a fresh destination and explicitly excluded model weights.
+$installed = Join-Path $env:RUNNER_TEMP 'facut91-installed-smoke'
+& $facut --json install --directory $installed --no-path --exclude model
+$installedFacut = Join-Path $installed 'facut.exe'
+$installedNative = Join-Path $installed 'facut-native.exe'
+$installedDoctor = & $installedNative --doctor | ConvertFrom-Json
+if (($installedDoctor.ffmpeg.avcodec -shr 16) -ne 63) { throw 'Installed native ABI mismatch' }
+if ((Get-FileHash -LiteralPath (Join-Path $installed 'facut_runtime/facut_bin/ffmpeg.exe')).Hash -ne (Get-FileHash -LiteralPath $ff).Hash) { throw 'Installed FFmpeg mismatch' }
+if ((Get-FileHash -LiteralPath (Join-Path $installed 'facut_runtime/facut_bin/ffprobe.exe')).Hash -ne (Get-FileHash -LiteralPath $fp).Hash) { throw 'Installed FFprobe mismatch' }
+foreach ($notice in @('THIRD_PARTY_NOTICES.md', 'FFMPEG_LICENSE.txt', 'FFMPEG_CLI_GPLv3.txt', 'FFMPEG_CLI_BUILD_LICENSE.txt')) {
+    if (!(Test-Path -LiteralPath (Join-Path $installed $notice) -PathType Leaf)) { throw "Installed license missing: $notice" }
+}
+& $installedFacut --json native doctor

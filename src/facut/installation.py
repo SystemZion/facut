@@ -39,7 +39,12 @@ NATIVE_LIBRARY_PREFIXES = (
     "swresample-",
     "swscale-",
 )
-NATIVE_NOTICE_FILES = {"THIRD_PARTY_NOTICES.md", "FFMPEG_LICENSE.txt"}
+NATIVE_NOTICE_FILES = {
+    "THIRD_PARTY_NOTICES.md",
+    "FFMPEG_LICENSE.txt",
+    "FFMPEG_CLI_GPLv3.txt",
+    "FFMPEG_CLI_BUILD_LICENSE.txt",
+}
 
 
 def default_install_directory() -> Path:
