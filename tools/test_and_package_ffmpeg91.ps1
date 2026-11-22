@@ -70,10 +70,10 @@ New-Item -ItemType Directory -Force 'native-smoke' | Out-Null
 & $facut --json analyze batch 'native-smoke' --engine native --mode fast --output-directory 'native-smoke/results'
 $result = Get-Content -Raw -Encoding UTF8 'native-smoke/results/native-results.json' | ConvertFrom-Json
 $photo = @($result.results | Where-Object { $_.kind -eq 'image' })
-$video = @($result.results | Where-Object { $_.kind -eq 'video' })
+$video = @($result.results | Where-Object { $_.kind -eq 'media' -and $null -ne $_.video })
 if ($photo.Count -ne 1 -or @($photo[0].representative_frames).Count -ne 1) { throw 'Still-image scan failed' }
 if ($video.Count -ne 1 -or !$video[0].representative_frames -or !$video[0].waveform.peaks -or
-    $video[0].waveform.sample_rate -ne 48000) { throw 'Video frames or original audio waveform missing' }
+    $video[0].audio.sample_rate -ne 48000 -or $video[0].waveform.sample_rate -ne 48000) { throw 'Video frames or original audio waveform missing' }
 
 # Test installation with a fresh destination and explicitly excluded model weights.
 $installed = Join-Path $env:RUNNER_TEMP 'facut91-installed-smoke'
