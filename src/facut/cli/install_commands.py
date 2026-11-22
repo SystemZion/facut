@@ -195,18 +195,22 @@ def models_path(
 @models_app.command("link")
 def models_link(
     ctx: typer.Context,
-    model: Annotated[str, typer.Argument(help="voice_model or srt_model")],
+    model: Annotated[str, typer.Argument(help="voice_model, srt_model, or srt_quality")],
     directory: Annotated[Path, typer.Argument(help="Existing model directory")],
 ) -> None:
     """Link an existing model in place without copying its large files."""
 
     try:
         normalized = model.strip().casefold().replace("-", "_")
-        if normalized not in {"voice_model", "srt_model"}:
-            raise ValueError("Model name must be voice_model or srt_model.")
+        if normalized not in {"voice_model", "srt_model", "srt_quality"}:
+            raise ValueError("Model name must be voice_model, srt_model, or srt_quality.")
         target = directory.expanduser().resolve()
         if not target.is_dir():
             raise FileNotFoundError(f'Model directory "{target}" was not found.')
+        if normalized == "srt_quality":
+            from facut.config import require_local_quality_model
+
+            require_local_quality_model(target)
         config = load_config()
         values = config.model_dump()
         values["models"][normalized] = target
@@ -237,6 +241,16 @@ def models_status(ctx: typer.Context) -> None:
             }
             for name in ("voice_model", "srt_model")
         }
+        quality = config.models.srt_quality
+        if quality is not None:
+            from facut.config import local_quality_model_ready
+
+            quality = quality.expanduser().resolve()
+            data["srt_quality"] = {
+                "directory": str(quality),
+                "available": local_quality_model_ready(quality),
+                "explicit": str(quality),
+            }
         _emit(ctx, "models.status", data)
     except Exception as error:
         _fail(ctx, "models.status", error)

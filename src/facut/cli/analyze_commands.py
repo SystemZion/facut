@@ -8,7 +8,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any, Callable, Literal
 
 import typer
 
@@ -344,6 +344,19 @@ def beats(
     )
 
 
+def _local_model_stamp(directory: Path) -> dict[str, tuple[int, int]]:
+    """Avoid reusing cached subtitles after a normal in-place model replacement."""
+
+    stamp = {}
+    for name in ("config.json", "model.bin", "tokenizer.json", "vocabulary.json", "vocabulary.txt"):
+        try:
+            stat = (directory / name).stat()
+        except FileNotFoundError:
+            continue
+        stamp[name] = (stat.st_size, stat.st_mtime_ns)
+    return stamp
+
+
 @analyze_app.command("transcript")
 def transcript(
     ctx: typer.Context,
@@ -354,9 +367,31 @@ def transcript(
     ] = None,
     language: Annotated[str | None, typer.Option("--language")] = None,
     save: Annotated[bool, typer.Option("--save")] = False,
+    model_profile: Annotated[
+        Literal["default", "quality"],
+        typer.Option("--model-profile", help="Use the default model or an explicitly linked quality model."),
+    ] = "default",
 ) -> None:
+    from facut.config import require_local_quality_model
+    from facut.exceptions import InvalidArgumentError
+
     state = _state(ctx)
-    resolved_model = model or state.config.models.resolve("srt_model")
+    try:
+        if model_profile == "quality":
+            if model is not None:
+                raise InvalidArgumentError("Choose either --model or --model-profile quality, not both.")
+            quality = state.config.models.srt_quality
+            if quality is None:
+                raise InvalidArgumentError(
+                    "No quality ASR model is linked. Run facut models link srt_quality <existing-dir>."
+                )
+            resolved_model = require_local_quality_model(quality)
+        else:
+            resolved_model = (model or state.config.models.resolve("srt_model")).expanduser().resolve()
+        stamp = _local_model_stamp(resolved_model)
+    except Exception as error:
+        _abort(ctx, "analyze.transcript", error)
+        return
     _emit_analysis(
         ctx,
         "analyze.transcript",
@@ -368,7 +403,11 @@ def transcript(
             external_python=state.config.tools.analysis_python,
         ),
         save=save,
-        cache_parameters={"model": str(resolved_model), "language": language},
+        cache_parameters={
+            "model": str(resolved_model),
+            "model_stamp": stamp,
+            "language": language,
+        },
     )
 
 

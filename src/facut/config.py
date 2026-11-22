@@ -55,6 +55,7 @@ class ModelConfig(BaseModel):
     )
     voice_model: Path | None = None
     srt_model: Path | None = None
+    srt_quality: Path | None = None
 
     def resolve(self, name: str) -> Path:
         """Resolve an explicit model link, canonical download, or known legacy folder."""
@@ -82,6 +83,22 @@ class ModelConfig(BaseModel):
             if candidate.is_dir():
                 return candidate
         return preferred
+
+
+def local_quality_model_ready(directory: Path) -> bool:
+    """Check only the local CTranslate2 files needed before selecting the quality profile."""
+
+    return all((directory / name).is_file() for name in ("config.json", "model.bin", "tokenizer.json"))
+
+
+def require_local_quality_model(directory: Path) -> Path:
+    resolved = directory.expanduser().resolve()
+    if not local_quality_model_ready(resolved):
+        raise InvalidArgumentError(
+            "Quality ASR requires an existing local CTranslate2 Whisper directory "
+            "with config.json, model.bin, and tokenizer.json."
+        )
+    return resolved
 
 
 class VoiceConfig(BaseModel):

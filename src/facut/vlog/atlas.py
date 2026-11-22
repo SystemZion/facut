@@ -28,6 +28,9 @@ ATLAS_VERSION = "1.1"
 DEFAULT_BATCH_SIZE = 12
 DEEP_SAMPLE_COUNT = 12
 DEEP_EVENT_SAMPLE_LIMIT = 12
+DEEP_EVIDENCE_REQUEST_LIMIT = 4
+DEEP_EVIDENCE_MAX_SECONDS = 12.0
+DEEP_EVIDENCE_PAD_SECONDS = 1.5
 NEAR_DUPLICATE_DISTANCE = 4
 # Split all 64 bits into five disjoint bands. Any pair within distance four
 # must share at least one band exactly; the exact distance is still checked.
@@ -227,10 +230,10 @@ def _deep_review_reasons(observations: list[dict[str, Any]]) -> list[str]:
     return sorted(reasons)
 
 
-def _event_sample_times(
+def _review_event_windows(
     duration: float | None, observations: list[dict[str, Any]]
-) -> list[float]:
-    """Suggest bounded extra looks near evidence-backed events, not new claims."""
+) -> list[tuple[float, float]]:
+    """Use current baseline events only, never promote a heuristic to an observation."""
 
     if duration is None or duration <= 0:
         return []
@@ -244,8 +247,16 @@ def _event_sample_times(
         interval = record["observation"]["range"]
         start = min(duration, max(0.0, interval["start"]))
         end = min(duration, max(start, interval["end"]))
-        windows.add((start, end))
-    ordered = sorted(windows)
+        if start < end:
+            windows.add((start, end))
+    return sorted(windows)
+
+
+def _event_sample_times(duration: float, ordered: list[tuple[float, float]]) -> list[float]:
+    """Suggest bounded extra looks near evidence-backed events, not new claims."""
+
+    if not ordered:
+        return []
     if len(ordered) > DEEP_EVENT_SAMPLE_LIMIT:
         # Keep deterministic spread across a clip instead of taking only early events.
         last = len(ordered) - 1
@@ -272,6 +283,57 @@ def _event_sample_times(
                 if len(extra) == DEEP_EVENT_SAMPLE_LIMIT:
                     return sorted(extra)
     return sorted(extra)
+
+
+def _deep_evidence_plan(assets: list[dict[str, Any]]) -> dict[str, Any]:
+    """Plan source-audio evidence locally; do not render, upload, or drop assets."""
+
+    requests = []
+    eligible = [
+        (asset, asset["deep_review"].get("event_windows", []))
+        for asset in assets
+        if asset["kind"] == MediaKind.VIDEO.value
+    ]
+    total = sum(len(windows) for _, windows in eligible)
+    for index in range(max((len(windows) for _, windows in eligible), default=0)):
+        for asset, windows in eligible:
+            if len(requests) >= DEEP_EVIDENCE_REQUEST_LIMIT or index >= len(windows):
+                continue
+            start, end = windows[index]
+            duration = asset["duration"]
+            clip_start = max(0.0, start - DEEP_EVIDENCE_PAD_SECONDS)
+            clip_end = min(duration, end + DEEP_EVIDENCE_PAD_SECONDS)
+            if clip_end - clip_start > DEEP_EVIDENCE_MAX_SECONDS:
+                center = (start + end) / 2
+                clip_start = min(
+                    max(0.0, center - DEEP_EVIDENCE_MAX_SECONDS / 2),
+                    duration - DEEP_EVIDENCE_MAX_SECONDS,
+                )
+                clip_end = clip_start + DEEP_EVIDENCE_MAX_SECONDS
+            requests.append(
+                {
+                    "media_id": asset["media_id"],
+                    "content_sha256": asset["content_sha256"],
+                    "evidence_source": "external_baseline_observation",
+                    "event_range_sec": [start, end],
+                    "clip_range_sec": [clip_start, clip_end],
+                    "event_fully_included": clip_start <= start and end <= clip_end,
+                    "requires_original_audio": True,
+                    "argv": [
+                        "proxy", "evidence", asset["media_id"],
+                        "--start", repr(clip_start), "--end", repr(clip_end),
+                    ],
+                }
+            )
+        if len(requests) == DEEP_EVIDENCE_REQUEST_LIMIT:
+            break
+    return {
+        "schema_version": 1,
+        "max_clips": DEEP_EVIDENCE_REQUEST_LIMIT,
+        "max_seconds_per_clip": DEEP_EVIDENCE_MAX_SECONDS,
+        "omitted_windows": total - len(requests),
+        "requests": requests,
+    }
 
 
 def _annotate_near_duplicates(assets: list[dict[str, Any]]) -> None:
@@ -377,12 +439,15 @@ def build_scene_atlas(
             observed.add(media_id)
         reasons = _deep_review_reasons(current)
         if reasons:
+            duration = asset["duration"]
+            windows = _review_event_windows(duration, current)
             asset["deep_review"] = {
                 "required": True,
                 "reasons": reasons,
                 "sample_count": DEEP_SAMPLE_COUNT,
                 "sample_times": _sample_times(asset["duration"], DEEP_SAMPLE_COUNT),
-                "event_sample_times": _event_sample_times(asset["duration"], current),
+                "event_windows": windows,
+                "event_sample_times": _event_sample_times(duration or 0.0, windows),
             }
 
     old = _read_json(root / "atlas.json", {"tasks": []})
@@ -513,8 +578,9 @@ def next_atlas_inspection_batch(
         "purpose": (
             "Inspect baseline evidence for every asset; do not discard an asset from technical quality alone."
             if task["kind"] == "baseline"
-            else "Resolve ambiguity or important actions with denser frames or a short proxy segment."
+            else "Use event_sample_times and evidence_plan for targeted review; keep every asset eligible."
         ),
+        **({"evidence_plan": _deep_evidence_plan(assets)} if task["kind"] == "deep" else {}),
         "assets": assets,
         "required_output_schema": EvidenceObservation.model_json_schema(),
     }

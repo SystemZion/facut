@@ -326,12 +326,18 @@ def test_deep_review_suggests_extra_samples_around_observed_event(tmp_path) -> N
     assert deep["kind"] == "deep"
     assert review["sample_count"] == len(review["sample_times"]) == 12
     assert review["event_sample_times"] == [722.0, 723.0, 723.5, 724.0, 725.0]
+    [request] = deep["evidence_plan"]["requests"]
+    assert request["clip_range_sec"] == [721.5, 725.5]
+    assert request["event_fully_included"] and request["requires_original_audio"]
+    assert request["argv"] == [
+        "proxy", "evidence", "media_000", "--start", "721.5", "--end", "725.5",
+    ]
     build_scene_atlas(manager)
     assert next_atlas_inspection_batch(manager.project_dir) == deep
 
 
 def test_event_sample_times_are_bounded_and_use_only_baseline_evidence() -> None:
-    from facut.vlog.atlas import _event_sample_times
+    from facut.vlog.atlas import _event_sample_times, _review_event_windows
 
     observations = [
         {
@@ -349,11 +355,11 @@ def test_event_sample_times_are_bounded_and_use_only_baseline_evidence() -> None
             "observation": {"range": {"start": 48.0, "end": 49.0}, "actions": ["fall"]},
         }
     )
-    times = _event_sample_times(50.0, observations)
+    times = _event_sample_times(50.0, _review_event_windows(50.0, observations))
     assert len(times) == 12
-    assert times == _event_sample_times(50.0, list(reversed(observations)))
+    assert times == _event_sample_times(50.0, _review_event_windows(50.0, observations[::-1]))
     assert times[0] == 0.4 and times[-1] == 39.4
-    assert _event_sample_times(None, observations) == []
+    assert _review_event_windows(None, observations) == []
 
 
 def test_near_duplicate_index_matches_exhaustive_and_ignores_invalid_hashes() -> None:
@@ -388,3 +394,29 @@ def test_near_duplicate_index_matches_exhaustive_and_ignores_invalid_hashes() ->
         ]
         assert assets[i].get("near_duplicate_candidates", []) == expected
     assert all("near_duplicate_candidates" not in item for item in assets[-2:])
+
+
+def test_deep_evidence_budget_is_round_robin_and_keeps_full_asset_list(tmp_path) -> None:
+    manager = _manager(tmp_path, count=5)
+    for asset in manager.document.media:
+        asset.technical.duration = 80
+    manager.save(create_snapshot=False)
+    build_scene_atlas(manager)
+    task = next_atlas_inspection_batch(manager.project_dir)
+    records = _observations(task, actions=["fall"])
+    records[0]["range"] = {"start": 20.0, "end": 45.0}
+    ingest_atlas_observations(
+        manager.require_document(),
+        manager.project_dir,
+        {"task_id": task["task_id"], "observations": records},
+    )
+    batch = next_atlas_inspection_batch(manager.project_dir)
+    plan = batch["evidence_plan"]
+    assert plan["omitted_windows"] == 1
+    assert len(batch["assets"]) == 5
+    assert len(plan["requests"]) == 4
+    assert len({request["media_id"] for request in plan["requests"]}) == 4
+    long, near_edge = plan["requests"][:2]
+    assert not long["event_fully_included"]
+    assert long["clip_range_sec"] == [26.5, 38.5]
+    assert near_edge["clip_range_sec"] == [0.0, 6.5]
